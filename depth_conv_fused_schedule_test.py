@@ -31,77 +31,9 @@ def tvm_callback_cuda_postproc(code):
         code = open("perf/%s_manual.cu" % TASK).read()
     return code
 
-# @register_fused.register(["cuda", "gpu"])
 def schedule_depth_conv_fused_nhwc(outs, nodes, params):
     outs = [outs] if isinstance(outs, tvm.tensor.Tensor) else outs
     s = tvm.create_schedule([x.op for x in outs])
-
-    # nodes: input, padded, after_depthwise, after_1by1 (output)
-    # params: input, depthwise_filter, 1by1_filter, output
-
-    # # ########################################### 72 us for 112
-    # PaddedInput = nodes[1]
-    # Intermediate = nodes[2]
-    # Out = nodes[3]
-    # F_d = params[1]
-    # F_1 = params[2]
-
-    # s[PaddedInput].compute_inline()
-
-    # num_channel = tvm.ir_pass.Simplify(PaddedInput.shape[3]).value
-    # num_thread = num_channel if num_channel <= 128 else int(num_channel / 4)
-
-    # # FS_d = s.cache_read(F_d, "shared", [Intermediate])
-
-    # OL = s.cache_write(Out, "local")
-    # s[Intermediate].set_scope("shared")
-    # IL = s.cache_write(Intermediate, "local")
-
-    # block_x = tvm.thread_axis("blockIdx.x")
-    # thread_x = tvm.thread_axis("threadIdx.x")
-
-    # # Final output
-    # cc = s[OL].op.reduce_axis[0]
-    # xocc, xicc = s[OL].split(cc, factor=4)
-    # ConvOutputAccumulator = s.rfactor(OL, xicc) # Cross thread reduction
-    
-    # n, h, w, c = s[Out].op.axis
-    # xoc, xic = s[Out].split(c, factor=num_thread)
-    # s[Out].reorder(xoc, n, h, w, xic)
-    # yo, xo, yi, xi = s[Out].tile(h, w, x_factor=2, y_factor=2)
-    # fused = s[Out].fuse(yo, xo)
-    # fused = s[Out].fuse(fused, n)
-    # fused = s[Out].fuse(fused, xoc)
-
-    # s[Out].bind(fused, block_x)
-    # s[Out].bind(xic, thread_x)
-    # s[OL].compute_at(s[Out], xic)
-    # s[ConvOutputAccumulator].compute_at(s[Out], xic)
-    # s[ConvOutputAccumulator].vectorize(s[ConvOutputAccumulator].op.axis[0])
-
-    # # Intermediate output
-    # n, h, w, c = s[Intermediate].op.axis
-    # xoc, xic = s[Intermediate].split(c, factor=num_thread)
-    # # s[Intermediate].reorder(xoc, n, h, w, xic)
-    # # yo, xo, yi, xi = s[Intermediate].tile(h, w, x_factor=2, y_factor=2)
-    # # fused = s[Intermediate].fuse(yo, xo)
-    # # fused = s[Intermediate].fuse(fused, n)
-    # # fused = s[Intermediate].fuse(fused, xoc)
-
-    # # s[Intermediate].bind(fused, block_x)
-    # s[Intermediate].bind(xic, thread_x)
-    # s[IL].compute_at(s[Intermediate], xic)
-    # s[Intermediate].compute_at(s[Out], xi)
-
-    # # # Unroll, small improvements without sharing FS_d and local IL
-    # # s[IL].unroll(s[IL].op.reduce_axis[0])
-    # # s[IL].unroll(s[IL].op.reduce_axis[1])
-
-    # # # Shared depthwise filter
-    # # s[FS_d].compute_at(s[Intermediate], w)
-    # # _, _, ci, fi = s[FS_d].op.axis
-    # # fused = s[FS_d].fuse(fi, ci)
-    # # s[FS_d].bind(fused, thread_x)
 
     ################################# Distribute on Output
     PaddedInput = nodes[1]
@@ -114,13 +46,17 @@ def schedule_depth_conv_fused_nhwc(outs, nodes, params):
     output_step_tile_size_w = 2
     num_thread_x = 32
     num_thread_y = output_step_tile_size_h * output_step_tile_size_w
-    # num_thread_y = output_step_tile_size_w
-    # num_thread_z = output_step_tile_size_h
+    
+    # Searchable parameters
+    # --------------------
     step_num_h = 2
     step_num_w = 2
+    reduce_split = 4
+    intermediate_reuse = 8 # How many 32x32 blocks of 1x1 filter reuse the intermediate data
     output_tile_size_h = output_step_tile_size_h * step_num_h
     output_tile_size_w = output_step_tile_size_w * step_num_w
-
+    # --------------------
+    
     s[PaddedInput].compute_inline()
     PaddedSharedInput = s.cache_read(PaddedInput, "shared", [Intermediate])
     FL_d = s.cache_read(F_d, "local", [Intermediate])
@@ -139,95 +75,48 @@ def schedule_depth_conv_fused_nhwc(outs, nodes, params):
     block_y = tvm.thread_axis("blockIdx.y")
     thread_x = tvm.thread_axis((0, num_thread_x), "threadIdx.x")
     thread_y = tvm.thread_axis((0, num_thread_y), "threadIdx.y")
-    # thread_z = tvm.thread_axis((0, num_thread_z), "threadIdx.z")
 
-    num_vthread_x = 1
+    num_vthread_x = 32
     vthread_x = tvm.thread_axis((0, num_vthread_x), "vthread", name="vthread_x")
     num_vthread_y = 1
     vthread_y = tvm.thread_axis((0, num_vthread_y), "vthread", name="vthread_y")
-    # num_vthread_z = 2
-    # vthread_z = tvm.thread_axis((0, num_vthread_z), "vthread", name="vthread_z")
+    num_vthread_z = step_num_h * step_num_w
+    vthread_z = tvm.thread_axis((0, num_vthread_z), "vthread", name="vthread_z")
 
-
-
-    ######## Final output
-    # print(s[Output].op.axis, s[Output].op.reduce_axis)
+    #####
     n, h, w, c = s[Output].op.axis
     c_outer, c_inner = s[Output].split(c, factor=num_thread_x)
+    recompute, reuse = s[Output].split(c_outer, factor=intermediate_reuse)
     yo, xo, y_tile, x_tile = s[Output].tile(h, w, x_factor=output_tile_size_w, y_factor=output_tile_size_h)
-    # # # print(s[Output].op.axis, s[Output].op.reduce_axis)
-    # --------------
-    # n, h, w, c = s[Output].op.axis
-    # ho, wo, h_tile, w_tile = s[Output].tile(h, w, x_factor=output_tile_size_w, y_factor=output_tile_size_h)
-    # vthz, h_tile = s[Output].split(h_tile, nparts=num_vthread_z)
-    # thz, h_tile = s[Output].split(h_tile, nparts=num_thread_z)
-    # vthy, w_tile = s[Output].split(w_tile, nparts=num_vthread_y)
-    # thy, w_tile = s[Output].split(w_tile, nparts=num_thread_y)
-    # #---
-    # vthx, c = s[Output].split(c, nparts=num_vthread_x)
-    # thx, c = s[Output].split(c, nparts=num_thread_x)
-    # s[Output].reorder(n, ho, wo, vthx, vthy, vthz, thz, thy, thx, h_tile, w_tile, c)
-    # # vthx, thx = s[Output].split(c, factor=num_thread_x)
-    # # s[Output].reorder(n, ho, wo, vthz, vthy, thz, thy, thx, vthx, h_tile, w_tile)
-    # #---
-    # fused_blx = s[Output].fuse(n, ho, wo)
-    # s[Output].bind(fused_blx, block_x)
-    # s[Output].bind(vthz, vthread_z)
-    # s[Output].bind(vthy, vthread_y)
-    # s[Output].bind(vthx, vthread_x) ####
-    # s[Output].bind(thz, thread_z)
-    # s[Output].bind(thy, thread_y)
-    # s[Output].bind(thx, thread_x)
-    # ---------------
     hw_tile = s[Output].fuse(y_tile, x_tile)
     thy, hw_tile = s[Output].split(hw_tile, nparts=num_thread_y)
     vthy, hw_tile = s[Output].split(hw_tile, nparts=num_vthread_y)
-    s[Output].reorder(n, yo, xo, c_outer, vthy, thy, c_inner, hw_tile)
-    fused_blx = s[Output].fuse(n, yo, xo)
+    s[Output].reorder(n, yo, xo, recompute, reuse, vthy, thy, c_inner, hw_tile)
+    fused_blx = s[Output].fuse(n, yo, xo, recompute)
     s[Output].bind(fused_blx, block_x)
     s[Output].bind(vthy, vthread_y)
-    s[Output].bind(c_outer, vthread_x)
+    s[Output].bind(reuse, vthread_x)
     s[Output].bind(thy, thread_y)
     s[Output].bind(c_inner, thread_x)
-    
 
-    # # # # ######## Local output
+    # ######## Local output
     s[OL].compute_at(s[Output], c_inner)
-    # print(s[OL].op.axis, s[OL].op.reduce_axis)
     xocc, xicc = s[OL].split(s[OL].op.reduce_axis[0], factor=num_thread_x)
-    xoicc, xiicc = s[OL].split(xicc, factor=8)
-    # print(s[OL].op.axis, s[OL].op.reduce_axis)
+    xoicc, xiicc = s[OL].split(xicc, factor=reduce_split)
     n, h, w, oc = s[OL].op.axis
-    # ooc, ioc = s[OL].split(oc, factor=num_thread_x)
-    # # # # s[OL].reorder(n, xocc, ooc, ioc, h, w) # e.g. hw = 16 (m), ioc = 32 (n), xicc = 32 (k)
-    # # # y_step, x_step, y_step_tile, x_step_tile = s[OL].tile(h, w, x_factor=output_step_tile_size_w, y_factor=output_step_tile_size_h)
-    # # # s[OL].reorder(n, xocc, y_step_tile, x_step_tile, y_step, x_step, ooc, ioc) # e.g. hw = 16 (m), ioc = 32 (n), xicc = 32 (k)
-    # # # # # fused_thy = s[OL].fuse(y_step_tile, x_step_tile)
-    # # # # # s[OL].bind(fused_thy, thread_y)
-    # # # # s[OL].bind(y_step_tile, thread_z)
-    # # # # s[OL].bind(x_step_tile, thread_y)
-    # # # # s[OL].bind(ioc, thread_x)
-    # # # # print(s[OL].op.axis, s[OL].op.reduce_axis)
-    # # # -----------
     s[OL].reorder(n, xocc, xoicc, h, w, oc, xiicc)
 
-
-
-    # # # # ######## Shared 1by1 filter
+    # ######## Shared 1by1 filter
     s[FS_1].compute_at(s[OL], xoicc)
     h1, w1, i1, o1 = s[FS_1].op.axis
-    # ioo, ioi(thread_y), (ii, oo)(thread_x), oi(4)
-    # io, ii = s[FS_1].split(i1, factor=4)
-    # ioo, ioi = s[FS_1].split(io, factor=num_thread_y)
-    oo, oi = s[FS_1].split(o1, factor=4)
-    # fused_1 = s[FS_1].fuse(ii, oo)
-    # s[FS_1].bind(ioi, thread_y)
-    # s[FS_1].bind(fused_1, thread_x)
-    s[FS_1].vectorize(oi)
-    # --
-    io, ii = s[FS_1].split(i1, factor=num_thread_y)
-    s[FS_1].bind(oo, thread_x)
-    s[FS_1].bind(ii, thread_y)
+    io = s[FS_1].fuse(i1, o1)
+    io, iox = s[FS_1].split(io, factor=num_thread_x * 4)
+    ioy, io = s[FS_1].split(io, nparts=num_thread_y)
+    iox, io4 = s[FS_1].split(iox, factor=4)
+    s[FS_1].reorder(h1, w1, io, ioy, iox, io4)
+    s[FS_1].bind(iox, thread_x)
+    s[FS_1].bind(ioy, thread_y)
+    s[FS_1].vectorize(io4)
 
     ########### Read intermediate to local
     s[IntermediateShared].compute_at(s[OL], xocc)
@@ -239,17 +128,16 @@ def schedule_depth_conv_fused_nhwc(outs, nodes, params):
     step_tile = s[IntermediateShared].fuse(y_step_tile, x_step_tile)
     s[IntermediateShared].bind(inter_ci, thread_x)
     s[IntermediateShared].bind(step_tile, thread_y)
+    vthz = s[IntermediateShared].fuse(y_step, x_step)
+    s[IntermediateShared].bind(vthz, vthread_z)
 
-    # # Unrolling
-    # ry, rx = s[DepthwiseLocalAccumulator].op.reduce_axis
-    # s[DepthwiseLocalAccumulator].unroll(ry)
-    # s[DepthwiseLocalAccumulator].unroll(rx)
+    # Unrolling
+    ry, rx = s[DepthwiseLocalAccumulator].op.reduce_axis
+    n, h, w, c = s[DepthwiseLocalAccumulator].op.axis
+    s[DepthwiseLocalAccumulator].reorder(n, c, ry, rx, h, w)
     s[DepthwiseLocalAccumulator].compute_at(s[IntermediateShared], inter_ci)
 
     # Load depthwise filter to local
-    # ry, rx = s[FL_d].op.reduce_axis
-    # s[FL_d].unroll(ry)
-    # s[FL_d].unroll(rx)
     s[FL_d].compute_at(s[IntermediateShared], inter_co)
 
     ######## Shared Input
@@ -321,19 +209,13 @@ def verify_depth_conv_fused(parameters, dtype="float32", layout="NHWC", print_ir
     ref_data = get_ref_data()
 
     if save_data:
+        stages = ["input", "filter_1", "filter_2", "output"]
         # Save ref data
         for i in range(0, len(ref_data)):
             filename = "npy/depth_conv_%d_%d_%d_%d_%d_%d/" % p.get_params()
             if not os.path.exists(filename):
                 os.mkdir(filename)
-            if i == 0:
-                filename += "input"
-            elif i == 1:
-                filename += "filter_d"
-            elif i == 2:
-                filename += "filter_1"
-            else:
-                filename += "output"
+            filename += stages[i]
             np.save(filename, ref_data[i])
 
     # tmp = np.load("output_1_112_112_32.npy")
@@ -385,10 +267,10 @@ def verify_depth_conv_fused(parameters, dtype="float32", layout="NHWC", print_ir
 if __name__ == "__main__":
     parameters = []
 
-    # parameters.append([1, 112, 112, 32, 3, 1, True, 1, 32, False]) # 122.78 us
-    parameters.append(Parameters([1, 56, 56, 128, 3, 1, True, 1, 128, False])) # 398.18 / 456.16 us
-    # parameters.append([1, 28, 28, 256, 3, 1, True, 1, 256, False]) # 389.57 / 423.63 us
-    # parameters.append([1, 14, 14, 512, 3, 1, True, 1, 512, False]) # 367.71 us, 344.27 us
+    # parameters.append(Parameters([1, 112, 112, 32, 3, 1, True, 1, 32, False])) # 62.86 us (4, 4, 16, 1)
+    # parameters.append(Parameters([1, 56, 56, 128, 3, 1, True, 1, 128, False])) # 108.12 us (4, 4, 16, 4)
+    # parameters.append(Parameters([1, 28, 28, 256, 3, 1, True, 1, 256, False])) # 117.21 us (2, 2, 8, 8)
+    parameters.append(Parameters([1, 14, 14, 512, 3, 1, True, 1, 512, False])) # 316.24 us
 
     for p in parameters:
-        verify_depth_conv_fused(p, print_ir=True, print_src=False, save_data=False, export_code=False)
+        verify_depth_conv_fused(p, print_ir=True, print_src=True, save_data=False, export_code=False)
