@@ -31,11 +31,10 @@ def tvm_callback_cuda_postproc(code):
         code = open("perf/%s_manual.cu" % TASK).read()
     return code
 
-def schedule_depth_conv_fused_nhwc(outs, nodes, params):
+def schedule_depth_conv_fused_nhwc(outs, nodes, params, bn_relu=None):
     outs = [outs] if isinstance(outs, tvm.tensor.Tensor) else outs
     s = tvm.create_schedule([x.op for x in outs])
 
-    ################################# Distribute on Output
     PaddedInput = nodes[1]
     Intermediate = nodes[2]
     Out = nodes[3]
@@ -51,7 +50,7 @@ def schedule_depth_conv_fused_nhwc(outs, nodes, params):
     # --------------------
     step_num_h = 2
     step_num_w = 2
-    reduce_split = 4
+    reduce_split = 8
     intermediate_reuse = 8 # How many 32x32 blocks of 1x1 filter reuse the intermediate data
     output_tile_size_h = output_step_tile_size_h * step_num_h
     output_tile_size_w = output_step_tile_size_w * step_num_w
@@ -65,7 +64,6 @@ def schedule_depth_conv_fused_nhwc(outs, nodes, params):
     # # Intermediate output
     IntermediateShared = Intermediate
     s[Intermediate].set_scope("shared")
-    # s[Intermediate].double_buffer()
     DepthwiseLocalAccumulator = s.cache_write(Intermediate, "local")
     # Output
     Output = Out
@@ -177,10 +175,14 @@ def verify_depth_conv_fused(parameters, dtype="float32", layout="NHWC", print_ir
     Filters = []
     Filters.append(FilterConstructor(
                     DepthwiseFilter_1,
-                    depthwise=p.is_f1_depthwise(), kernel=p.get_f1_K(), stride=1, dilation=1))
+                    depthwise=p.is_f1_depthwise(),
+                    bn_relu=p.get_f1_bn_relu(),
+                    kernel=p.get_f1_K(), stride=1, dilation=1))
     Filters.append(FilterConstructor(
                     Conv2dFilter_1,
-                    depthwise=p.is_f2_depthwise(), kernel=p.get_f2_K(), stride=1, dilation=1))
+                    depthwise=p.is_f2_depthwise(),
+                    bn_relu=p.get_f2_bn_relu(),
+                    kernel=p.get_f2_K(), stride=1, dilation=1))
 
     # Get the graph
     # nodes: all nodes in the graph
@@ -237,7 +239,7 @@ def verify_depth_conv_fused(parameters, dtype="float32", layout="NHWC", print_ir
         nd_arrays.append(tvm.nd.array(np.zeros(get_const_tuple(nodes[-1].shape), dtype=nodes[-1].dtype), ctx)) # Append 0 output data
 
         with tvm.target.create(device):
-            s = schedule_depth_conv_fused_nhwc([nodes[-1]], nodes, params)
+            s = schedule_depth_conv_fused_nhwc([nodes[-1]], nodes, params, bn_relu=None)
         if print_ir:
             print(tvm.lower(s, params, simple_mode=True))
 
@@ -267,10 +269,10 @@ def verify_depth_conv_fused(parameters, dtype="float32", layout="NHWC", print_ir
 if __name__ == "__main__":
     parameters = []
 
-    # parameters.append(Parameters([1, 112, 112, 32, 3, 1, True, 1, 32, False])) # 62.86 us (4, 4, 16, 1)
-    # parameters.append(Parameters([1, 56, 56, 128, 3, 1, True, 1, 128, False])) # 108.12 us (4, 4, 16, 4)
-    # parameters.append(Parameters([1, 28, 28, 256, 3, 1, True, 1, 256, False])) # 117.21 us (2, 2, 8, 8)
-    parameters.append(Parameters([1, 14, 14, 512, 3, 1, True, 1, 512, False])) # 316.24 us
+    # parameters.append(Parameters([1, 112, 112, 32, 3, 1, True, 'relu', 1, 32, False, 'relu'])) # 62.86 us (4, 4, 16, 1)
+    # parameters.append(Parameters([1, 56, 56, 128, 3, 1, True, 'relu', 1, 128, False, 'relu'])) # 108.12 us (4, 4, 16, 4)
+    parameters.append(Parameters([1, 28, 28, 256, 3, 1, True, None, 1, 256, False, None])) # 117.21 us (2, 2, 8, 8)
+    # parameters.append(Parameters([1, 14, 14, 512, 3, 1, True, 'relu', 1, 512, False, 'relu'])) # 316.24 us
 
     for p in parameters:
         verify_depth_conv_fused(p, print_ir=True, print_src=True, save_data=False, export_code=False)

@@ -7,10 +7,12 @@ from topi.nn.util import get_pad_tuple
 from topi.util import simplify
 
 class FilterConstructor:
-	def __init__(self, placeholder, layout="NHWC", depthwise=False, kernel=3, stride=1, padding="SAME", dilation=1):
+	def __init__(self, placeholder, layout="NHWC", depthwise=False, bn_relu=None, kernel=3, stride=1, padding="SAME", dilation=1):
+		assert bn_relu in [None, "relu", "relu6"]
 		self.placeholder = placeholder
 		self.layout = layout
 		self.depthwise = depthwise
+		self.bn_relu = bn_relu
 		self.kernel = kernel
 		self.stride = stride
 		self.padding = padding
@@ -29,6 +31,7 @@ def fused_convs(input_data, filters, resnet_block=False):
 		Filter = f.placeholder
 		layout = f.layout
 		depthwise = f.depthwise
+		bn_relu = f.bn_relu
 		kernel = f.kernel
 		stride = f.stride
 		padding = f.padding
@@ -118,6 +121,38 @@ def fused_convs(input_data, filters, resnet_block=False):
 		nodes.append(Output)
 		params.append(Filter)
 
+		if bn_relu is not None:
+			_, _, _, out_channel = Output.shape
+			tensor_name = Output.name
+			number = tensor_name.split('_')[-1]
+			Scale = tvm.placeholder((out_channel),
+								name='Scale_{}_{}'.format(
+									'DepthwiseConv2d' if depthwise else 'Conv2d', number))
+			Shift = tvm.placeholder((out_channel),
+								name='Shift_{}_{}'.format(
+									'DepthwiseConv2d' if depthwise else 'Conv2d', number))
+			ScaleShift =  tvm.compute(Output.shape, lambda b, i, j, c: Output[b, i, j, c] * Scale[c] + Shift[c],
+								name='ScaleShift_{}_{}'.format(
+									'DepthwiseConv2d' if depthwise else 'Conv2d', number),
+								tag='scaleshift_nhwc')
+			if bn_relu == 'relu':
+				ReLU = tvm.compute(ScaleShift.shape, lambda *i: tvm.max(ScaleShift(*i), tvm.const(0, ScaleShift.dtype)),
+								name='ReLU_{}_{}'.format(
+									'DepthwiseConv2d' if depthwise else 'Conv2d', number),
+								tag='relu_nhwc')
+			else: # 'relu6'
+				ReLU = tvm.compute(ScaleShift.shape, lambda *i: tvm.min(
+									tvm.max(ScaleShift(*i), tvm.const(0, ScaleShift.dtype)),
+									tvm.const(6, ScaleShift.dtype)),
+								name='ReLU6_{}_{}'.format(
+									'DepthwiseConv2d' if depthwise else 'Conv2d', number),
+								tag='relu')
+
+			nodes.append(ScaleShift)
+			nodes.append(ReLU)
+			params.append(Scale)
+			params.append(Shift)
+
 	if resnet_block:
 		First = nodes[0]
 		Last = nodes[-1]
@@ -134,15 +169,15 @@ def fused_convs(input_data, filters, resnet_block=False):
 	return nodes, params
 
 if __name__ == "__main__":
-	Input = tvm.placeholder((1, 112, 112, 32), name='Input')
+	Input = tvm.placeholder((1, 56, 56, 128), name='Input')
 
 	Filters = []
 	Filters.append(FilterConstructor(
-					tvm.placeholder((3, 3, 32, 1), name='DepthwiseFilter_1'),
-					depthwise=True, kernel=3, stride=1, dilation=1))
+					tvm.placeholder((3, 3, 128, 1), name='DepthwiseFilter_0'),
+					depthwise=True, bn_relu="relu", kernel=3, stride=1, dilation=1))
 	Filters.append(FilterConstructor(
-					tvm.placeholder((1, 1, 32, 32), name='Conv2dFilter_1'),
-					depthwise=False, kernel=1, stride=1, dilation=1))
+					tvm.placeholder((1, 1, 128, 128), name='Conv2dFilter_0'),
+					depthwise=False, bn_relu="relu", kernel=1, stride=1, dilation=1))
 
 	placeholders = fused_convs(Input, Filters)
 	print(placeholders)
