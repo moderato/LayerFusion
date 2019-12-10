@@ -6,28 +6,17 @@ from topi.nn.pad import pad
 from topi.nn.util import get_pad_tuple
 from topi.util import simplify
 
-class FilterConstructor:
-	def __init__(self, placeholder, layout="NHWC", depthwise=False, bn_relu=None, kernel=3, stride=1, padding="SAME", dilation=1):
-		assert bn_relu in [None, "relu", "relu6"]
-		self.placeholder = placeholder
-		self.layout = layout
-		self.depthwise = depthwise
-		self.bn_relu = bn_relu
-		self.kernel = kernel
-		self.stride = stride
-		self.padding = padding
-		self.dilation = dilation
+from helper import *
 
 def fused_convs(input_data, filters, resnet_block=False):
-
 	out_dtype = input_data.dtype
 
 	Input = None
-	nodes = [input_data]
-	params = [input_data]
+	stages = [[input_data]]
+	params = [[input_data]]
 
 	for f in filters:
-		Input = nodes[-1]
+		Input = stages[-1][-1]
 		Filter = f.placeholder
 		layout = f.layout
 		depthwise = f.depthwise
@@ -36,6 +25,8 @@ def fused_convs(input_data, filters, resnet_block=False):
 		stride = f.stride
 		padding = f.padding
 		dilation = f.dilation
+		tmp_stages = []
+		tmp_params = []
 
 		assert not (depthwise and kernel == 1) # Don't consider 1by1 depthwise
 
@@ -78,7 +69,7 @@ def fused_convs(input_data, filters, resnet_block=False):
 
 			PaddedInput = pad(Input, pad_before, pad_after, name="PaddedInput_{}".format(padded_count))
 			padded_count += 1
-			nodes.append(PaddedInput)
+			stages.append([PaddedInput])
 
 			# Update Input
 			Input = PaddedInput
@@ -118,8 +109,8 @@ def fused_convs(input_data, filters, resnet_block=False):
 			name='DepthwiseConv2dOutput_{}'.format(depthwise_count), tag="depthwise_nhwc")
 			depthwise_count += 1
 
-		nodes.append(Output)
-		params.append(Filter)
+		tmp_stages.append(Output)
+		tmp_params.append(Filter)
 
 		if bn_relu is not None:
 			_, _, _, out_channel = Output.shape
@@ -148,14 +139,17 @@ def fused_convs(input_data, filters, resnet_block=False):
 									'DepthwiseConv2d' if depthwise else 'Conv2d', number),
 								tag='relu')
 
-			nodes.append(ScaleShift)
-			nodes.append(ReLU)
-			params.append(Scale)
-			params.append(Shift)
+			tmp_stages.append(ScaleShift)
+			tmp_stages.append(ReLU)
+			tmp_params.append(Scale)
+			tmp_params.append(Shift)
+
+		stages.append(tmp_stages)
+		params.append(tmp_params)
 
 	if resnet_block:
-		First = nodes[0]
-		Last = nodes[-1]
+		First = stages[0][0]
+		Last = stages[-1][-1]
 		assert (First.shape == Last.shape)
 		Output = tvm.compute(
 			(batch, out_height, out_width, out_channel),
@@ -163,21 +157,23 @@ def fused_convs(input_data, filters, resnet_block=False):
 				(First[b, i, j, c].astype(out_dtype) + 
 				(Last[b, i, j, c]).astype(out_dtype))),
 			name='ElementwiseAddOutput_{}'.format(depthwise_count), tag="elem_nhwc")
-		nodes.append(Output)
+		stages.append([Output])
 
-	params.append(nodes[-1]) # Final output
-	return nodes, params
+	params.append([stages[-1][-1]]) # Final output
+
+	return stages, params
 
 if __name__ == "__main__":
 	Input = tvm.placeholder((1, 56, 56, 128), name='Input')
 
 	Filters = []
-	Filters.append(FilterConstructor(
+	Filters.append(FilterParams(
 					tvm.placeholder((3, 3, 128, 1), name='DepthwiseFilter_0'),
 					depthwise=True, bn_relu="relu", kernel=3, stride=1, dilation=1))
-	Filters.append(FilterConstructor(
+	Filters.append(FilterParams(
 					tvm.placeholder((1, 1, 128, 128), name='Conv2dFilter_0'),
 					depthwise=False, bn_relu="relu", kernel=1, stride=1, dilation=1))
 
-	placeholders = fused_convs(Input, Filters)
-	print(placeholders)
+	stages, data = fused_convs(Input, Filters)
+	print(stages)
+	print(data)

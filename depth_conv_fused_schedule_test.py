@@ -13,33 +13,27 @@ import topi.tag as tag
 from helper import *
 np.random.seed(42)
 
-# @tvm.register_func
-def tvm_callback_cuda_compile(code):
-    ptx = nvcc.compile_cuda(code, target="ptx")
-    return ptx
-
 def write_code(code, fname):
     with open(fname, "w") as f:
         f.write(code)
 
-# @tvm.register_func
-def tvm_callback_cuda_postproc(code):
-    if not os.path.exists("perf"):
-        os.mkdir("perf")
-    write_code(code, "perf/%s_generated.cu" % TASK)
-    if USE_MANUAL_CODE:
-        code = open("perf/%s_manual.cu" % TASK).read()
-    return code
-
-def schedule_depth_conv_fused_nhwc(outs, nodes, params, bn_relu=None):
+def schedule_depth_conv_fused_nhwc(outs, stages, params, bn_relu=None):
     outs = [outs] if isinstance(outs, tvm.tensor.Tensor) else outs
     s = tvm.create_schedule([x.op for x in outs])
 
-    PaddedInput = nodes[1]
-    Intermediate = nodes[2]
-    Out = nodes[3]
-    F_d = params[1]
-    F_1 = params[2]
+    PaddedInput = stages[1][0]
+    if bn_relu is not None:
+        Intermediate, InterScaleShift, InterReLU = stages[2]
+        Out, OutScaleShift, OutReLU = stages[3]
+        OutputStage = OutReLU
+        F_d, Scale_d, Shift_d = params[1]
+        F_1, Scale_1, Shift_1 = params[2]
+    else:
+        Intermediate = stages[2][0]
+        Out = stages[3][0]
+        OutputStage = Out
+        F_d = params[1][0]
+        F_1 = params[2][0]
 
     output_step_tile_size_h = 2
     output_step_tile_size_w = 2
@@ -56,24 +50,31 @@ def schedule_depth_conv_fused_nhwc(outs, nodes, params, bn_relu=None):
     output_tile_size_w = output_step_tile_size_w * step_num_w
     # --------------------
     
+    # ######## Input data, weights, BN, etc
     s[PaddedInput].compute_inline()
     PaddedSharedInput = s.cache_read(PaddedInput, "shared", [Intermediate])
     FL_d = s.cache_read(F_d, "local", [Intermediate])
     FS_1 = s.cache_read(F_1, "shared", [Out])
-
-    # # Intermediate output
+    if bn_relu is not None:
+        ScaleL_d = s.cache_read(Scale_d, "local", [Intermediate])
+        ShiftL_d = s.cache_read(Shift_d, "local", [Intermediate])
+        ScaleL_1 = s.cache_read(Scale_1, "local", [Intermediate])
+        ShiftL_1 = s.cache_read(Shift_1, "local", [Intermediate])
+    # ######## Intermediate output
     IntermediateShared = Intermediate
     s[Intermediate].set_scope("shared")
     DepthwiseLocalAccumulator = s.cache_write(Intermediate, "local")
-    # Output
-    Output = Out
-    OL = s.cache_write(Out, "local")
+    # ######## Output
+    Output = OutputStage
+    OL = s.cache_write(OutputStage, "local")
     
+    # ######## Blocks and threads
     block_x = tvm.thread_axis("blockIdx.x")
     block_y = tvm.thread_axis("blockIdx.y")
     thread_x = tvm.thread_axis((0, num_thread_x), "threadIdx.x")
     thread_y = tvm.thread_axis((0, num_thread_y), "threadIdx.y")
 
+    # ######## Vthreads
     num_vthread_x = 32
     vthread_x = tvm.thread_axis((0, num_vthread_x), "vthread", name="vthread_x")
     num_vthread_y = 1
@@ -81,7 +82,7 @@ def schedule_depth_conv_fused_nhwc(outs, nodes, params, bn_relu=None):
     num_vthread_z = step_num_h * step_num_w
     vthread_z = tvm.thread_axis((0, num_vthread_z), "vthread", name="vthread_z")
 
-    #####
+    # ######## Global output
     n, h, w, c = s[Output].op.axis
     c_outer, c_inner = s[Output].split(c, factor=num_thread_x)
     recompute, reuse = s[Output].split(c_outer, factor=intermediate_reuse)
@@ -116,7 +117,7 @@ def schedule_depth_conv_fused_nhwc(outs, nodes, params, bn_relu=None):
     s[FS_1].bind(ioy, thread_y)
     s[FS_1].vectorize(io4)
 
-    ########### Read intermediate to local
+    # ######## Intermediate output in shared memory
     s[IntermediateShared].compute_at(s[OL], xocc)
     n, h, w, c = s[IntermediateShared].op.axis
     inter_co, inter_ci = s[IntermediateShared].split(c, factor=num_thread_x)
@@ -129,16 +130,16 @@ def schedule_depth_conv_fused_nhwc(outs, nodes, params, bn_relu=None):
     vthz = s[IntermediateShared].fuse(y_step, x_step)
     s[IntermediateShared].bind(vthz, vthread_z)
 
-    # Unrolling
+    # ######## Intermediate output local accumulator
     ry, rx = s[DepthwiseLocalAccumulator].op.reduce_axis
     n, h, w, c = s[DepthwiseLocalAccumulator].op.axis
     s[DepthwiseLocalAccumulator].reorder(n, c, ry, rx, h, w)
     s[DepthwiseLocalAccumulator].compute_at(s[IntermediateShared], inter_ci)
 
-    # Load depthwise filter to local
+    # ######## Depthwise filter
     s[FL_d].compute_at(s[IntermediateShared], inter_co)
 
-    ######## Shared Input
+    # ######## Shared Input
     n, h, w, c = s[PaddedSharedInput].op.axis
     co, ci = s[PaddedSharedInput].split(c, factor=num_thread_x)
     yo, xo, y_tile, x_tile = s[PaddedSharedInput].tile(h, w, x_factor=output_step_tile_size_w, y_factor=output_step_tile_size_h)
@@ -173,27 +174,27 @@ def verify_depth_conv_fused(parameters, dtype="float32", layout="NHWC", print_ir
 
     # For getting schedule
     Filters = []
-    Filters.append(FilterConstructor(
+    Filters.append(FilterParams(
                     DepthwiseFilter_1,
                     depthwise=p.is_f1_depthwise(),
                     bn_relu=p.get_f1_bn_relu(),
                     kernel=p.get_f1_K(), stride=1, dilation=1))
-    Filters.append(FilterConstructor(
+    Filters.append(FilterParams(
                     Conv2dFilter_1,
                     depthwise=p.is_f2_depthwise(),
                     bn_relu=p.get_f2_bn_relu(),
                     kernel=p.get_f2_K(), stride=1, dilation=1))
 
     # Get the graph
-    # nodes: all nodes in the graph
-    # params: inputs & outputs of the graph
-    nodes, params = fused_convs(Input, Filters)
+    # stages: all output stages in the graph
+    # params: inputs & outputs of the graph, including filters, BNs, etc
+    stages, params = fused_convs(Input, Filters)
 
     # @memoize("verify_nhwc")
     def get_ref_data():
         # Pretending the input_data is some output_data from stage -1
         output_data = np.random.uniform(size=get_const_tuple(Input.shape)).astype(dtype)
-        ref_data = [output_data] 
+        ref_data = [output_data]
         
         for idx, f in enumerate(Filters):
             p = f.placeholder
@@ -204,6 +205,23 @@ def verify_depth_conv_fused(parameters, dtype="float32", layout="NHWC", print_ir
                 output_data = topi.testing.depthwise_conv2d_python_nhwc(output_data, filter_data, stride=[f.stride, f.stride], padding=f.padding)
             else: # Normal convolution
                 output_data = topi.testing.conv2d_nhwc_python(output_data, filter_data, f.stride, f.padding)
+
+            if f.bn_relu is not None:
+                n, h, w, oc = output_data.shape
+                scale_np = np.random.uniform(size=(oc,)).astype(dtype)
+                shift_np = np.random.uniform(size=(oc,)).astype(dtype)
+                ref_data.append(scale_np)
+                ref_data.append(shift_np)
+
+                scale_shift_scipy = np.zeros(shape=(n, h, w, oc))
+                relu_scipy = np.zeros(shape=(n, h, w, oc))
+                for c in range(oc):
+                    scale_shift_scipy[:,:,:,c] = output_data[:,:,:,c] * scale_np[c] + shift_np[c]
+                    relu_scipy[:,:,:,c] = np.maximum(scale_shift_scipy[:,:,:,c], 0)
+                    if p.bn_relu == "relu6":
+                        relu_scipy[:,:,:,c] = np.minimum(relu_scipy[:,:,:,c], 6)
+                output_data = relu_scipy
+
             if idx == len(Filters) - 1: # At the last stage, append output_data as the final output for reference
                 ref_data.append(output_data)
 
@@ -211,13 +229,20 @@ def verify_depth_conv_fused(parameters, dtype="float32", layout="NHWC", print_ir
     ref_data = get_ref_data()
 
     if save_data:
-        stages = ["input", "filter_1", "filter_2", "output"]
+        params_name = ["input", "filter_1"]
+        if p.get_f1_bn_relu() is not None:
+            params_name.extend(['scale_1, shift_1'])
+        params_name.append('filter_2')
+        if p.get_f2_bn_relu() is not None:
+            params_name.extend(['scale_2, shift_2'])
+        params_name.append('output')
+
         # Save ref data
         for i in range(0, len(ref_data)):
             filename = "npy/depth_conv_%d_%d_%d_%d_%d_%d/" % p.get_params()
             if not os.path.exists(filename):
                 os.mkdir(filename)
-            filename += stages[i]
+            filename += params_name[i]
             np.save(filename, ref_data[i])
 
     # tmp = np.load("output_1_112_112_32.npy")
@@ -232,19 +257,20 @@ def verify_depth_conv_fused(parameters, dtype="float32", layout="NHWC", print_ir
         ctx = tvm.context(device, 0)
 
         nd_arrays = []
+        output_stage = stages[-1][-1]
         for idx, array in enumerate(ref_data):
             if idx == len(ref_data) - 1: # Omit output data here
                 break
             nd_arrays.append(tvm.nd.array(array, ctx))
-        nd_arrays.append(tvm.nd.array(np.zeros(get_const_tuple(nodes[-1].shape), dtype=nodes[-1].dtype), ctx)) # Append 0 output data
+        nd_arrays.append(tvm.nd.array(np.zeros(get_const_tuple(output_stage.shape), dtype=output_stage.dtype), ctx)) # Append 0 output data
 
         with tvm.target.create(device):
-            s = schedule_depth_conv_fused_nhwc([nodes[-1]], nodes, params, bn_relu=None)
+            s = schedule_depth_conv_fused_nhwc(output_stage, stages, params, bn_relu=None)
         if print_ir:
-            print(tvm.lower(s, params, simple_mode=True))
+            print(tvm.lower(s, flatten_list(params), simple_mode=True))
 
         # with tvm.build_config(data_alignment=4):
-        func = tvm.build(s, params, device, name=("DepthConvFused_{}".format(len(Filters))))
+        func = tvm.build(s, flatten_list(params), device, name=("DepthConvFused_{}".format(len(Filters))))
         if print_src:
             print(func.imported_modules[0].get_source())
         if export_code:
@@ -275,4 +301,4 @@ if __name__ == "__main__":
     # parameters.append(Parameters([1, 14, 14, 512, 3, 1, True, 'relu', 1, 512, False, 'relu'])) # 316.24 us
 
     for p in parameters:
-        verify_depth_conv_fused(p, print_ir=True, print_src=True, save_data=False, export_code=False)
+        verify_depth_conv_fused(p, print_ir=True, print_src=False, save_data=False, export_code=False)

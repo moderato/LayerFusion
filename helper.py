@@ -1,3 +1,15 @@
+class FilterParams:
+	def __init__(self, placeholder, layout="NHWC", depthwise=False, bn_relu=None, kernel=3, stride=1, padding="SAME", dilation=1):
+		assert bn_relu in [None, "relu", "relu6"]
+		self.placeholder = placeholder
+		self.layout = layout
+		self.depthwise = depthwise
+		self.bn_relu = bn_relu
+		self.kernel = kernel
+		self.stride = stride
+		self.padding = padding
+		self.dilation = dilation
+
 class Parameters:
     def __init__(self, p):
         assert len(p) == 12
@@ -54,3 +66,6 @@ class Parameters:
                     return (self.f2_K, self.f2_K, self.f1_OC, self.f2_OC) # HWIO
                 if layout == "NCHW":
                     return (self.f2_OC, self.f1_OC, self.f2_K, self.f2_K) # OIHW
+
+def flatten_list(lst):
+	return sum(([x] if not isinstance(x, list) else flatten_list(x) for x in lst), [])
