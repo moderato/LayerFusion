@@ -17,57 +17,78 @@ def write_code(code, fname):
     with open(fname, "w") as f:
         f.write(code)
 
-def schedule_depth_conv_fused_nhwc(outs, stages, params, bn_relu=None):
+def schedule_depth_conv_fused_nhwc(outs, stages, params, bn_relu1=None, bn_relu2=None):
     outs = [outs] if isinstance(outs, tvm.tensor.Tensor) else outs
     s = tvm.create_schedule([x.op for x in outs])
 
     PaddedInput = stages[1][0]
-    if bn_relu is not None:
-        Intermediate, InterScaleShift, InterReLU = stages[2]
+    if bn_relu1 is not None:
+        Inter, InterScaleShift, InterReLU = stages[2]
+        IntermediateStage = InterReLU
+        F_d, Scale_d, Shift_d = params[1]
+    else:
+        Inter = stages[2][0]
+        IntermediateStage = Inter
+        F_d = params[1][0]
+
+    if bn_relu2 is not None:
         Out, OutScaleShift, OutReLU = stages[3]
         OutputStage = OutReLU
-        F_d, Scale_d, Shift_d = params[1]
         F_1, Scale_1, Shift_1 = params[2]
     else:
-        Intermediate = stages[2][0]
         Out = stages[3][0]
         OutputStage = Out
-        F_d = params[1][0]
         F_1 = params[2][0]
-
-    output_step_tile_size_h = 2
-    output_step_tile_size_w = 2
-    num_thread_x = 32
-    num_thread_y = output_step_tile_size_h * output_step_tile_size_w
-    
+ 
     # Searchable parameters
     # --------------------
+    output_step_tile_size_h = 2
+    output_step_tile_size_w = 2
     step_num_h = 2
     step_num_w = 2
     reduce_split = 8
     intermediate_reuse = 8 # How many 32x32 blocks of 1x1 filter reuse the intermediate data
+    num_thread_x = 32
+    # --------------------
     output_tile_size_h = output_step_tile_size_h * step_num_h
     output_tile_size_w = output_step_tile_size_w * step_num_w
-    # --------------------
-    
+    num_thread_y = output_step_tile_size_h * output_step_tile_size_w
+    num_vthread_z = step_num_h * step_num_w
+    num_vthread_y = 1
+    num_vthread_x = 32
+
     # ######## Input data, weights, BN, etc
     s[PaddedInput].compute_inline()
-    PaddedSharedInput = s.cache_read(PaddedInput, "shared", [Intermediate])
-    FL_d = s.cache_read(F_d, "local", [Intermediate])
+    PaddedSharedInput = s.cache_read(PaddedInput, "shared", [Inter])
+    FL_d = s.cache_read(F_d, "local", [Inter])
     FS_1 = s.cache_read(F_1, "shared", [Out])
-    if bn_relu is not None:
-        ScaleL_d = s.cache_read(Scale_d, "local", [Intermediate])
-        ShiftL_d = s.cache_read(Shift_d, "local", [Intermediate])
-        ScaleL_1 = s.cache_read(Scale_1, "local", [Intermediate])
-        ShiftL_1 = s.cache_read(Shift_1, "local", [Intermediate])
-    # ######## Intermediate output
-    IntermediateShared = Intermediate
-    s[Intermediate].set_scope("shared")
-    DepthwiseLocalAccumulator = s.cache_write(Intermediate, "local")
-    # ######## Output
-    Output = OutputStage
-    OL = s.cache_write(OutputStage, "local")
-    
+    s[IntermediateStage].set_scope("shared")
+
+    if bn_relu1 is not None:
+        s[InterScaleShift].compute_inline()
+        s[Inter].set_scope("local")
+        ScaleL_d = s.cache_read(Scale_d, "local", [InterScaleShift])
+        ShiftL_d = s.cache_read(Shift_d, "local", [InterScaleShift])
+        DepthwiseLocalAccumulator = Inter
+    else:
+        DepthwiseLocalAccumulator = s.cache_write(IntermediateStage, "local")
+
+    if bn_relu2 is not None:
+        s[OutScaleShift].compute_inline()
+        s[Out].set_scope("local")
+        ScaleL_1 = s.cache_read(Scale_1, "local", [OutScaleShift])
+        ShiftL_1 = s.cache_read(Shift_1, "local", [OutScaleShift])
+        OL = Out
+    else:
+        OL = s.cache_write(OutputStage, "local")
+
+    # # ######## Intermediate output
+    # s[IntermediateStage].set_scope("shared")
+    # DepthwiseLocalAccumulator = s.cache_write(IntermediateStage, "local")
+    # # ######## Output
+    # Output = Out
+    # OL = s.cache_write(OutputStage, "local")
+
     # ######## Blocks and threads
     block_x = tvm.thread_axis("blockIdx.x")
     block_y = tvm.thread_axis("blockIdx.y")
@@ -75,35 +96,36 @@ def schedule_depth_conv_fused_nhwc(outs, stages, params, bn_relu=None):
     thread_y = tvm.thread_axis((0, num_thread_y), "threadIdx.y")
 
     # ######## Vthreads
-    num_vthread_x = 32
     vthread_x = tvm.thread_axis((0, num_vthread_x), "vthread", name="vthread_x")
-    num_vthread_y = 1
     vthread_y = tvm.thread_axis((0, num_vthread_y), "vthread", name="vthread_y")
-    num_vthread_z = step_num_h * step_num_w
     vthread_z = tvm.thread_axis((0, num_vthread_z), "vthread", name="vthread_z")
 
     # ######## Global output
-    n, h, w, c = s[Output].op.axis
-    c_outer, c_inner = s[Output].split(c, factor=num_thread_x)
-    recompute, reuse = s[Output].split(c_outer, factor=intermediate_reuse)
-    yo, xo, y_tile, x_tile = s[Output].tile(h, w, x_factor=output_tile_size_w, y_factor=output_tile_size_h)
-    hw_tile = s[Output].fuse(y_tile, x_tile)
-    thy, hw_tile = s[Output].split(hw_tile, nparts=num_thread_y)
-    vthy, hw_tile = s[Output].split(hw_tile, nparts=num_vthread_y)
-    s[Output].reorder(n, yo, xo, recompute, reuse, vthy, thy, c_inner, hw_tile)
-    fused_blx = s[Output].fuse(n, yo, xo, recompute)
-    s[Output].bind(fused_blx, block_x)
-    s[Output].bind(vthy, vthread_y)
-    s[Output].bind(reuse, vthread_x)
-    s[Output].bind(thy, thread_y)
-    s[Output].bind(c_inner, thread_x)
+    n, h, w, c = s[OutputStage].op.axis
+    c_outer, c_inner = s[OutputStage].split(c, factor=num_thread_x)
+    recompute, reuse = s[OutputStage].split(c_outer, factor=intermediate_reuse)
+    yo, xo, y_tile, x_tile = s[OutputStage].tile(h, w, x_factor=output_tile_size_w, y_factor=output_tile_size_h)
+    hw_tile = s[OutputStage].fuse(y_tile, x_tile)
+    thy, hw_tile = s[OutputStage].split(hw_tile, nparts=num_thread_y)
+    vthy, hw_tile = s[OutputStage].split(hw_tile, nparts=num_vthread_y)
+    s[OutputStage].reorder(n, yo, xo, recompute, reuse, vthy, thy, c_inner, hw_tile)
+    fused_blx = s[OutputStage].fuse(n, yo, xo, recompute)
+    s[OutputStage].bind(fused_blx, block_x)
+    s[OutputStage].bind(vthy, vthread_y)
+    s[OutputStage].bind(reuse, vthread_x)
+    s[OutputStage].bind(thy, thread_y)
+    s[OutputStage].bind(c_inner, thread_x)
 
     # ######## Local output
-    s[OL].compute_at(s[Output], c_inner)
+    s[OL].compute_at(s[OutputStage], c_inner)
     xocc, xicc = s[OL].split(s[OL].op.reduce_axis[0], factor=num_thread_x)
     xoicc, xiicc = s[OL].split(xicc, factor=reduce_split)
     n, h, w, oc = s[OL].op.axis
     s[OL].reorder(n, xocc, xoicc, h, w, oc, xiicc)
+
+    if bn_relu2 is not None:
+        s[ScaleL_1].compute_at(s[OutputStage], c_inner)
+        s[ShiftL_1].compute_at(s[OutputStage], c_inner)
 
     # ######## Shared 1by1 filter
     s[FS_1].compute_at(s[OL], xoicc)
@@ -118,28 +140,33 @@ def schedule_depth_conv_fused_nhwc(outs, stages, params, bn_relu=None):
     s[FS_1].vectorize(io4)
 
     # ######## Intermediate output in shared memory
-    s[IntermediateShared].compute_at(s[OL], xocc)
-    n, h, w, c = s[IntermediateShared].op.axis
-    inter_co, inter_ci = s[IntermediateShared].split(c, factor=num_thread_x)
-    yo, xo, y_tile, x_tile = s[IntermediateShared].tile(h, w, x_factor=output_tile_size_w, y_factor=output_tile_size_h)
-    y_step, x_step, y_step_tile, x_step_tile = s[IntermediateShared].tile(y_tile, x_tile, x_factor=output_step_tile_size_w, y_factor=output_step_tile_size_h)
-    s[IntermediateShared].reorder(n, yo, xo, inter_co, y_step, x_step, y_step_tile, x_step_tile, inter_ci)
-    step_tile = s[IntermediateShared].fuse(y_step_tile, x_step_tile)
-    s[IntermediateShared].bind(inter_ci, thread_x)
-    s[IntermediateShared].bind(step_tile, thread_y)
-    vthz = s[IntermediateShared].fuse(y_step, x_step)
-    s[IntermediateShared].bind(vthz, vthread_z)
+    s[IntermediateStage].compute_at(s[OL], xocc)
+    n, h, w, c = s[IntermediateStage].op.axis
+    inter_co, inter_ci = s[IntermediateStage].split(c, factor=num_thread_x)
+    yo, xo, y_tile, x_tile = s[IntermediateStage].tile(h, w, x_factor=output_tile_size_w, y_factor=output_tile_size_h)
+    y_step, x_step, y_step_tile, x_step_tile = s[IntermediateStage].tile(y_tile, x_tile, x_factor=output_step_tile_size_w, y_factor=output_step_tile_size_h)
+    s[IntermediateStage].reorder(n, yo, xo, inter_co, y_step, x_step, y_step_tile, x_step_tile, inter_ci)
+    step_tile = s[IntermediateStage].fuse(y_step_tile, x_step_tile)
+    s[IntermediateStage].bind(inter_ci, thread_x)
+    s[IntermediateStage].bind(step_tile, thread_y)
+    vthz = s[IntermediateStage].fuse(y_step, x_step)
+    s[IntermediateStage].bind(vthz, vthread_z)
 
     # ######## Intermediate output local accumulator
+    s[DepthwiseLocalAccumulator].compute_at(s[IntermediateStage], inter_ci)
     ry, rx = s[DepthwiseLocalAccumulator].op.reduce_axis
     n, h, w, c = s[DepthwiseLocalAccumulator].op.axis
     s[DepthwiseLocalAccumulator].reorder(n, c, ry, rx, h, w)
-    s[DepthwiseLocalAccumulator].compute_at(s[IntermediateShared], inter_ci)
+
+    if bn_relu1 is not None:
+        s[ScaleL_d].compute_at(s[IntermediateStage], inter_ci)
+        s[ShiftL_d].compute_at(s[IntermediateStage], inter_ci)
 
     # ######## Depthwise filter
-    s[FL_d].compute_at(s[IntermediateShared], inter_co)
+    s[FL_d].compute_at(s[IntermediateStage], inter_co)
 
     # ######## Shared Input
+    s[PaddedSharedInput].compute_at(s[IntermediateStage], inter_co)
     n, h, w, c = s[PaddedSharedInput].op.axis
     co, ci = s[PaddedSharedInput].split(c, factor=num_thread_x)
     yo, xo, y_tile, x_tile = s[PaddedSharedInput].tile(h, w, x_factor=output_step_tile_size_w, y_factor=output_step_tile_size_h)
@@ -147,7 +174,6 @@ def schedule_depth_conv_fused_nhwc(outs, stages, params, bn_relu=None):
     tile = s[PaddedSharedInput].fuse(y_tile, x_tile)
     s[PaddedSharedInput].bind(ci, thread_x)
     s[PaddedSharedInput].bind(tile, thread_y)
-    s[PaddedSharedInput].compute_at(s[IntermediateShared], inter_co)
 
     return s
 
@@ -218,7 +244,7 @@ def verify_depth_conv_fused(parameters, dtype="float32", layout="NHWC", print_ir
                 for c in range(oc):
                     scale_shift_scipy[:,:,:,c] = output_data[:,:,:,c] * scale_np[c] + shift_np[c]
                     relu_scipy[:,:,:,c] = np.maximum(scale_shift_scipy[:,:,:,c], 0)
-                    if p.bn_relu == "relu6":
+                    if f.bn_relu == "relu6":
                         relu_scipy[:,:,:,c] = np.minimum(relu_scipy[:,:,:,c], 6)
                 output_data = relu_scipy
 
@@ -265,7 +291,8 @@ def verify_depth_conv_fused(parameters, dtype="float32", layout="NHWC", print_ir
         nd_arrays.append(tvm.nd.array(np.zeros(get_const_tuple(output_stage.shape), dtype=output_stage.dtype), ctx)) # Append 0 output data
 
         with tvm.target.create(device):
-            s = schedule_depth_conv_fused_nhwc(output_stage, stages, params, bn_relu=None)
+            s = schedule_depth_conv_fused_nhwc(output_stage, stages, params, 
+                                                bn_relu1=p.get_f1_bn_relu(), bn_relu2=p.get_f2_bn_relu())
         if print_ir:
             print(tvm.lower(s, flatten_list(params), simple_mode=True))
 
@@ -297,7 +324,7 @@ if __name__ == "__main__":
 
     # parameters.append(Parameters([1, 112, 112, 32, 3, 1, True, 'relu', 1, 32, False, 'relu'])) # 62.86 us (4, 4, 16, 1)
     # parameters.append(Parameters([1, 56, 56, 128, 3, 1, True, 'relu', 1, 128, False, 'relu'])) # 108.12 us (4, 4, 16, 4)
-    parameters.append(Parameters([1, 28, 28, 256, 3, 1, True, None, 1, 256, False, None])) # 117.21 us (2, 2, 8, 8)
+    parameters.append(Parameters([1, 28, 28, 256, 3, 1, True, 'relu', 1, 256, False, 'relu'])) # 117.21 us (2, 2, 8, 8)
     # parameters.append(Parameters([1, 14, 14, 512, 3, 1, True, 'relu', 1, 512, False, 'relu'])) # 316.24 us
 
     for p in parameters:
