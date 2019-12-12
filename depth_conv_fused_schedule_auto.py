@@ -68,15 +68,15 @@ def schedule_depth_conv_fused_nhwc_auto(outs, stages, params, bn_relu1=None, bn_
     cfg.define_split("split_c", c, num_outputs=3) # _, intermediate_reuse, num_thread_x
     ho, thz, thy, h = cfg["split_h"].apply(s, OutputStage, h)
     wo, vthy, w = cfg["split_w"].apply(s, OutputStage, w)
-    recompute, reuse, c_inner = cfg["split_c"].apply(s, OutputStage, c)
-    s[OutputStage].reorder(n, ho, wo, recompute, reuse, vthy, thz, thy, c_inner, h, w)
+    recompute, reuse, thx = cfg["split_c"].apply(s, OutputStage, c)
+    s[OutputStage].reorder(n, ho, wo, recompute, reuse, vthy, thz, thy, thx, h, w)
     fused_blx = s[OutputStage].fuse(n, ho, wo, recompute)
     s[OutputStage].bind(fused_blx, block_x)
     s[OutputStage].bind(vthy, vthread_y)
     s[OutputStage].bind(reuse, vthread_x)
     s[OutputStage].bind(thz, thread_z)
     s[OutputStage].bind(thy, thread_y)
-    s[OutputStage].bind(c_inner, thread_x)
+    s[OutputStage].bind(thx, thread_x)
     # ---
     num_thread_z = output_step_tile_size_h = cfg["split_h"].size[1]
     num_thread_y = output_step_tile_size_w = cfg["split_h"].size[2]
@@ -85,7 +85,7 @@ def schedule_depth_conv_fused_nhwc_auto(outs, stages, params, bn_relu1=None, bn_
     output_tile_size_w = cfg["split_w"].size[1] * cfg["split_w"].size[2]
     
     # ######## Local output
-    s[OL].compute_at(s[OutputStage], c_inner)
+    s[OL].compute_at(s[OutputStage], thx)
     xocc, xicc = s[OL].split(s[OL].op.reduce_axis[0], factor=num_thread_x)
     cfg.define_split("split_xicc", c, num_outputs=2) # _, reduce_split
     xoicc, xiicc = cfg["split_xicc"].apply(s, OL, xicc)
@@ -93,8 +93,8 @@ def schedule_depth_conv_fused_nhwc_auto(outs, stages, params, bn_relu1=None, bn_
     s[OL].reorder(n, xocc, xoicc, h, w, oc, xiicc)
 
     if bn_relu2 is not None:
-        s[ScaleL_1].compute_at(s[OutputStage], c_inner)
-        s[ShiftL_1].compute_at(s[OutputStage], c_inner)
+        s[ScaleL_1].compute_at(s[OutputStage], thx)
+        s[ShiftL_1].compute_at(s[OutputStage], thx)
 
     # ######## Shared 1by1 filter
     s[FS_1].compute_at(s[OL], xoicc)

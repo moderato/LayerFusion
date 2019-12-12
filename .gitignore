@@ -1,3 +1,5 @@
 __pycache__/*
 *.log
 .pkl_memoize_py3/*
+generated_kernels/*
+logs/*

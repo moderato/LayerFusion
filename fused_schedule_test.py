@@ -128,7 +128,16 @@ def get_schedule_depth_conv(parameters, auto_tvm=False):
                                                 bn_relu1=p.get_f1_bn_relu(), bn_relu2=p.get_f2_bn_relu())
     return s, flatten_list(params)
 
-def verify_depth_conv_fused(parameters, dtype="float32", layout="NHWC", print_ir=False, print_src=False, save_data=False, export_code=False, auto_tvm=False):
+def verify_depth_conv_fused(parameters, 
+                            dtype="float32", 
+                            layout="NHWC", 
+                            print_ir=False, 
+                            print_src=False, 
+                            save_data=False, 
+                            export_code=False, 
+                            auto_tvm=False, 
+                            auto_tvm_skip_training=False, 
+                            auto_tvm_trials=20):
     assert layout in ["NHWC", "NCHW", "NCHWc16", "NCHWc4"]
 
     ref_data = get_ref_data(parameters, dtype=dtype, save_data=save_data)
@@ -148,6 +157,9 @@ def verify_depth_conv_fused(parameters, dtype="float32", layout="NHWC", print_ir
                 nd_arrays.append(tvm.nd.array(np.zeros(get_const_tuple(array.shape), dtype=dtype), ctx)) # Append 0 output data
 
         if auto_tvm:
+            param_string = '_'.join([str(num) for num in parameters])
+            log_name = 'logs/depth_conv_fused_{}.log'.format(param_string)
+            
             # logging
             logging.getLogger('autotvm').setLevel(logging.DEBUG)
             logging.getLogger('autotvm').addHandler(logging.StreamHandler(sys.stdout))
@@ -157,28 +169,28 @@ def verify_depth_conv_fused(parameters, dtype="float32", layout="NHWC", print_ir
             task = autotvm.task.create(get_schedule_depth_conv, args=sargs, target=device)
             print(task.config_space)
 
-            # autotvm setting
-            measure_option = autotvm.measure_option(
-                builder=autotvm.LocalBuilder(),
-                # runner=autotvm.LocalRunner(repeat=3, min_repeat_ms=100, timeout=4)
-                runner=autotvm.RPCRunner(
-                    '1050ti',  # change the device key to your key
-                    '0.0.0.0', 9190,
-                    number=20, repeat=3, timeout=4, min_repeat_ms=100)
-            )
-            tuner = autotvm.tuner.XGBTuner(task)
-            tuner.tune(n_trial=20,
-                    measure_option=measure_option,
-                    callbacks=[autotvm.callback.log_to_file('depth_conv_fused.log')])
+            if not auto_tvm_skip_training:
+                # autotvm setting
+                measure_option = autotvm.measure_option(
+                    builder=autotvm.LocalBuilder(),
+                    runner=autotvm.RPCRunner(
+                        '1050ti',  # change the device key to your key
+                        '0.0.0.0', 9190,
+                        number=100, repeat=3, timeout=10, min_repeat_ms=100)
+                )
+                tuner = autotvm.tuner.XGBTuner(task)
+                tuner.tune(n_trial=auto_tvm_trials,
+                        measure_option=measure_option,
+                        callbacks=[autotvm.callback.log_to_file(log_name)])
 
             # inspect the best config
-            dispatch_context = autotvm.apply_history_best("depth_conv_fused.log")
+            dispatch_context = autotvm.apply_history_best(log_name)
             best_config = dispatch_context.query(task.target, task.workload)
             print("\nBest config:")
             print(best_config)
 
             # apply history best from log file
-            with autotvm.apply_history_best('depth_conv_fused.log'):
+            with autotvm.apply_history_best(log_name):
                 with tvm.target.create(device):
                     s, flatten_params = get_schedule_depth_conv(parameters, auto_tvm)
                     func = tvm.build(s, flatten_params, device, name=("DepthConvFused_2"))
@@ -193,9 +205,9 @@ def verify_depth_conv_fused(parameters, dtype="float32", layout="NHWC", print_ir
             print(func.imported_modules[0].get_source())
         if export_code:
             cuda_code = func.imported_modules[0].get_source()
-            write_code(cuda_code, "testbed/kernel_depth_conv.cuh")
+            write_code(cuda_code, "generated_kernels/kernel_depth_conv_{}.cuh".format(param_string))
 
-        timer_1 = func.time_evaluator(func.entry_name, ctx, number=10)
+        timer_1 = func.time_evaluator(func.entry_name, ctx, number=100)
         tcost_1 = timer_1(*nd_arrays).mean
         # np.testing.assert_allclose(nd_arrays[-1].asnumpy(), ref_data[-1], rtol=1e-3)
         d = ~np.isclose(nd_arrays[-1].asnumpy(), ref_data[-1], rtol=1e-3)
@@ -209,14 +221,22 @@ def verify_depth_conv_fused(parameters, dtype="float32", layout="NHWC", print_ir
 
     for device in ['cuda']:
         check_device(device)
+    print("############################################")
 
 if __name__ == "__main__":
     parameters = []
 
-    parameters.append([1, 112, 112, 32, 3, 1, True, None, 1, 32, False, None]) # 62.86 us (4, 4, 16, 1)
-    # parameters.append([1, 56, 56, 128, 3, 1, True, None, 1, 128, False, None]) # 108.12 us (4, 4, 16, 4)
-    # parameters.append([1, 28, 28, 256, 3, 1, True, None, 1, 256, False, None]) # 117.21 us (2, 2, 8, 8)
-    # parameters.append([1, 14, 14, 512, 3, 1, True, None, 1, 512, False, None]) # 316.24 us
+    # parameters.append([1, 112, 112, 32, 3, 1, True, 'relu', 1, 32, False, 'relu']) # 62.86 us (4, 4, 16, 1)
+    # parameters.append([1, 56, 56, 128, 3, 1, True, 'relu', 1, 128, False, 'relu']) # 108.12 us (4, 4, 16, 4)
+    # parameters.append([1, 28, 28, 256, 3, 1, True, 'relu', 1, 256, False, 'relu']) # 117.21 us (2, 2, 8, 8)
+    parameters.append([1, 14, 14, 512, 3, 1, True, 'relu', 1, 512, False, 'relu']) # 316.24 us
 
     for p in parameters:
-        verify_depth_conv_fused(p, print_ir=False, print_src=True, save_data=False, export_code=False, auto_tvm=True)
+        verify_depth_conv_fused(p, 
+                                print_ir=False, 
+                                print_src=True, 
+                                save_data=False, 
+                                export_code=True, 
+                                auto_tvm=True, 
+                                auto_tvm_skip_training=True, 
+                                auto_tvm_trials=2000)
