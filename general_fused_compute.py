@@ -62,7 +62,7 @@ def fused_convs(input_data, filters, resnet_block=False):
 		out_width = simplify((in_width - dilated_kernel_w + pad_left + pad_right) // stride_w + 1)
 
 		if f.kernel > 1:
-			print("Padding is needed!")
+			# print("Padding is needed!")
 
 			pad_before = [0, pad_top, pad_left, 0]
 			pad_after = [0, pad_down, pad_right, 0]

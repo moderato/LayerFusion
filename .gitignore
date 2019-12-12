@@ -1,1 +1,3 @@
 __pycache__/*
+*.log
+.pkl_memoize_py3/*
