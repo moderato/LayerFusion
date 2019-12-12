@@ -43,12 +43,12 @@ def get_input_and_filters(p):
                     DepthwiseFilter_1,
                     depthwise=p.is_f1_depthwise(),
                     bn_relu=p.get_f1_bn_relu(),
-                    kernel=p.get_f1_K(), stride=1, dilation=1))
+                    kernel=p.get_f1_K(), stride=p.get_f1_stride(), dilation=1))
     Filters.append(FilterParams(
                     Conv2dFilter_1,
                     depthwise=p.is_f2_depthwise(),
                     bn_relu=p.get_f2_bn_relu(),
-                    kernel=p.get_f2_K(), stride=1, dilation=1))
+                    kernel=p.get_f2_K(), stride=p.get_f2_stride(), dilation=1))
 
     return Input, Filters
 
@@ -128,7 +128,8 @@ def get_schedule_depth_conv(parameters, auto_tvm=False):
                                                 bn_relu1=p.get_f1_bn_relu(), bn_relu2=p.get_f2_bn_relu())
     return s, flatten_list(params)
 
-def verify_depth_conv_fused(parameters, 
+def verify_depth_conv_fused(workload_name,
+                            parameters,
                             dtype="float32", 
                             layout="NHWC", 
                             print_ir=False, 
@@ -224,19 +225,35 @@ def verify_depth_conv_fused(parameters,
     print("############################################")
 
 if __name__ == "__main__":
-    parameters = []
+    workloads = {}
 
-    # parameters.append([1, 112, 112, 32, 3, 1, True, 'relu', 1, 32, False, 'relu']) # 62.86 us (4, 4, 16, 1)
-    # parameters.append([1, 56, 56, 128, 3, 1, True, 'relu', 1, 128, False, 'relu']) # 108.12 us (4, 4, 16, 4)
-    # parameters.append([1, 28, 28, 256, 3, 1, True, 'relu', 1, 256, False, 'relu']) # 117.21 us (2, 2, 8, 8)
-    parameters.append([1, 14, 14, 512, 3, 1, True, 'relu', 1, 512, False, 'relu']) # 316.24 us
+    # MobileNet-v1
+    # workloads['mv1_1'] = (1, 112, 112, 32, 3, 1, 1, True, 'relu', 1, 64, 1, False, 'relu')
+    # workloads['mv1_2'] = (1, 112, 112, 64, 3, 1, 2, True, 'relu', 1, 128, 1, False, 'relu')
+    # workloads['mv1_3'] = (1, 56, 56, 128, 3, 1, 1, True, 'relu', 1, 128, 1, False, 'relu') # 108.12 us (4, 4, 16, 4)
+    # workloads['mv1_4'] = (1, 56, 56, 128, 3, 1, 2, True, 'relu', 1, 256, 1, False, 'relu')
+    # workloads['mv1_5'] = (1, 28, 28, 256, 3, 1, 1, True, 'relu', 1, 256, 1, False, 'relu') # 117.21 us (2, 2, 8, 8)
+    # workloads['mv1_6'] = (1, 28, 28, 256, 3, 1, 2, True, 'relu', 1, 512, 1, False, 'relu')
+    # workloads['mv1_7-11'] = (1, 14, 14, 512, 3, 1, 1, True, 'relu', 1, 512, 1, False, 'relu') # 316.24 us
+    # workloads['mv1_12'] = (1, 14, 14, 512, 3, 1, 2, True, 'relu', 1, 1024, 1, False, 'relu')
+    # workloads['mv1_13'] = (1, 7, 7, 1024, 3, 1, 1, True, 'relu', 1, 1024, 1, False, 'relu')
 
-    for p in parameters:
-        verify_depth_conv_fused(p, 
+    # # MobileNet-v2
+    # workloads['mv2_1'] = (1, 112, 112, 32, 3, 1, 1, True, 'relu', 1, 16, 1, False, 'relu')
+    # workloads['mv2_2'] = (1, 112, 112, 96, 3, 1, 2, True, 'relu', 1, 24, 1, False, 'relu')
+    # workloads['mv2_3'] = (1, 56, 56, 144, 3, 1, 2, True, 'relu', 1, 32, 1, False, 'relu')
+    # workloads['mv2_4'] = (1, 28, 28, 192, 3, 1, 2, True, 'relu', 1, 64, 1, False, 'relu')
+    # workloads['mv2_5'] = (1, 14, 14, 384, 3, 1, 1, True, 'relu', 1, 96, 1, False, 'relu')
+    # workloads['mv2_6'] = (1, 14, 14, 576, 3, 1, 2, True, 'relu', 1, 160, 1, False, 'relu')
+    # workloads['mv2_7'] = (1, 7, 7, 960, 3, 1, 1, True, 'relu', 1, 320, 1, False, 'relu')
+
+    for workload_name, parameters in workloads.items():
+        verify_depth_conv_fused(workload_name, 
+                                parameters,
                                 print_ir=False, 
                                 print_src=True, 
                                 save_data=False, 
                                 export_code=True, 
                                 auto_tvm=True, 
-                                auto_tvm_skip_training=True, 
+                                auto_tvm_skip_training=False, 
                                 auto_tvm_trials=2000)

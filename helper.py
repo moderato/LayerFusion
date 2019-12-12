@@ -12,8 +12,10 @@ class FilterParams:
 
 class Parameters:
     def __init__(self, p):
-        assert len(p) == 12
-        self.N, self.H, self.W, self.IC, self.f1_K, self.f1_OC, self.f1_depthwise, self.f1_bn_relu, self.f2_K, self.f2_OC, self.f2_depthwise, self.f2_bn_relu = p
+        assert len(p) == 14
+        self.N, self.H, self.W, self.IC, \
+            self.f1_K, self.f1_OC, self.f1_stride, self.f1_depthwise, self.f1_bn_relu, \
+                self.f2_K, self.f2_OC, self.f2_stride, self.f2_depthwise, self.f2_bn_relu = p
         assert self.f2_depthwise == False # Currently not supported
         assert self.f1_bn_relu in [None, 'relu', 'relu6']
         assert self.f2_bn_relu in [None, 'relu', 'relu6']
@@ -28,6 +30,12 @@ class Parameters:
 
     def get_f2_K(self):
         return self.f2_K
+
+    def get_f1_stride(self):
+        return self.f1_stride
+
+    def get_f2_stride(self):
+        return self.f2_stride
 
     def is_f1_depthwise(self):
         return self.f1_depthwise
@@ -66,6 +74,11 @@ class Parameters:
                     return (self.f2_K, self.f2_K, self.f1_OC, self.f2_OC) # HWIO
                 if layout == "NCHW":
                     return (self.f2_OC, self.f1_OC, self.f2_K, self.f2_K) # OIHW
+
+    def print_info(self):
+        print("Input size: {}".format(self.get_shape(tensor="input")))
+        print("Filter 1 size: {}, depthwise: {}, bn_relu: {}".format(self.get_shape(tensor="f1"), self.f1_depthwise, self.f1_bn_relu))
+        print("Filter 2 size: {}, depthwise: {}, bn_relu: {}".format(self.get_shape(tensor="f2"), self.f2_depthwise, self.f2_bn_relu))
 
 def flatten_list(lst):
 	return sum(([x] if not isinstance(x, list) else flatten_list(x) for x in lst), [])
