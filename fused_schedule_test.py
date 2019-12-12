@@ -14,6 +14,18 @@ from general_fused_compute import *
 from helper import *
 
 np.random.seed(42)
+targets = {
+    "cuda": {
+        "key": "1050ti",
+        "host": None,
+        "timeout": 10
+    },
+    # "llvm -mcpu=corei7-avx": {
+    #     "key": "i7_7700K",
+    #     "host": "llvm -target=x86_64-linux-gnu",
+    #     "timeout": 200
+    # }
+}
 
 def write_code(code, fname):
     with open(fname, "w") as f:
@@ -109,7 +121,7 @@ def get_ref_data(parameters, dtype="float32", save_data=False):
     return ref_data
 
 @autotvm.template
-def get_schedule_depth_conv(parameters, auto_tvm=False):
+def get_schedule_depth_conv(parameters, auto_tvm=False, device="cuda"):
 
     p = Parameters(parameters)
     Input, Filters = get_input_and_filters(p)
@@ -121,10 +133,10 @@ def get_schedule_depth_conv(parameters, auto_tvm=False):
     output_stage = stages[-1][-1]
 
     if auto_tvm:
-        s = schedule_depth_conv_fused_nhwc_auto(output_stage, stages, params,
+        s = schedule_depth_conv_fused_nhwc_auto(output_stage, stages, params, device=device,
                                                 bn_relu1=p.get_f1_bn_relu(), bn_relu2=p.get_f2_bn_relu())
     else:
-        s = schedule_depth_conv_fused_nhwc(output_stage, stages, params,
+        s = schedule_depth_conv_fused_nhwc(output_stage, stages, params, device=device,
                                                 bn_relu1=p.get_f1_bn_relu(), bn_relu2=p.get_f2_bn_relu())
     return s, flatten_list(params)
 
@@ -148,7 +160,10 @@ def verify_depth_conv_fused(workload_name,
             print("Skip because %s is not enabled" % device)
             return
         print("Running on target: %s" % device)
-        ctx = tvm.context(device, 0)
+        if device == "llvm":
+            ctx = tvm.cpu()
+        else: # cuda
+            ctx = tvm.context(device, 0)
 
         nd_arrays = []
         for idx, array in enumerate(ref_data):
@@ -158,16 +173,17 @@ def verify_depth_conv_fused(workload_name,
                 nd_arrays.append(tvm.nd.array(np.zeros(get_const_tuple(array.shape), dtype=dtype), ctx)) # Append 0 output data
 
         if auto_tvm:
-            param_string = '_'.join([str(num) for num in parameters])
-            log_name = 'logs/depth_conv_fused_{}.log'.format(param_string)
+            # param_string = '_'.join([str(num) for num in parameters])
+            # log_name = 'logs/depth_conv_fused_{}.log'.format(param_string)
+            log_name = 'logs/depth_conv_fused_{}.log'.format(workload_name)
             
             # logging
             logging.getLogger('autotvm').setLevel(logging.DEBUG)
             logging.getLogger('autotvm').addHandler(logging.StreamHandler(sys.stdout))
 
             # fused schedule auto
-            sargs = autotvm.task.topi_integration.serialize_args([parameters, auto_tvm])
-            task = autotvm.task.create(get_schedule_depth_conv, args=sargs, target=device)
+            sargs = autotvm.task.topi_integration.serialize_args([parameters, auto_tvm, device])
+            task = autotvm.task.create(get_schedule_depth_conv, args=sargs, target=device, target_host=targets[device]["host"])
             print(task.config_space)
 
             if not auto_tvm_skip_training:
@@ -175,9 +191,8 @@ def verify_depth_conv_fused(workload_name,
                 measure_option = autotvm.measure_option(
                     builder=autotvm.LocalBuilder(),
                     runner=autotvm.RPCRunner(
-                        '1050ti',  # change the device key to your key
-                        '0.0.0.0', 9190,
-                        number=100, repeat=3, timeout=10, min_repeat_ms=100)
+                        targets[device]["key"], '0.0.0.0', 9190,
+                        number=100, repeat=3, timeout=targets[device]["timeout"], min_repeat_ms=100)
                 )
                 tuner = autotvm.tuner.XGBTuner(task)
                 tuner.tune(n_trial=auto_tvm_trials,
@@ -206,7 +221,7 @@ def verify_depth_conv_fused(workload_name,
             print(func.imported_modules[0].get_source())
         if export_code:
             cuda_code = func.imported_modules[0].get_source()
-            write_code(cuda_code, "generated_kernels/kernel_depth_conv_{}.cuh".format(param_string))
+            write_code(cuda_code, "generated_kernels/kernel_depth_conv_{}.cuh".format(workload_name))
 
         timer_1 = func.time_evaluator(func.entry_name, ctx, number=100)
         tcost_1 = timer_1(*nd_arrays).mean
@@ -220,7 +235,7 @@ def verify_depth_conv_fused(workload_name,
         # print("Error rate: {:.2f}%".format((len(d) / len(ref_data[-1]) * 100)))
         print("Depthwise Conv Fused of 2 layers ({}): average running time is {:.2f} us.".format(layout, tcost_1 * 1e6))
 
-    for device in ['cuda']:
+    for device in targets.keys():
         check_device(device)
     print("############################################")
 
@@ -228,24 +243,24 @@ if __name__ == "__main__":
     workloads = {}
 
     # MobileNet-v1
-    # workloads['mv1_1'] = (1, 112, 112, 32, 3, 1, 1, True, 'relu', 1, 64, 1, False, 'relu')
-    # workloads['mv1_2'] = (1, 112, 112, 64, 3, 1, 2, True, 'relu', 1, 128, 1, False, 'relu')
-    # workloads['mv1_3'] = (1, 56, 56, 128, 3, 1, 1, True, 'relu', 1, 128, 1, False, 'relu') # 108.12 us (4, 4, 16, 4)
-    # workloads['mv1_4'] = (1, 56, 56, 128, 3, 1, 2, True, 'relu', 1, 256, 1, False, 'relu')
-    # workloads['mv1_5'] = (1, 28, 28, 256, 3, 1, 1, True, 'relu', 1, 256, 1, False, 'relu') # 117.21 us (2, 2, 8, 8)
-    # workloads['mv1_6'] = (1, 28, 28, 256, 3, 1, 2, True, 'relu', 1, 512, 1, False, 'relu')
-    # workloads['mv1_7-11'] = (1, 14, 14, 512, 3, 1, 1, True, 'relu', 1, 512, 1, False, 'relu') # 316.24 us
-    # workloads['mv1_12'] = (1, 14, 14, 512, 3, 1, 2, True, 'relu', 1, 1024, 1, False, 'relu')
-    # workloads['mv1_13'] = (1, 7, 7, 1024, 3, 1, 1, True, 'relu', 1, 1024, 1, False, 'relu')
+    workloads['mv1_1'] = (1, 112, 112, 32, 3, 1, 1, True, 'relu', 1, 64, 1, False, 'relu')
+    workloads['mv1_2'] = (1, 112, 112, 64, 3, 1, 2, True, 'relu', 1, 128, 1, False, 'relu')
+    workloads['mv1_3'] = (1, 56, 56, 128, 3, 1, 1, True, 'relu', 1, 128, 1, False, 'relu') # 108.12 us (4, 4, 16, 4)
+    workloads['mv1_4'] = (1, 56, 56, 128, 3, 1, 2, True, 'relu', 1, 256, 1, False, 'relu')
+    workloads['mv1_5'] = (1, 28, 28, 256, 3, 1, 1, True, 'relu', 1, 256, 1, False, 'relu') # 117.21 us (2, 2, 8, 8)
+    workloads['mv1_6'] = (1, 28, 28, 256, 3, 1, 2, True, 'relu', 1, 512, 1, False, 'relu')
+    workloads['mv1_7-11'] = (1, 14, 14, 512, 3, 1, 1, True, 'relu', 1, 512, 1, False, 'relu') # 316.24 us
+    workloads['mv1_12'] = (1, 14, 14, 512, 3, 1, 2, True, 'relu', 1, 1024, 1, False, 'relu')
+    workloads['mv1_13'] = (1, 7, 7, 1024, 3, 1, 1, True, 'relu', 1, 1024, 1, False, 'relu')
 
-    # # MobileNet-v2
-    # workloads['mv2_1'] = (1, 112, 112, 32, 3, 1, 1, True, 'relu', 1, 16, 1, False, 'relu')
-    # workloads['mv2_2'] = (1, 112, 112, 96, 3, 1, 2, True, 'relu', 1, 24, 1, False, 'relu')
-    # workloads['mv2_3'] = (1, 56, 56, 144, 3, 1, 2, True, 'relu', 1, 32, 1, False, 'relu')
-    # workloads['mv2_4'] = (1, 28, 28, 192, 3, 1, 2, True, 'relu', 1, 64, 1, False, 'relu')
-    # workloads['mv2_5'] = (1, 14, 14, 384, 3, 1, 1, True, 'relu', 1, 96, 1, False, 'relu')
-    # workloads['mv2_6'] = (1, 14, 14, 576, 3, 1, 2, True, 'relu', 1, 160, 1, False, 'relu')
-    # workloads['mv2_7'] = (1, 7, 7, 960, 3, 1, 1, True, 'relu', 1, 320, 1, False, 'relu')
+    # MobileNet-v2
+    workloads['mv2_1'] = (1, 112, 112, 32, 3, 1, 1, True, 'relu', 1, 16, 1, False, 'relu')
+    workloads['mv2_2'] = (1, 112, 112, 96, 3, 1, 2, True, 'relu', 1, 24, 1, False, 'relu')
+    workloads['mv2_3'] = (1, 56, 56, 144, 3, 1, 2, True, 'relu', 1, 32, 1, False, 'relu')
+    workloads['mv2_4'] = (1, 28, 28, 192, 3, 1, 2, True, 'relu', 1, 64, 1, False, 'relu')
+    workloads['mv2_5'] = (1, 14, 14, 384, 3, 1, 1, True, 'relu', 1, 96, 1, False, 'relu')
+    workloads['mv2_6'] = (1, 14, 14, 576, 3, 1, 2, True, 'relu', 1, 160, 1, False, 'relu')
+    workloads['mv2_7'] = (1, 7, 7, 960, 3, 1, 1, True, 'relu', 1, 320, 1, False, 'relu')
 
     for workload_name, parameters in workloads.items():
         verify_depth_conv_fused(workload_name, 

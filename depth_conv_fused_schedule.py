@@ -82,19 +82,12 @@ def schedule_depth_conv_fused_nhwc(outs, stages, params, bn_relu1=None, bn_relu2
     c_outer, thx = s[OutputStage].split(c, factor=num_thread_x)
     recompute, reuse = s[OutputStage].split(c_outer, factor=intermediate_reuse)
     ho, wo, h_tile, w_tile = s[OutputStage].tile(h, w, x_factor=output_tile_size_h, y_factor=output_tile_size_w)
-    # ---
-    # hw_tile = s[OutputStage].fuse(h_tile, w_tile)
-    # thy, hw_tile = s[OutputStage].split(hw_tile, nparts=num_thread_y)
-    # vthy, hw_tile = s[OutputStage].split(hw_tile, nparts=num_vthread_y)
-    # s[OutputStage].reorder(n, ho, wo, recompute, reuse, vthy, thy, thx, hw_tile)
-    # ---
     thz, h_tile = s[OutputStage].split(h_tile, nparts=num_thread_z)
     thy, h_tile = s[OutputStage].split(h_tile, nparts=num_thread_y)
     vthy, w_tile = s[OutputStage].split(w_tile, nparts=num_vthread_y)
     s[OutputStage].reorder(n, ho, wo, recompute, reuse, vthy, thz, thy, thx, h_tile, w_tile)
-    s[OutputStage].bind(thz, thread_z)
-    # ---
     fused_blx = s[OutputStage].fuse(n, ho, wo, recompute)
+    s[OutputStage].bind(thz, thread_z)
     s[OutputStage].bind(fused_blx, block_x)
     s[OutputStage].bind(vthy, vthread_y)
     s[OutputStage].bind(reuse, vthread_x)
@@ -117,17 +110,11 @@ def schedule_depth_conv_fused_nhwc(outs, stages, params, bn_relu1=None, bn_relu2
     h1, w1, i1, o1 = s[FS_1].op.axis
     io = s[FS_1].fuse(i1, o1)
     io, iox = s[FS_1].split(io, factor=num_thread_x * 4)
-    # ---
-    # ioy, io = s[FS_1].split(io, nparts=num_thread_y)
-    # iox, io4 = s[FS_1].split(iox, factor=4)
-    # s[FS_1].reorder(h1, w1, io, ioy, iox, io4)
-    # ---
     ioz, io = s[FS_1].split(io, nparts=num_thread_z)
     ioy, io = s[FS_1].split(io, nparts=num_thread_y)
     iox, io4 = s[FS_1].split(iox, factor=4)
     s[FS_1].reorder(h1, w1, io, ioz, ioy, iox, io4)
     s[FS_1].bind(ioz, thread_z)
-    # ---
     s[FS_1].bind(iox, thread_x)
     s[FS_1].bind(ioy, thread_y)
     s[FS_1].vectorize(io4)
@@ -139,15 +126,10 @@ def schedule_depth_conv_fused_nhwc(outs, stages, params, bn_relu1=None, bn_relu2
     ho, wo, h_tile, w_tile = s[IntermediateStage].tile(h, w, x_factor=output_tile_size_h, y_factor=output_tile_size_w)
     h_step, w_step, h_step_tile, w_step_tile = s[IntermediateStage].tile(h_tile, w_tile, x_factor=output_step_tile_size_h, y_factor=output_step_tile_size_w)
     s[IntermediateStage].reorder(n, ho, wo, inter_co, h_step, w_step, h_step_tile, w_step_tile, inter_ci)
-    # ---
-    # step_tile = s[IntermediateStage].fuse(h_step_tile, w_step_tile)
-    # s[IntermediateStage].bind(step_tile, thread_y)
-    # ---
+    vthz = s[IntermediateStage].fuse(h_step, w_step)
     s[IntermediateStage].bind(h_step_tile, thread_z)
     s[IntermediateStage].bind(w_step_tile, thread_y)
-    # ---
     s[IntermediateStage].bind(inter_ci, thread_x)
-    vthz = s[IntermediateStage].fuse(h_step, w_step)
     s[IntermediateStage].bind(vthz, vthread_z)
 
     # ######## Intermediate output local accumulator
@@ -169,13 +151,8 @@ def schedule_depth_conv_fused_nhwc(outs, stages, params, bn_relu1=None, bn_relu2
     co, ci = s[PaddedSharedInput].split(c, factor=num_thread_x)
     ho, wo, h_tile, w_tile = s[PaddedSharedInput].tile(h, w, x_factor=output_step_tile_size_h, y_factor=output_step_tile_size_w)
     s[PaddedSharedInput].reorder(co, n, ho, wo, h_tile, w_tile, ci)
-    # ---
-    # tile = s[PaddedSharedInput].fuse(h_tile, w_tile)
-    # s[PaddedSharedInput].bind(tile, thread_y)
-    # ---
     s[PaddedSharedInput].bind(h_tile, thread_z)
     s[PaddedSharedInput].bind(w_tile, thread_y)
-    # ---
     s[PaddedSharedInput].bind(ci, thread_x)
 
     return s

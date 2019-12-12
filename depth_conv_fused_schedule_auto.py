@@ -1,7 +1,7 @@
 import tvm
 from tvm import autotvm
 
-def schedule_depth_conv_fused_nhwc_auto(outs, stages, params, bn_relu1=None, bn_relu2=None):
+def schedule_depth_conv_fused_nhwc_auto(outs, stages, params, device="cuda", bn_relu1=None, bn_relu2=None):
     outs = [outs] if isinstance(outs, tvm.tensor.Tensor) else outs
     s = tvm.create_schedule([x.op for x in outs])
 
@@ -53,30 +53,36 @@ def schedule_depth_conv_fused_nhwc_auto(outs, stages, params, bn_relu1=None, bn_
         OL = s.cache_write(OutputStage, "local")
 
     # ######## Blocks, threads and vthreads
-    block_x = tvm.thread_axis("blockIdx.x")
-    thread_x = tvm.thread_axis("threadIdx.x")
-    thread_y = tvm.thread_axis("threadIdx.y")
-    thread_z = tvm.thread_axis("threadIdx.z")
-    vthread_x = tvm.thread_axis("vthread", name="vthread_x")
-    vthread_y = tvm.thread_axis("vthread", name="vthread_y")
-    vthread_z = tvm.thread_axis("vthread", name="vthread_z")
+    if device == "cuda":
+        block_x = tvm.thread_axis("blockIdx.x")
+        thread_x = tvm.thread_axis("threadIdx.x")
+        thread_y = tvm.thread_axis("threadIdx.y")
+        thread_z = tvm.thread_axis("threadIdx.z")
+        vthread_x = tvm.thread_axis("vthread", name="vthread_x")
+        vthread_y = tvm.thread_axis("vthread", name="vthread_y")
+        vthread_z = tvm.thread_axis("vthread", name="vthread_z")
+
+    # Vectorization
+    vec = [4] if device == "cuda" else [2, 4, 8, 16, 32, 64]
+    cfg.define_knob("vectorization", candidate=vec)
 
     # ######## Global output
     n, h, w, c = s[OutputStage].op.axis
     cfg.define_split("split_h", h, num_outputs=4)
     cfg.define_split("split_w", w, num_outputs=3)
-    cfg.define_split("split_c", c, num_outputs=3) # _, intermediate_reuse, num_thread_x
+    cfg.define_split("split_c", c, num_outputs=3, filter=lambda x: x.size[-1] in [8, 16, 32, 64, 128, 256]) # _, intermediate_reuse, num_thread_x
     ho, thz, thy, h = cfg["split_h"].apply(s, OutputStage, h)
     wo, vthy, w = cfg["split_w"].apply(s, OutputStage, w)
     recompute, reuse, thx = cfg["split_c"].apply(s, OutputStage, c)
     s[OutputStage].reorder(n, ho, wo, recompute, reuse, vthy, thz, thy, thx, h, w)
     fused_blx = s[OutputStage].fuse(n, ho, wo, recompute)
-    s[OutputStage].bind(fused_blx, block_x)
-    s[OutputStage].bind(vthy, vthread_y)
-    s[OutputStage].bind(reuse, vthread_x)
-    s[OutputStage].bind(thz, thread_z)
-    s[OutputStage].bind(thy, thread_y)
-    s[OutputStage].bind(thx, thread_x)
+    if device == "cuda":
+        s[OutputStage].bind(fused_blx, block_x)
+        s[OutputStage].bind(vthy, vthread_y)
+        s[OutputStage].bind(reuse, vthread_x)
+        s[OutputStage].bind(thz, thread_z)
+        s[OutputStage].bind(thy, thread_y)
+        s[OutputStage].bind(thx, thread_x)
     # ---
     num_thread_z = output_step_tile_size_h = cfg["split_h"].size[1]
     num_thread_y = output_step_tile_size_w = cfg["split_h"].size[2]
@@ -100,14 +106,15 @@ def schedule_depth_conv_fused_nhwc_auto(outs, stages, params, bn_relu1=None, bn_
     s[FS_1].compute_at(s[OL], xoicc)
     h1, w1, i1, o1 = s[FS_1].op.axis
     io = s[FS_1].fuse(i1, o1)
-    io, iox = s[FS_1].split(io, factor=num_thread_x * 4)
+    io, iox = s[FS_1].split(io, factor=num_thread_x * cfg["vectorization"].val)
     ioz, io = s[FS_1].split(io, nparts=num_thread_z)
     ioy, io = s[FS_1].split(io, nparts=num_thread_y)
     iox, io4 = s[FS_1].split(iox, factor=4)
     s[FS_1].reorder(h1, w1, io, ioz, ioy, iox, io4)
-    s[FS_1].bind(iox, thread_x)
-    s[FS_1].bind(ioy, thread_y)
-    s[FS_1].bind(ioz, thread_z)
+    if device == "cuda":
+        s[FS_1].bind(iox, thread_x)
+        s[FS_1].bind(ioy, thread_y)
+        s[FS_1].bind(ioz, thread_z)
     s[FS_1].vectorize(io4)
 
     # ######## Intermediate output in shared memory
@@ -117,11 +124,12 @@ def schedule_depth_conv_fused_nhwc_auto(outs, stages, params, bn_relu1=None, bn_
     ho, wo, h_tile, w_tile = s[IntermediateStage].tile(h, w, x_factor=output_tile_size_h, y_factor=output_tile_size_w)
     h_step, w_step, h_step_tile, w_step_tile = s[IntermediateStage].tile(h_tile, w_tile, x_factor=output_step_tile_size_h, y_factor=output_step_tile_size_w)
     s[IntermediateStage].reorder(n, ho, wo, inter_co, h_step, w_step, h_step_tile, w_step_tile, inter_ci)
-    s[IntermediateStage].bind(h_step_tile, thread_z)
-    s[IntermediateStage].bind(w_step_tile, thread_y)
-    s[IntermediateStage].bind(inter_ci, thread_x)
     vthz = s[IntermediateStage].fuse(h_step, w_step)
-    s[IntermediateStage].bind(vthz, vthread_z)
+    if device == "cuda":
+        s[IntermediateStage].bind(h_step_tile, thread_z)
+        s[IntermediateStage].bind(w_step_tile, thread_y)
+        s[IntermediateStage].bind(inter_ci, thread_x)
+        s[IntermediateStage].bind(vthz, vthread_z)
 
     # ######## Intermediate output local accumulator
     s[DepthwiseLocalAccumulator].compute_at(s[IntermediateStage], inter_ci)
@@ -142,8 +150,9 @@ def schedule_depth_conv_fused_nhwc_auto(outs, stages, params, bn_relu1=None, bn_
     co, ci = s[PaddedSharedInput].split(c, factor=num_thread_x)
     ho, wo, h_tile, w_tile = s[PaddedSharedInput].tile(h, w, x_factor=output_step_tile_size_h, y_factor=output_step_tile_size_w)
     s[PaddedSharedInput].reorder(co, n, ho, wo, h_tile, w_tile, ci)
-    s[PaddedSharedInput].bind(h_tile, thread_z)
-    s[PaddedSharedInput].bind(w_tile, thread_y)
-    s[PaddedSharedInput].bind(ci, thread_x)
+    if device == "cuda":
+        s[PaddedSharedInput].bind(h_tile, thread_z)
+        s[PaddedSharedInput].bind(w_tile, thread_y)
+        s[PaddedSharedInput].bind(ci, thread_x)
 
     return s
