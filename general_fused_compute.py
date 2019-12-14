@@ -14,6 +14,9 @@ def fused_convs(input_data, filters, resnet_block=False):
 	Input = None
 	stages = [[input_data]]
 	params = [[input_data]]
+	padded_count = 0
+	conv_count = 0
+	depthwise_count = 0
 
 	for f in filters:
 		Input = stages[-1][-1]
@@ -29,10 +32,6 @@ def fused_convs(input_data, filters, resnet_block=False):
 		tmp_params = []
 
 		assert not (depthwise and kernel == 1) # Don't consider 1by1 depthwise
-
-		padded_count = 0
-		conv_count = 0
-		depthwise_count = 0
 
 		if isinstance(stride, int):
 			stride_h = stride_w = stride
