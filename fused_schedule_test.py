@@ -78,7 +78,7 @@ def get_ref_data(parameters, dtype="float32", save_data=False, name='depth_conv'
     for idx, f in enumerate(Filters):
         filter_data = np.random.uniform(size=get_const_tuple(f.placeholder.shape)).astype(dtype)
         ref_data.append(filter_data)
-        params_name.append("filter_{}".format(idx))
+        params_name.append("filter_{}".format(idx+1))
 
         if f.depthwise:
             output_data = topi.testing.depthwise_conv2d_python_nhwc(output_data, filter_data, stride=[f.stride, f.stride], padding=f.padding)
@@ -100,7 +100,7 @@ def get_ref_data(parameters, dtype="float32", save_data=False, name='depth_conv'
                 if f.bn_relu == "relu6":
                     relu_scipy[:,:,:,c] = np.minimum(relu_scipy[:,:,:,c], 6)
             output_data = relu_scipy
-            params_name.extend(['scale_{}'.format(idx), 'shift_{}'.format(idx)])
+            params_name.extend(['scale_{}'.format(idx+1), 'shift_{}'.format(idx+1)])
 
         if idx == len(Filters) - 1: # At the last stage, append output_data as the final output for reference
             ref_data.append(output_data)
@@ -109,7 +109,7 @@ def get_ref_data(parameters, dtype="float32", save_data=False, name='depth_conv'
     if save_data:
         # Save ref data
         for i in range(0, len(ref_data)):
-            filename = "npy/%s_%d_%d_%d_%d_%d_%d/" % (name, Parameters(parameters).get_params())
+            filename = "npy/{}_{}/".format(name, '_'.join(str(s) for s in Parameters(parameters).get_params()))
             if not os.path.exists(filename):
                 os.mkdir(filename)
             filename += params_name[i]
@@ -241,7 +241,7 @@ if __name__ == "__main__":
     depth_conv_workloads = {}
 
     ##################### Conv conv workloads ######################
-    conv_conv_workloads['tmp'] = (1, 112, 112, 32, 3, 128, 2, False, 'relu', 3, 16, 1, False, 'relu')
+    conv_conv_workloads['tmp'] = (1, 56, 56, 128, 3, 128, 1, False, 'relu', 3, 128, 1, False, 'relu')
     ################################################################
 
     ##################### Depth conv workloads #####################
@@ -274,9 +274,9 @@ if __name__ == "__main__":
             verify_fused(workload_name,
                             parameters,
                             print_ir=True,
-                            print_src=True,
+                            print_src=False,
                             save_data=False,
-                            export_code=True,
+                            export_code=False,
                             auto_tvm=False,
                             auto_tvm_skip_training=False,
                             auto_tvm_trials=2000,

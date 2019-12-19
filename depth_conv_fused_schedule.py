@@ -132,7 +132,7 @@ def schedule_depth_conv_fused_nhwc(outs, stages, params, bn_relu1=None, bn_relu2
     s[IntermediateStage].bind(inter_ci, thread_x)
     s[IntermediateStage].bind(vthz, vthread_z)
 
-    # ######## Intermediate output local accumulator
+    ######## Intermediate output local accumulator
     s[DepthwiseLocalAccumulator].compute_at(s[IntermediateStage], inter_ci)
     ry, rx = s[DepthwiseLocalAccumulator].op.reduce_axis
     n, h, w, c = s[DepthwiseLocalAccumulator].op.axis

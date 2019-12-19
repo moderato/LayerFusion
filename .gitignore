@@ -3,3 +3,4 @@ __pycache__/*
 .pkl_memoize_py3/*
 generated_kernels/*
 logs/*
+npy/*
