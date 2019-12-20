@@ -28,7 +28,8 @@ void setCudnnDescriptors(cudnnHandle_t cudnn_handle,
                           int stride_h, int stride_w, int padding_h, int padding_w,
                           int kernel_height, int kernel_width, int kernel_in_channel, int kernel_out_channel_or_multiplier,
                           int& output_batch, int& output_height, int& output_width, int& output_channel,
-                          bool depthwise) {
+                          bool depthwise,
+                          bool is_NCHW) {
   int group_count = depthwise ? input_channel : 1;
 
 #ifdef DEBUG
@@ -53,7 +54,7 @@ void setCudnnDescriptors(cudnnHandle_t cudnn_handle,
 
   // input
   checkCUDNN(cudnnSetTensor4dDescriptor(input_descriptor,
-                                        /*format=*/CUDNN_TENSOR_NHWC,
+                                        /*format=*/is_NCHW ? CUDNN_TENSOR_NCHW : CUDNN_TENSOR_NHWC,
                                         /*dataType=*/CUDNN_DATA_FLOAT,
                                         /*batch_size=*/input_batch,
                                         /*channels=*/input_channel,
@@ -65,7 +66,7 @@ void setCudnnDescriptors(cudnnHandle_t cudnn_handle,
   // setting format to NHWC results in 0-byte workspace
   checkCUDNN(cudnnSetFilter4dDescriptor(kernel_descriptor,
                                         /*dataType=*/CUDNN_DATA_FLOAT,
-                                        /*format=*/CUDNN_TENSOR_NCHW,
+                                        /*format=*/is_NCHW ? CUDNN_TENSOR_NCHW : CUDNN_TENSOR_NHWC,
                                         /*out_channels=*/depthwise ?
                                                           kernel_in_channel * kernel_out_channel_or_multiplier :
                                                           kernel_out_channel_or_multiplier,
@@ -86,7 +87,7 @@ void setCudnnDescriptors(cudnnHandle_t cudnn_handle,
 
   // output
   checkCUDNN(cudnnSetTensor4dDescriptor(output_descriptor,
-                                        /*format=*/CUDNN_TENSOR_NHWC,
+                                        /*format=*/is_NCHW ? CUDNN_TENSOR_NCHW : CUDNN_TENSOR_NHWC,
                                         /*dataType=*/CUDNN_DATA_FLOAT,
                                         /*batch_size=*/output_batch,
                                         /*channels=*/output_channel,

@@ -12,7 +12,8 @@ void benchmark(int input_batch, int input_height, int input_width, int input_cha
                 bool is_f1_depthwise, int f1_activation,
                 int kernel_1, int kernel_1_out_channel, int kernel_1_stride,
                 bool is_f2_depthwise, int f2_activation,
-                bool find_best_algo,
+                bool find_best_algo, 
+                bool is_NCHW, /* if benchmark in NCHW */
                 int repeatition) {
 
   // create handles
@@ -57,7 +58,8 @@ void benchmark(int input_batch, int input_height, int input_width, int input_cha
                       kernel_d_height, kernel_d_width, kernel_d_in_channel, kernel_d_out_channel_or_multiplier,
                       /* Inter params, to be used in memory allocation*/
                       inter_batch, inter_height, inter_width, inter_channel,
-                      is_f1_depthwise);
+                      is_f1_depthwise,
+                      is_NCHW);
 
   // Some aliases
   int kernel_1_height = kernel_1, kernel_1_width = kernel_1;
@@ -78,7 +80,8 @@ void benchmark(int input_batch, int input_height, int input_width, int input_cha
                       kernel_1_height, kernel_1_width, kernel_1_in_channel, kernel_1_out_channel,
                       /* Inter params, to be used in memory allocation*/
                       output_batch, output_height, output_width, output_channel,
-                      is_f2_depthwise);
+                      is_f2_depthwise,
+                      is_NCHW);
 
   // Find best convolution algorithms if necessary
   findBestAlgorithm(cudnn_handle,
@@ -91,7 +94,8 @@ void benchmark(int input_batch, int input_height, int input_width, int input_cha
                     inter_descriptor, kernel_1_descriptor, output_descriptor,
                     convolution_algorithm_2,
                     find_best_algo);
-    
+  std::cout << "Best algorithms: stage 1: " << convolution_algorithm_1 << ", stage 2: " << convolution_algorithm_2 << std::endl;
+
   // Calculate workspace
   size_t workspace_bytes_1{0};
   size_t workspace_bytes_2{0};
@@ -107,12 +111,11 @@ void benchmark(int input_batch, int input_height, int input_width, int input_cha
                     workspace_bytes_2);
 
 #ifdef DEBUG
-  std::cout << "Best algorithms: stage 1: " << convolution_algorithm_1 << ", stage 2: " << convolution_algorithm_2 << std::endl;
   std::cerr << "Workspace_1 size: " << (workspace_bytes_1 / 1048576.0) << "MB"
             << std::endl; // sometimes 0 but can run normally
   std::cerr << "Workspace_2 size: " << (workspace_bytes_2 / 1048576.0) << "MB"
             << std::endl; // sometimes 0 but can run normally
-  assert((workspace_bytes_1 > 0) && (workspace_bytes_2 > 0));
+  // assert((workspace_bytes_1 > 0) && (workspace_bytes_2 > 0));
 #endif
 
   // filenames
@@ -122,10 +125,10 @@ void benchmark(int input_batch, int input_height, int input_width, int input_cha
                                 std::to_string(input_channel) + "_" +
                                 std::to_string(inter_channel) + "_" +
                                 std::to_string(kernel_d_height) + "/";
-  std::string input_name = folder_name + "input.npy";
+  std::string input_name = folder_name + (is_NCHW ? "input_NCHW.npy" : "input.npy");
   std::string kernel_d_name = folder_name + "filter_1.npy";
   std::string kernel_1_name = folder_name + "filter_2.npy";
-  std::string output_name = folder_name + "output.npy";
+  std::string output_name = folder_name + (is_NCHW ? "output_NCHW.npy" : "output.npy");
   // std::string scale_d_name = folder_name + "scale_1.npy";
   // std::string shift_d_name = folder_name + "shift_1.npy";
   // std::string scale_1_name = folder_name + "scale_2.npy";
@@ -180,9 +183,9 @@ void benchmark(int input_batch, int input_height, int input_width, int input_cha
 	cudaEventCreate(&stop);
   float runtime_ms = 0.0f, runtime_ms_1 = 0.0f, runtime_ms_2 = 0.0f;
 
+  // Stage 1
   for (int i = 0; i < repeatition; i++) {
     cudaMemset(d_inter, 0, inter_shape * sizeof(float));
-    cudaMemset(d_output, 0, output_shape * sizeof(float));
 
     float tmp_t_1 = 0.0f;
     cudaEventRecord(start);
@@ -195,8 +198,15 @@ void benchmark(int input_batch, int input_height, int input_width, int input_cha
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
     cudaEventElapsedTime(&tmp_t_1, start, stop);
-    
 
+    runtime_ms_1 += tmp_t_1 / repeatition;
+    runtime_ms += tmp_t_1 / repeatition;
+  }
+
+  // Stage 2
+  for (int i = 0; i < repeatition; i++) {
+    cudaMemset(d_output, 0, output_shape * sizeof(float));
+    
     float tmp_t_2 = 0.0f;
     cudaEventRecord(start);
         cudnnConvForward(cudnn_handle,
@@ -209,9 +219,8 @@ void benchmark(int input_batch, int input_height, int input_width, int input_cha
     cudaEventSynchronize(stop);
     cudaEventElapsedTime(&tmp_t_2, start, stop);
 
-    runtime_ms_1 += tmp_t_1 / repeatition;
     runtime_ms_2 += tmp_t_2 / repeatition;
-    runtime_ms += (tmp_t_1 + tmp_t_2) / repeatition;
+    runtime_ms += tmp_t_2 / repeatition;
   }
   printf("Stage 1 runtime is %f us.\nStage 2 runtime is %f us.\nFusion runtime is %f us.\n", runtime_ms_1 * 1000, runtime_ms_2 * 1000, runtime_ms * 1000);
 
@@ -228,12 +237,13 @@ void benchmark(int input_batch, int input_height, int input_width, int input_cha
   for(int i = 0; i < output_shape; i++) {
 #ifdef DEBUG
     printf("%d, %f, %lf\n", i, output_result[i], tmp3[i]);
-    assert(abs(output_result[i] - (float)tmp3[i]) < 2e-4);
+    assert(abs(output_result[i] - (float)tmp3[i]) < 1e-3);
 #endif
-    if (abs(output_result[i] - tmp3[i]) > 2e-4) // A few nums have bigger errors
+    if (abs(output_result[i] - tmp3[i]) > 1e-3) // A few nums have bigger errors
       count++;
   }
   printf("Output wrong count: %d\n", count);
+  printf("#######################\n");
 
   // Free pointers
   free(output_result);
@@ -261,13 +271,19 @@ int main(int argc, const char* argv[]) {
   int gpu_id = (argc > 1) ? std::atoi(argv[1]) : 0;
   std::cerr << "GPU: " << gpu_id << std::endl;
   cudaSetDevice(gpu_id);
-  int repeatition = 10;
+  int repeatition = 1000;
+  bool if_find_best_algo = false;
 
-  benchmark(1, 56, 56, 128,
-            3, 1, 1,
-            true, NONE,
-            1, 128, 1,
-            false, NONE,
-            false,
-            repeatition);
+  benchmark(/*Input params*/    1, 112, 112, 32,
+    /*Kernel_1 params*/         3, 1, 1,
+    /*Depthwise? Activation?*/  true, NONE,
+    /*Kernel_1 params*/         1, 32, 1,
+    /*Depthwise? Activation?*/  false, NONE,
+    /*Find best algorithm?*/    if_find_best_algo,
+    /*Benchmark with NCHW?*/    true,
+    repeatition);
+  benchmark(1, 56, 56, 128,  3, 1, 1,  true, NONE,  1, 128, 1,  false, NONE,  if_find_best_algo, true, repeatition);
+  benchmark(1, 28, 28, 256,  3, 1, 1,  true, NONE,  1, 256, 1,  false, NONE,  if_find_best_algo, true, repeatition);
+  benchmark(1, 14, 14, 512,  3, 1, 1,  true, NONE,  1, 512, 1,  false, NONE,  if_find_best_algo, true, repeatition);
+  
 }
