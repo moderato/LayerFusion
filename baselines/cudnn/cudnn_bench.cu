@@ -7,21 +7,113 @@
 #include "cnpy.h"
 #include "cudnn_calls.cuh"
 
-// #define DEBUG 1
-
-void benchmark(int input_height, int input_width, int input_channel,
-                int kernel_d_height, int kernel_d_width, int kernel_d_out_multiplier, int kernel_d_stride,
+void benchmark(int input_batch, int input_height, int input_width, int input_channel,
+                int kernel_d, int kernel_d_out_channel_or_multiplier, int kernel_d_stride,
                 bool is_f1_depthwise, int f1_activation,
-                int kernel_1_height, int kernel_1_width, int kernel_1_out_channel, int kernel_1_stride,
-                bool is_f2_depthwise, int f2_activation) {
+                int kernel_1, int kernel_1_out_channel, int kernel_1_stride,
+                bool is_f2_depthwise, int f2_activation,
+                bool find_best_algo,
+                int repeatition) {
+
+  // create handles
+  cudnnHandle_t cudnn_handle;
+  cudnnCreate(&cudnn_handle);
+
+  // create descriptors
+  cudnnConvolutionDescriptor_t convolution_descriptor_1;
+  cudnnConvolutionDescriptor_t convolution_descriptor_2;
+  cudnnTensorDescriptor_t input_descriptor;
+  cudnnFilterDescriptor_t kernel_d_descriptor;
+  cudnnTensorDescriptor_t inter_descriptor;
+  cudnnFilterDescriptor_t kernel_1_descriptor;
+  cudnnTensorDescriptor_t output_descriptor;
+  checkCUDNN(cudnnCreateConvolutionDescriptor(&convolution_descriptor_1));
+  checkCUDNN(cudnnCreateConvolutionDescriptor(&convolution_descriptor_2));
+  checkCUDNN(cudnnCreateTensorDescriptor(&input_descriptor));
+  checkCUDNN(cudnnCreateFilterDescriptor(&kernel_d_descriptor));
+  checkCUDNN(cudnnCreateTensorDescriptor(&inter_descriptor));
+  checkCUDNN(cudnnCreateFilterDescriptor(&kernel_1_descriptor));
+  checkCUDNN(cudnnCreateTensorDescriptor(&output_descriptor));
+
+  // Best convolution algorithms, could be 0 as default
+  cudnnConvolutionFwdAlgo_t convolution_algorithm_1, convolution_algorithm_2;
+
+  // Some aliases
+  int kernel_d_height = kernel_d, kernel_d_width = kernel_d;
   int kernel_d_in_channel = input_channel;
-  int inter_height = 56;
-  int inter_width = 56;
-  int inter_channel = kernel_d_in_channel * kernel_d_out_multiplier;
+  int kernel_d_stride_h = kernel_d_stride, kernel_d_stride_w = kernel_d_stride;
+  // To be calculated
+  int inter_batch{0}, inter_height{0}, inter_width{0}, inter_channel{0};
+
+  setCudnnDescriptors(cudnn_handle,
+                      /* Descriptors*/
+                      convolution_descriptor_1,
+                      input_descriptor, kernel_d_descriptor, inter_descriptor,
+                      /* Input params*/
+                      input_batch, input_height, input_width, input_channel,
+                      /* Strides and paddings */
+                      kernel_d_stride_h, kernel_d_stride_w, 1, 1,
+                      /* Kernel params*/
+                      kernel_d_height, kernel_d_width, kernel_d_in_channel, kernel_d_out_channel_or_multiplier,
+                      /* Inter params, to be used in memory allocation*/
+                      inter_batch, inter_height, inter_width, inter_channel,
+                      is_f1_depthwise);
+
+  // Some aliases
+  int kernel_1_height = kernel_1, kernel_1_width = kernel_1;
   int kernel_1_in_channel = inter_channel;
-  int output_height = 56;
-  int output_width = 56;
-  int output_channel = kernel_1_out_channel;
+  int kernel_1_stride_h = kernel_1_stride, kernel_1_stride_w = kernel_1_stride;
+  // To be calculated
+  int output_batch{0}, output_height{0}, output_width{0}, output_channel{0};
+
+  setCudnnDescriptors(cudnn_handle,
+                      /* Descriptors*/
+                      convolution_descriptor_2,
+                      inter_descriptor, kernel_1_descriptor, output_descriptor,
+                      /* Inter params*/
+                      inter_batch, inter_height, inter_width, inter_channel,
+                      /* Strides and paddings */
+                      kernel_1_stride_h, kernel_1_stride_w, 0, 0,
+                      /* Kernel params*/
+                      kernel_1_height, kernel_1_width, kernel_1_in_channel, kernel_1_out_channel,
+                      /* Inter params, to be used in memory allocation*/
+                      output_batch, output_height, output_width, output_channel,
+                      is_f2_depthwise);
+
+  // Find best convolution algorithms if necessary
+  findBestAlgorithm(cudnn_handle,
+                    convolution_descriptor_1,
+                    input_descriptor, kernel_d_descriptor, output_descriptor,
+                    convolution_algorithm_1,
+                    find_best_algo);
+  findBestAlgorithm(cudnn_handle,
+                    convolution_descriptor_2,
+                    inter_descriptor, kernel_1_descriptor, output_descriptor,
+                    convolution_algorithm_2,
+                    find_best_algo);
+    
+  // Calculate workspace
+  size_t workspace_bytes_1{0};
+  size_t workspace_bytes_2{0};
+  getWorkSpaceSize(cudnn_handle,
+                    convolution_descriptor_1,
+                    input_descriptor, kernel_d_descriptor, output_descriptor,
+                    convolution_algorithm_1,
+                    workspace_bytes_1);
+  getWorkSpaceSize(cudnn_handle,
+                    convolution_descriptor_2,
+                    inter_descriptor, kernel_1_descriptor, output_descriptor,
+                    convolution_algorithm_2,
+                    workspace_bytes_2);
+
+#ifdef DEBUG
+  std::cout << "Best algorithms: stage 1: " << convolution_algorithm_1 << ", stage 2: " << convolution_algorithm_2 << std::endl;
+  std::cerr << "Workspace_1 size: " << (workspace_bytes_1 / 1048576.0) << "MB"
+            << std::endl; // sometimes 0 but can run normally
+  std::cerr << "Workspace_2 size: " << (workspace_bytes_2 / 1048576.0) << "MB"
+            << std::endl; // sometimes 0 but can run normally
+  assert((workspace_bytes_1 > 0) && (workspace_bytes_2 > 0));
+#endif
 
   // filenames
   std::string folder_name = "../../npy/depth_conv_1_" + 
@@ -40,15 +132,16 @@ void benchmark(int input_height, int input_width, int input_channel,
   // std::string shift_1_name = folder_name + "shift_2.npy";
 
 #ifdef DEBUG
+  std::cout << "npy file names:" << std::endl;
   std::cout << input_name << std::endl << kernel_d_name << std::endl << kernel_1_name << std::endl << output_name << std::endl;
 #endif
 
   // tensor sizes
-  size_t input_shape = 1 * input_height * input_width * input_channel;
-  size_t kernel_d_shape = kernel_d_height * kernel_d_width * kernel_d_in_channel * kernel_d_out_multiplier;
-  size_t inter_shape = 1 * inter_height * inter_width * inter_channel;
-  size_t kernel_1_shape = kernel_1_height * kernel_1_width * kernel_1_in_channel * kernel_1_out_channel;
-  size_t output_shape = 1 * output_height * output_width * output_channel;
+  int input_shape = 1 * input_height * input_width * input_channel;
+  int kernel_d_shape = kernel_d_height * kernel_d_width * kernel_d_in_channel * kernel_d_out_channel_or_multiplier;
+  int inter_shape = 1 * inter_height * inter_width * inter_channel;
+  int kernel_1_shape = kernel_1_height * kernel_1_width * kernel_1_in_channel * kernel_1_out_channel;
+  int output_shape = 1 * output_height * output_width * output_channel;
 
   // gpu pointers
   float* d_input{nullptr};
@@ -56,11 +149,15 @@ void benchmark(int input_height, int input_width, int input_channel,
   float* d_inter{nullptr};
   float* d_kernel_1{nullptr};
   float* d_output{nullptr};
+  void* d_workspace_1{nullptr};
+  void* d_workspace_2{nullptr};
   cudaMalloc(&d_input, input_shape * sizeof(float));
   cudaMalloc(&d_kernel_d, kernel_d_shape * sizeof(float));
   cudaMalloc(&d_inter, inter_shape * sizeof(float));
   cudaMalloc(&d_kernel_1, kernel_1_shape * sizeof(float));
   cudaMalloc(&d_output, output_shape * sizeof(float));
+  cudaMalloc(&d_workspace_1, workspace_bytes_1);
+  cudaMalloc(&d_workspace_2, workspace_bytes_2);
 
   // Load data and copy to GPU arrays
   float *tmp;
@@ -77,46 +174,46 @@ void benchmark(int input_height, int input_width, int input_channel,
   tmp = kernel_1_npy.data<float>();
   cudaMemcpy(d_kernel_1, tmp, kernel_1_shape * sizeof(float), cudaMemcpyHostToDevice);
 
-  for (int i = 0; i < 1; i++) {
-    // create handles
-    cudnnHandle_t cudnn_handle;
-    cudnnCreate(&cudnn_handle);
+  // Timing
+  cudaEvent_t start, stop;
+	cudaEventCreate(&start);
+	cudaEventCreate(&stop);
+  float runtime_ms = 0.0f, runtime_ms_1 = 0.0f, runtime_ms_2 = 0.0f;
 
-    // create descriptors
-    cudnnConvolutionDescriptor_t convolution_descriptor;
-    cudnnTensorDescriptor_t input_descriptor;
-    cudnnFilterDescriptor_t kernel_descriptor;
-    cudnnTensorDescriptor_t output_descriptor;
-    checkCUDNN(cudnnCreateConvolutionDescriptor(&convolution_descriptor));
-    checkCUDNN(cudnnCreateTensorDescriptor(&input_descriptor));
-    checkCUDNN(cudnnCreateFilterDescriptor(&kernel_descriptor));
-    checkCUDNN(cudnnCreateTensorDescriptor(&output_descriptor));
+  for (int i = 0; i < repeatition; i++) {
+    cudaMemset(d_inter, 0, inter_shape * sizeof(float));
+    cudaMemset(d_output, 0, output_shape * sizeof(float));
 
-      cudnnCall(cudnn_handle,
-                convolution_descriptor,
-                input_descriptor, kernel_descriptor, output_descriptor,
-                d_input, d_kernel_d, d_inter,
-                input_height, input_width, input_channel, 
-                kernel_d_height, kernel_d_width, kernel_d_in_channel, kernel_d_out_multiplier,
-                inter_height, inter_width, inter_channel,
-                true);
+    float tmp_t_1 = 0.0f;
+    cudaEventRecord(start);
+        cudnnConvForward(cudnn_handle,
+                          convolution_descriptor_1,
+                          input_descriptor, kernel_d_descriptor, inter_descriptor,
+                          convolution_algorithm_1,
+                          d_input, d_kernel_d, d_inter,
+                          d_workspace_1, workspace_bytes_1);
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&tmp_t_1, start, stop);
+    
 
-      cudnnCall(cudnn_handle,
-                convolution_descriptor,
-                input_descriptor, kernel_descriptor, output_descriptor,
-                d_inter, d_kernel_1, d_output,
-                inter_height, inter_width, inter_channel,
-                kernel_1_height, kernel_1_width, kernel_1_in_channel, kernel_1_out_channel,
-                output_height, output_width, output_channel,
-                false);
+    float tmp_t_2 = 0.0f;
+    cudaEventRecord(start);
+        cudnnConvForward(cudnn_handle,
+                          convolution_descriptor_2,
+                          inter_descriptor, kernel_1_descriptor, output_descriptor,
+                          convolution_algorithm_2,
+                          d_inter, d_kernel_1, d_output,
+                          d_workspace_2, workspace_bytes_2);
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&tmp_t_2, start, stop);
 
-    // destroy descriptors
-    cudnnDestroyTensorDescriptor(input_descriptor);
-    cudnnDestroyFilterDescriptor(kernel_descriptor);
-    cudnnDestroyTensorDescriptor(output_descriptor);
-    cudnnDestroyConvolutionDescriptor(convolution_descriptor);
-    cudnnDestroy(cudnn_handle);
+    runtime_ms_1 += tmp_t_1 / repeatition;
+    runtime_ms_2 += tmp_t_2 / repeatition;
+    runtime_ms += (tmp_t_1 + tmp_t_2) / repeatition;
   }
+  printf("Stage 1 runtime is %f us.\nStage 2 runtime is %f us.\nFusion runtime is %f us.\n", runtime_ms_1 * 1000, runtime_ms_2 * 1000, runtime_ms * 1000);
 
   // Verification
   int count = 0;
@@ -138,12 +235,25 @@ void benchmark(int input_height, int input_width, int input_channel,
   }
   printf("Output wrong count: %d\n", count);
 
+  // Free pointers
   free(output_result);
   cudaFree(d_input);
   cudaFree(d_kernel_d);
   cudaFree(d_input);
   cudaFree(d_kernel_1);
   cudaFree(d_output);
+  cudaFree(d_workspace_1);
+  cudaFree(d_workspace_2);
+
+  // Destroy descriptors
+  cudnnDestroyTensorDescriptor(input_descriptor);
+  cudnnDestroyFilterDescriptor(kernel_d_descriptor);
+  cudnnDestroyTensorDescriptor(inter_descriptor);
+  cudnnDestroyFilterDescriptor(kernel_1_descriptor);
+  cudnnDestroyTensorDescriptor(output_descriptor);
+  cudnnDestroyConvolutionDescriptor(convolution_descriptor_1);
+  cudnnDestroyConvolutionDescriptor(convolution_descriptor_2);
+  cudnnDestroy(cudnn_handle);
 }
 
 int main(int argc, const char* argv[]) {
@@ -151,10 +261,13 @@ int main(int argc, const char* argv[]) {
   int gpu_id = (argc > 1) ? std::atoi(argv[1]) : 0;
   std::cerr << "GPU: " << gpu_id << std::endl;
   cudaSetDevice(gpu_id);
+  int repeatition = 10;
 
-  benchmark(56, 56, 128, 
-            3, 3, 1, 1,
-            true, NONE, 
-            1, 1, 128, 1, 
-            false, NONE);
+  benchmark(1, 56, 56, 128,
+            3, 1, 1,
+            true, NONE,
+            1, 128, 1,
+            false, NONE,
+            false,
+            repeatition);
 }
