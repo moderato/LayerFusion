@@ -4,3 +4,4 @@ __pycache__/*
 generated_kernels/*
 logs/*
 npy/*
+baselines/cudnn/cudnn_bench

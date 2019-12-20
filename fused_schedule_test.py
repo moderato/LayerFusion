@@ -66,7 +66,7 @@ def get_input_and_filters(p):
 
     return Input, Filters
 
-def get_ref_data(parameters, dtype="float32", save_data=False, name='depth_conv'):
+def get_ref_data(parameters, dtype="float32", layout="NHWC", save_data=False, name='depth_conv'):
     Input, Filters = get_input_and_filters(Parameters(parameters))
 
     # Pretending the input_data is some output_data from stage -1
@@ -81,9 +81,9 @@ def get_ref_data(parameters, dtype="float32", save_data=False, name='depth_conv'
         params_name.append("filter_{}".format(idx+1))
 
         if f.depthwise:
-            output_data = topi.testing.depthwise_conv2d_python_nhwc(output_data, filter_data, stride=[f.stride, f.stride], padding=f.padding)
+            output_data = topi.testing.depthwise_conv2d_python_nhwc(output_data, filter_data, stride=[f.stride, f.stride], padding=f.padding).astype(dtype)
         else: # Normal convolution
-            output_data = topi.testing.conv2d_nhwc_python(output_data, filter_data, f.stride, f.padding)
+            output_data = topi.testing.conv2d_nhwc_python(output_data, filter_data, f.stride, f.padding).astype(dtype)
 
         if f.bn_relu is not None:
             n, h, w, oc = output_data.shape
@@ -98,7 +98,7 @@ def get_ref_data(parameters, dtype="float32", save_data=False, name='depth_conv'
                 scale_shift_scipy[:,:,:,c] = output_data[:,:,:,c] * scale_np[c] + shift_np[c]
                 relu_scipy[:,:,:,c] = np.maximum(scale_shift_scipy[:,:,:,c], 0)
                 if f.bn_relu == "relu6":
-                    relu_scipy[:,:,:,c] = np.minimum(relu_scipy[:,:,:,c], 6)
+                    relu_scipy[:,:,:,c] = np.minimum(relu_scipy[:,:,:,c], 6).astype(dtype)
             output_data = relu_scipy
             params_name.extend(['scale_{}'.format(idx+1), 'shift_{}'.format(idx+1)])
 
@@ -113,7 +113,14 @@ def get_ref_data(parameters, dtype="float32", save_data=False, name='depth_conv'
             if not os.path.exists(filename):
                 os.mkdir(filename)
             filename += params_name[i]
-            np.save(filename, ref_data[i])
+            # Transpose filter for cudnn: should be non-fortran order
+            if layout == "NHWC":
+                if "filter_1" in filename:
+                    np.save(filename, np.array(ref_data[i].transpose(2, 3, 0, 1), order='C'))
+                elif "filter_2" in filename:
+                    np.save(filename, np.array(ref_data[i].transpose(3, 2, 0, 1), order='C'))
+                else:
+                    np.save(filename, ref_data[i])
 
     return ref_data
 
@@ -152,7 +159,7 @@ def verify_fused(workload_name,
                             name='depth_conv'):
     assert layout in ["NHWC", "NCHW", "NCHWc16", "NCHWc4"]
 
-    ref_data = get_ref_data(parameters, dtype=dtype, save_data=save_data, name=name)
+    ref_data = get_ref_data(parameters, dtype=dtype, layout=layout, save_data=save_data, name=name)
 
     def check_device(device):
         if not tvm.module.enabled(device):
@@ -241,14 +248,14 @@ if __name__ == "__main__":
     depth_conv_workloads = {}
 
     ##################### Conv conv workloads ######################
-    conv_conv_workloads['tmp'] = (1, 56, 56, 128, 3, 128, 1, False, 'relu', 3, 128, 1, False, 'relu')
+    # conv_conv_workloads['tmp'] = (1, 56, 56, 128, 3, 128, 1, False, 'relu', 3, 128, 1, False, 'relu')
     ################################################################
 
     ##################### Depth conv workloads #####################
-    # # MobileNet-v1
-    # depth_conv_workloads['mv1_1'] = (1, 112, 112, 32, 3, 1, 1, True, 'relu', 1, 64, 1, False, 'relu')
+    # MobileNet-v1
+    # depth_conv_workloads['mv1_1'] = (1, 112, 112, 32, 3, 1, 1, True, None, 1, 64, 1, False, None)
     # depth_conv_workloads['mv1_2'] = (1, 112, 112, 64, 3, 1, 2, True, 'relu', 1, 128, 1, False, 'relu')
-    # depth_conv_workloads['mv1_3'] = (1, 56, 56, 128, 3, 1, 1, True, 'relu', 1, 128, 1, False, 'relu') # 108.12 us (4, 4, 16, 4)
+    depth_conv_workloads['mv1_3'] = (1, 56, 56, 128, 3, 1, 1, True, None, 1, 128, 1, False, None) # 108.12 us (4, 4, 16, 4)
     # depth_conv_workloads['mv1_4'] = (1, 56, 56, 128, 3, 1, 2, True, 'relu', 1, 256, 1, False, 'relu')
     # depth_conv_workloads['mv1_5'] = (1, 28, 28, 256, 3, 1, 1, True, 'relu', 1, 256, 1, False, 'relu') # 117.21 us (2, 2, 8, 8)
     # depth_conv_workloads['mv1_6'] = (1, 28, 28, 256, 3, 1, 2, True, 'relu', 1, 512, 1, False, 'relu')
@@ -273,9 +280,9 @@ if __name__ == "__main__":
         for workload_name, parameters in workload.items():
             verify_fused(workload_name,
                             parameters,
-                            print_ir=True,
+                            print_ir=False,
                             print_src=False,
-                            save_data=False,
+                            save_data=True,
                             export_code=False,
                             auto_tvm=False,
                             auto_tvm_skip_training=False,
