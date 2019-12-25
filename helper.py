@@ -13,6 +13,7 @@ class FilterParams:
 class Parameters:
     def __init__(self, p):
         assert len(p) == 14
+        self.p = p
         self.N, self.H, self.W, self.IC, \
             self.f1_K, self.f1_OC, self.f1_stride, self.f1_depthwise, self.f1_bn_relu, \
                 self.f2_K, self.f2_OC, self.f2_stride, self.f2_depthwise, self.f2_bn_relu = p
@@ -21,9 +22,7 @@ class Parameters:
         assert self.f2_bn_relu in [None, 'relu', 'relu6']
 
     def get_params(self):
-        return (self.N, self.H, self.W, self.IC,\
-                self.IC * self.f1_OC if self.f1_depthwise else self.f1_OC,\
-                self.f1_K)
+        return self.p
     
     def get_f1_K(self):
         return self.f1_K

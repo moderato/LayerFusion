@@ -227,7 +227,7 @@ def verify_fused(workload_name,
             cuda_code = func.imported_modules[0].get_source()
             write_code(cuda_code, "generated_kernels/kernel_{}_{}.cuh".format(name, workload_name))
 
-        timer_1 = func.time_evaluator(func.entry_name, ctx, number=100)
+        timer_1 = func.time_evaluator(func.entry_name, ctx, number=1000)
         tcost_1 = timer_1(*nd_arrays).mean
         # np.testing.assert_allclose(nd_arrays[-1].asnumpy(), ref_data[-1], rtol=1e-3)
         d = ~np.isclose(nd_arrays[-1].asnumpy(), ref_data[-1], rtol=1e-3)
@@ -254,28 +254,33 @@ if __name__ == "__main__":
 
     ##################### Depth conv workloads #####################
     # MobileNet-v1
-    depth_conv_workloads['mv1_1'] = (1, 112, 112, 32, 3, 1, 1, True, None, 1, 64, 1, False, None)
-    # depth_conv_workloads['mv1_2'] = (1, 112, 112, 64, 3, 1, 2, True, 'relu', 1, 128, 1, False, 'relu')
-    depth_conv_workloads['mv1_3'] = (1, 56, 56, 128, 3, 1, 1, True, None, 1, 128, 1, False, None) # 108.12 us (4, 4, 16, 4)
-    # depth_conv_workloads['mv1_4'] = (1, 56, 56, 128, 3, 1, 2, True, 'relu', 1, 256, 1, False, 'relu')
-    depth_conv_workloads['mv1_5'] = (1, 28, 28, 256, 3, 1, 1, True, None, 1, 256, 1, False, None) # 117.21 us (2, 2, 8, 8)
-    # depth_conv_workloads['mv1_6'] = (1, 28, 28, 256, 3, 1, 2, True, 'relu', 1, 512, 1, False, 'relu')
-    depth_conv_workloads['mv1_7-11'] = (1, 14, 14, 512, 3, 1, 1, True, None, 1, 512, 1, False, None) # 316.24 us
-    # depth_conv_workloads['mv1_12'] = (1, 14, 14, 512, 3, 1, 2, True, 'relu', 1, 1024, 1, False, 'relu')
-    # depth_conv_workloads['mv1_13'] = (1, 7, 7, 1024, 3, 1, 1, True, 'relu', 1, 1024, 1, False, 'relu')
+    # depth_conv_workloads['mv1_1'] = (1, 112, 112, 32, 3, 1, 1, True, None, 1, 64, 1, False, None)
+    # depth_conv_workloads['mv1_2'] = (1, 112, 112, 64, 3, 1, 2, True, None, 1, 128, 1, False, None)
+    # depth_conv_workloads['mv1_3'] = (1, 56, 56, 128, 3, 1, 1, True, None, 1, 128, 1, False, None) # 108.12 us (4, 4, 16, 4)
+    # depth_conv_workloads['mv1_4'] = (1, 56, 56, 128, 3, 1, 2, True, None, 1, 256, 1, False, None)
+    # depth_conv_workloads['mv1_5'] = (1, 28, 28, 256, 3, 1, 1, True, None, 1, 256, 1, False, None) # 117.21 us (2, 2, 8, 8)
+    # depth_conv_workloads['mv1_6'] = (1, 28, 28, 256, 3, 1, 2, True, None, 1, 512, 1, False, None)
+    # depth_conv_workloads['mv1_7-11'] = (1, 14, 14, 512, 3, 1, 1, True, None, 1, 512, 1, False, None) # 316.24 us
+    # depth_conv_workloads['mv1_12'] = (1, 14, 14, 512, 3, 1, 2, True, None, 1, 1024, 1, False, None)
+    # depth_conv_workloads['mv1_13'] = (1, 7, 7, 1024, 3, 1, 1, True, None, 1, 1024, 1, False, None)
 
-    # # MobileNet-v2
-    # depth_conv_workloads['mv2_1'] = (1, 112, 112, 32, 3, 1, 1, True, 'relu', 1, 16, 1, False, 'relu')
-    # depth_conv_workloads['mv2_2'] = (1, 112, 112, 96, 3, 1, 2, True, 'relu', 1, 24, 1, False, 'relu')
-    # depth_conv_workloads['mv2_3'] = (1, 56, 56, 144, 3, 1, 2, True, 'relu', 1, 32, 1, False, 'relu')
-    # depth_conv_workloads['mv2_4'] = (1, 28, 28, 192, 3, 1, 2, True, 'relu', 1, 64, 1, False, 'relu')
-    # depth_conv_workloads['mv2_5'] = (1, 14, 14, 384, 3, 1, 1, True, 'relu', 1, 96, 1, False, 'relu')
-    # depth_conv_workloads['mv2_6'] = (1, 14, 14, 576, 3, 1, 2, True, 'relu', 1, 160, 1, False, 'relu')
-    # depth_conv_workloads['mv2_7'] = (1, 7, 7, 960, 3, 1, 1, True, 'relu', 1, 320, 1, False, 'relu')
+    # MobileNet-v2
+    # depth_conv_workloads['mv2_1'] = (1, 112, 112, 32, 3, 1, 1, True, None, 1, 16, 1, False, None)
+    # # depth_conv_workloads['mv2_2'] = (1, 112, 112, 96, 3, 1, 2, True, None, 1, 24, 1, False, None)
+    # # depth_conv_workloads['mv2_3'] = (1, 56, 56, 144, 3, 1, 2, True, None, 1, 32, 1, False, None)
+    # # depth_conv_workloads['mv2_4'] = (1, 28, 28, 192, 3, 1, 2, True, None, 1, 64, 1, False, None)
+    # depth_conv_workloads['mv2_5'] = (1, 14, 14, 384, 3, 1, 1, True, None, 1, 96, 1, False, None)
+    # depth_conv_workloads['mv2_6'] = (1, 14, 14, 576, 3, 1, 2, True, None, 1, 160, 1, False, None)
+    # depth_conv_workloads['mv2_7'] = (1, 7, 7, 960, 3, 1, 1, True, None, 1, 320, 1, False, None)
     ################################################################
 
     workloads['depth_conv'] = depth_conv_workloads
     workloads['conv_conv'] = conv_conv_workloads
+
+    # For AutoTVM:
+    # terminal 1: python -m tvm.exec.rpc_tracker --host=0.0.0.0 --port=9190
+    # terminal 2: python -m tvm.exec.rpc_server --tracker=0.0.0.0:9190 --key=1050ti
+    # terminal 3: run this code
 
     for t, workload in workloads.items():
         for workload_name, parameters in workload.items():

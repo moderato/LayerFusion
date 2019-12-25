@@ -52,8 +52,8 @@ void benchmark(int input_batch, int input_height, int input_width, int input_cha
                       input_descriptor, kernel_d_descriptor, inter_descriptor,
                       /* Input params*/
                       input_batch, input_height, input_width, input_channel,
-                      /* Strides and paddings */
-                      kernel_d_stride_h, kernel_d_stride_w, 1, 1,
+                      /* Strides*/
+                      kernel_d_stride_h, kernel_d_stride_w,
                       /* Kernel params*/
                       kernel_d_height, kernel_d_width, kernel_d_in_channel, kernel_d_out_channel_or_multiplier,
                       /* Inter params, to be used in memory allocation*/
@@ -74,8 +74,8 @@ void benchmark(int input_batch, int input_height, int input_width, int input_cha
                       inter_descriptor, kernel_1_descriptor, output_descriptor,
                       /* Inter params*/
                       inter_batch, inter_height, inter_width, inter_channel,
-                      /* Strides and paddings */
-                      kernel_1_stride_h, kernel_1_stride_w, 0, 0,
+                      /* Strides*/
+                      kernel_1_stride_h, kernel_1_stride_w,
                       /* Kernel params*/
                       kernel_1_height, kernel_1_width, kernel_1_in_channel, kernel_1_out_channel,
                       /* Inter params, to be used in memory allocation*/
@@ -94,6 +94,8 @@ void benchmark(int input_batch, int input_height, int input_width, int input_cha
                     inter_descriptor, kernel_1_descriptor, output_descriptor,
                     convolution_algorithm_2,
                     find_best_algo);
+  convolution_algorithm_1 = (cudnnConvolutionFwdAlgo_t)0;
+  convolution_algorithm_2 = (cudnnConvolutionFwdAlgo_t)1;
   std::cout << "Best algorithms: stage 1: " << convolution_algorithm_1 << ", stage 2: " << convolution_algorithm_2 << std::endl;
 
   // Calculate workspace
@@ -123,8 +125,16 @@ void benchmark(int input_batch, int input_height, int input_width, int input_cha
                                 std::to_string(input_height) + "_" +
                                 std::to_string(input_width) + "_" +
                                 std::to_string(input_channel) + "_" +
-                                std::to_string(inter_channel) + "_" +
-                                std::to_string(kernel_d_height) + "/";
+                                std::to_string(kernel_d) + "_" +
+                                std::to_string(kernel_d_out_channel_or_multiplier) + "_" +
+                                std::to_string(kernel_d_stride) + "_" +
+                                (is_f1_depthwise ? "True_" : "False_") +
+                                "None_" +
+                                std::to_string(kernel_1) + "_" +
+                                std::to_string(kernel_1_out_channel) + "_" +
+                                std::to_string(kernel_1_stride) + "_" +
+                                (is_f2_depthwise ? "True_" : "False_") +
+                                "None/";
   std::string input_name = folder_name + (is_NCHW ? "input_NCHW.npy" : "input.npy");
   std::string kernel_d_name = folder_name + "filter_1.npy";
   std::string kernel_1_name = folder_name + "filter_2.npy";
@@ -274,16 +284,30 @@ int main(int argc, const char* argv[]) {
   int repeatition = 1000;
   bool if_find_best_algo = false;
 
-  benchmark(/*Input params*/    1, 112, 112, 32,
-    /*Kernel_1 params*/         3, 1, 1,
-    /*Depthwise? Activation?*/  true, NONE,
-    /*Kernel_1 params*/         1, 32, 1,
-    /*Depthwise? Activation?*/  false, NONE,
-    /*Find best algorithm?*/    if_find_best_algo,
-    /*Benchmark with NCHW?*/    true,
-    repeatition);
-  benchmark(1, 56, 56, 128,  3, 1, 1,  true, NONE,  1, 128, 1,  false, NONE,  if_find_best_algo, true, repeatition);
+  // // MobileNet-v1
+  // benchmark(/*Input params*/    1, 112, 112, 32,
+  //   /*Kernel_1 params*/         3, 1, 1,
+  //   /*Depthwise? Activation?*/  true, NONE,
+  //   /*Kernel_1 params*/         1, 64, 1,
+  //   /*Depthwise? Activation?*/  false, NONE,
+  //   /*Find best algorithm?*/    if_find_best_algo,
+  //   /*Benchmark with NCHW?*/    true,
+  //   repeatition);
+  // benchmark(1, 112, 112, 64,  3, 1, 2,  true, NONE,  1, 128, 1,  false, NONE,  if_find_best_algo, true, repeatition);
+  // benchmark(1, 56, 56, 128,  3, 1, 1,  true, NONE,  1, 128, 1,  false, NONE,  if_find_best_algo, true, repeatition);
+  // benchmark(1, 56, 56, 128,  3, 1, 2,  true, NONE,  1, 256, 1,  false, NONE,  if_find_best_algo, true, repeatition);
   benchmark(1, 28, 28, 256,  3, 1, 1,  true, NONE,  1, 256, 1,  false, NONE,  if_find_best_algo, true, repeatition);
-  benchmark(1, 14, 14, 512,  3, 1, 1,  true, NONE,  1, 512, 1,  false, NONE,  if_find_best_algo, true, repeatition);
-  
+  // benchmark(1, 28, 28, 256,  3, 1, 2,  true, NONE,  1, 512, 1,  false, NONE,  if_find_best_algo, true, repeatition);
+  // benchmark(1, 14, 14, 512,  3, 1, 1,  true, NONE,  1, 512, 1,  false, NONE,  if_find_best_algo, true, repeatition);
+  // benchmark(1, 14, 14, 512,  3, 1, 2,  true, NONE,  1, 1024, 1,  false, NONE,  if_find_best_algo, true, repeatition);
+  // benchmark(1, 7, 7, 512,  3, 1, 1,  true, NONE,  1, 1024, 1,  false, NONE,  if_find_best_algo, true, repeatition);
+
+  // // MobileNet-v2
+  // benchmark(1, 112, 112, 32,  3, 1, 1,  true, NONE,  1, 16, 1,  false, NONE,  if_find_best_algo, true, repeatition);
+  // benchmark(1, 112, 112, 96,  3, 1, 2,  true, NONE,  1, 24, 1,  false, NONE,  if_find_best_algo, true, repeatition);
+  // benchmark(1, 56, 56, 144,  3, 1, 2,  true, NONE,  1, 32, 1,  false, NONE,  if_find_best_algo, true, repeatition);
+  // benchmark(1, 28, 28, 192,  3, 1, 2,  true, NONE,  1, 64, 1,  false, NONE,  if_find_best_algo, true, repeatition);
+  // benchmark(1, 14, 14, 384,  3, 1, 1,  true, NONE,  1, 96, 1,  false, NONE,  if_find_best_algo, true, repeatition);
+  // benchmark(1, 14, 14, 576,  3, 1, 2,  true, NONE,  1, 160, 1,  false, NONE,  if_find_best_algo, true, repeatition);
+  // benchmark(1, 7, 7, 960,  3, 1, 1,  true, NONE,  1, 320, 1,  false, NONE,  if_find_best_algo, true, repeatition);
 }
