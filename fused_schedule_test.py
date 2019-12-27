@@ -29,6 +29,42 @@ targets = {
     # }
 }
 
+def get_workloads():
+    workloads = {}
+    conv_conv_workloads = {}
+    depth_conv_workloads = {}
+
+    ##################### Conv conv workloads ######################
+    conv_conv_workloads['tmp'] = (1, 56, 56, 128, 3, 128, 1, False, 'relu', 3, 128, 1, False, 'relu')
+    ################################################################
+
+    ##################### Depth conv workloads #####################
+    # MobileNet-v1
+    # depth_conv_workloads['mv1_1'] = (1, 112, 112, 32, 3, 1, 1, True, None, 1, 64, 1, False, None)
+    # depth_conv_workloads['mv1_2'] = (1, 112, 112, 64, 3, 1, 2, True, None, 1, 128, 1, False, None)
+    # depth_conv_workloads['mv1_3'] = (1, 56, 56, 128, 3, 1, 1, True, None, 1, 128, 1, False, None) # 108.12 us (4, 4, 16, 4)
+    # depth_conv_workloads['mv1_4'] = (1, 56, 56, 128, 3, 1, 2, True, None, 1, 256, 1, False, None)
+    # depth_conv_workloads['mv1_5'] = (1, 28, 28, 256, 3, 1, 1, True, None, 1, 256, 1, False, None) # 117.21 us (2, 2, 8, 8)
+    # depth_conv_workloads['mv1_6'] = (1, 28, 28, 256, 3, 1, 2, True, None, 1, 512, 1, False, None)
+    # depth_conv_workloads['mv1_7-11'] = (1, 14, 14, 512, 3, 1, 1, True, None, 1, 512, 1, False, None) # 316.24 us
+    # depth_conv_workloads['mv1_12'] = (1, 14, 14, 512, 3, 1, 2, True, None, 1, 1024, 1, False, None)
+    # depth_conv_workloads['mv1_13'] = (1, 7, 7, 1024, 3, 1, 1, True, None, 1, 1024, 1, False, None)
+
+    # MobileNet-v2
+    # depth_conv_workloads['mv2_1'] = (1, 112, 112, 32, 3, 1, 1, True, None, 1, 16, 1, False, None)
+    # # depth_conv_workloads['mv2_2'] = (1, 112, 112, 96, 3, 1, 2, True, None, 1, 24, 1, False, None)
+    # # depth_conv_workloads['mv2_3'] = (1, 56, 56, 144, 3, 1, 2, True, None, 1, 32, 1, False, None)
+    # # depth_conv_workloads['mv2_4'] = (1, 28, 28, 192, 3, 1, 2, True, None, 1, 64, 1, False, None)
+    # depth_conv_workloads['mv2_5'] = (1, 14, 14, 384, 3, 1, 1, True, None, 1, 96, 1, False, None)
+    # depth_conv_workloads['mv2_6'] = (1, 14, 14, 576, 3, 1, 2, True, None, 1, 160, 1, False, None)
+    # depth_conv_workloads['mv2_7'] = (1, 7, 7, 960, 3, 1, 1, True, None, 1, 320, 1, False, None)
+    ################################################################
+
+    workloads['depth_conv'] = depth_conv_workloads
+    workloads['conv_conv'] = conv_conv_workloads
+
+    return workloads
+
 def write_code(code, fname):
     with open(fname, "w") as f:
         f.write(code)
@@ -78,12 +114,13 @@ def get_ref_data(parameters, dtype="float32", layout="NHWC", save_data=False, na
     for idx, f in enumerate(Filters):
         filter_data = np.random.uniform(size=get_const_tuple(f.placeholder.shape)).astype(dtype)
         ref_data.append(filter_data)
-        params_name.append("filter_{}".format(idx+1))
 
         if f.depthwise:
             output_data = topi.testing.depthwise_conv2d_python_nhwc(output_data, filter_data, stride=[f.stride, f.stride], padding=f.padding).astype(dtype)
+            params_name.append("filter_{}_d".format(idx+1)) # Mark depthwise filter
         else: # Normal convolution
             output_data = topi.testing.conv2d_nhwc_python(output_data, filter_data, f.stride, f.padding).astype(dtype)
+            params_name.append("filter_{}".format(idx+1))
 
         if f.bn_relu is not None:
             n, h, w, oc = output_data.shape
@@ -105,7 +142,7 @@ def get_ref_data(parameters, dtype="float32", layout="NHWC", save_data=False, na
         if idx == len(Filters) - 1: # At the last stage, append output_data as the final output for reference
             ref_data.append(output_data)
     params_name.append('output')
-
+    
     if save_data:
         # Save ref data
         for i in range(0, len(ref_data)):
@@ -115,13 +152,15 @@ def get_ref_data(parameters, dtype="float32", layout="NHWC", save_data=False, na
             filename += params_name[i]
             # Transpose filter for cudnn: should be non-fortran order
             if layout == "NHWC":
-                if "filter_1" in filename:
-                    np.save(filename, np.array(ref_data[i].transpose(2, 3, 0, 1), order='C'))
-                elif "filter_2" in filename:
-                    np.save(filename, np.array(ref_data[i].transpose(3, 2, 0, 1), order='C'))
+                if "filter" in filename:
+                    if "_d" in filename:
+                        np.save(filename, np.array(ref_data[i].transpose(2, 3, 0, 1), order='C'))
+                    else:
+                        np.save(filename, np.array(ref_data[i].transpose(3, 2, 0, 1), order='C'))
                 else:
                     np.save(filename, ref_data[i])
-                    np.save(filename+"_NCHW", np.array(ref_data[i].transpose(0, 3, 1, 2), order='C'))
+                    if len(ref_data[i].shape) == 4: # Don't need to save NCHW format scale and shift data
+                        np.save(filename+"_NCHW", np.array(ref_data[i].transpose(0, 3, 1, 2), order='C'))
 
     return ref_data
 
@@ -244,49 +283,18 @@ def verify_fused(workload_name,
     print("############################################")
 
 if __name__ == "__main__":
-    workloads = {}
-    conv_conv_workloads = {}
-    depth_conv_workloads = {}
-
-    ##################### Conv conv workloads ######################
-    # conv_conv_workloads['tmp'] = (1, 56, 56, 128, 3, 128, 1, False, 'relu', 3, 128, 1, False, 'relu')
-    ################################################################
-
-    ##################### Depth conv workloads #####################
-    # MobileNet-v1
-    # depth_conv_workloads['mv1_1'] = (1, 112, 112, 32, 3, 1, 1, True, None, 1, 64, 1, False, None)
-    # depth_conv_workloads['mv1_2'] = (1, 112, 112, 64, 3, 1, 2, True, None, 1, 128, 1, False, None)
-    # depth_conv_workloads['mv1_3'] = (1, 56, 56, 128, 3, 1, 1, True, None, 1, 128, 1, False, None) # 108.12 us (4, 4, 16, 4)
-    # depth_conv_workloads['mv1_4'] = (1, 56, 56, 128, 3, 1, 2, True, None, 1, 256, 1, False, None)
-    # depth_conv_workloads['mv1_5'] = (1, 28, 28, 256, 3, 1, 1, True, None, 1, 256, 1, False, None) # 117.21 us (2, 2, 8, 8)
-    # depth_conv_workloads['mv1_6'] = (1, 28, 28, 256, 3, 1, 2, True, None, 1, 512, 1, False, None)
-    # depth_conv_workloads['mv1_7-11'] = (1, 14, 14, 512, 3, 1, 1, True, None, 1, 512, 1, False, None) # 316.24 us
-    # depth_conv_workloads['mv1_12'] = (1, 14, 14, 512, 3, 1, 2, True, None, 1, 1024, 1, False, None)
-    # depth_conv_workloads['mv1_13'] = (1, 7, 7, 1024, 3, 1, 1, True, None, 1, 1024, 1, False, None)
-
-    # MobileNet-v2
-    # depth_conv_workloads['mv2_1'] = (1, 112, 112, 32, 3, 1, 1, True, None, 1, 16, 1, False, None)
-    # # depth_conv_workloads['mv2_2'] = (1, 112, 112, 96, 3, 1, 2, True, None, 1, 24, 1, False, None)
-    # # depth_conv_workloads['mv2_3'] = (1, 56, 56, 144, 3, 1, 2, True, None, 1, 32, 1, False, None)
-    # # depth_conv_workloads['mv2_4'] = (1, 28, 28, 192, 3, 1, 2, True, None, 1, 64, 1, False, None)
-    # depth_conv_workloads['mv2_5'] = (1, 14, 14, 384, 3, 1, 1, True, None, 1, 96, 1, False, None)
-    # depth_conv_workloads['mv2_6'] = (1, 14, 14, 576, 3, 1, 2, True, None, 1, 160, 1, False, None)
-    # depth_conv_workloads['mv2_7'] = (1, 7, 7, 960, 3, 1, 1, True, None, 1, 320, 1, False, None)
-    ################################################################
-
-    workloads['depth_conv'] = depth_conv_workloads
-    workloads['conv_conv'] = conv_conv_workloads
-
     # For AutoTVM:
     # terminal 1: python -m tvm.exec.rpc_tracker --host=0.0.0.0 --port=9190
     # terminal 2: python -m tvm.exec.rpc_server --tracker=0.0.0.0:9190 --key=1050ti
     # terminal 3: run this code
 
+    workloads = get_workloads()
+
     for t, workload in workloads.items():
         for workload_name, parameters in workload.items():
             verify_fused(workload_name,
                             parameters,
-                            print_ir=False,
+                            print_ir=True,
                             print_src=False,
                             save_data=True,
                             export_code=False,

@@ -7,14 +7,17 @@
 #include "cnpy.h"
 #include "cudnn_calls.cuh"
 
+#define REPEATITION 1000
+#define BENCH_NCHW true
+#define BENCH_NHWC false
+
 void benchmark(int input_batch, int input_height, int input_width, int input_channel,
                 int kernel_1, int kernel_1_out_channel_or_multiplier, int kernel_1_stride,
                 bool is_f1_depthwise, int f1_activation,
                 int kernel_2, int kernel_2_out_channel, int kernel_2_stride,
                 bool is_f2_depthwise, int f2_activation,
                 bool find_best_algo, 
-                bool is_NCHW, /* if benchmark in NCHW */
-                int repeatition) {
+                /* if benchmark in NCHW */ bool is_NCHW) {
 
   // create handles
   cudnnHandle_t cudnn_handle;
@@ -121,7 +124,7 @@ void benchmark(int input_batch, int input_height, int input_width, int input_cha
 #endif
 
   // filenames
-  std::string folder_name = "../../npy/depth_conv_1_" + 
+  std::string folder_name = (is_f1_depthwise ? "../../npy/depth_conv_1_" : "../../npy/conv_conv_1_") +
                                 std::to_string(input_height) + "_" +
                                 std::to_string(input_width) + "_" +
                                 std::to_string(input_channel) + "_" +
@@ -194,7 +197,7 @@ void benchmark(int input_batch, int input_height, int input_width, int input_cha
   float runtime_ms = 0.0f, runtime_ms_1 = 0.0f, runtime_ms_2 = 0.0f;
 
   // Stage 1
-  for (int i = 0; i < repeatition; i++) {
+  for (int i = 0; i < REPEATITION; i++) {
     cudaMemset(d_inter, 0, inter_shape * sizeof(float));
 
     float tmp_t_1 = 0.0f;
@@ -209,12 +212,12 @@ void benchmark(int input_batch, int input_height, int input_width, int input_cha
     cudaEventSynchronize(stop);
     cudaEventElapsedTime(&tmp_t_1, start, stop);
 
-    runtime_ms_1 += tmp_t_1 / repeatition;
-    runtime_ms += tmp_t_1 / repeatition;
+    runtime_ms_1 += tmp_t_1 / REPEATITION;
+    runtime_ms += tmp_t_1 / REPEATITION;
   }
 
   // Stage 2
-  for (int i = 0; i < repeatition; i++) {
+  for (int i = 0; i < REPEATITION; i++) {
     cudaMemset(d_output, 0, output_shape * sizeof(float));
     
     float tmp_t_2 = 0.0f;
@@ -229,8 +232,8 @@ void benchmark(int input_batch, int input_height, int input_width, int input_cha
     cudaEventSynchronize(stop);
     cudaEventElapsedTime(&tmp_t_2, start, stop);
 
-    runtime_ms_2 += tmp_t_2 / repeatition;
-    runtime_ms += tmp_t_2 / repeatition;
+    runtime_ms_2 += tmp_t_2 / REPEATITION;
+    runtime_ms += tmp_t_2 / REPEATITION;
   }
   printf("Stage 1 runtime is %f us.\nStage 2 runtime is %f us.\nFusion runtime is %f us.\n", runtime_ms_1 * 1000, runtime_ms_2 * 1000, runtime_ms * 1000);
 
@@ -281,33 +284,34 @@ int main(int argc, const char* argv[]) {
   int gpu_id = (argc > 1) ? std::atoi(argv[1]) : 0;
   std::cerr << "GPU: " << gpu_id << std::endl;
   cudaSetDevice(gpu_id);
-  int repeatition = 1000;
-  bool if_find_best_algo = false;
+  bool find_best_algo = false;
 
-  // MobileNet-v1
-  benchmark(/*Input params*/    1, 112, 112, 32,
-    /*Kernel_2 params*/         3, 1, 1,
-    /*Depthwise? Activation?*/  true, NONE,
-    /*Kernel_2 params*/         1, 64, 1,
-    /*Depthwise? Activation?*/  false, NONE,
-    /*Find best algorithm?*/    if_find_best_algo,
-    /*Benchmark with NCHW?*/    true,
-    repeatition);
-  benchmark(1, 112, 112, 64,  3, 1, 2,  true, NONE,  1, 128, 1,  false, NONE,  if_find_best_algo, true, repeatition);
-  benchmark(1, 56, 56, 128,  3, 1, 1,  true, NONE,  1, 128, 1,  false, NONE,  if_find_best_algo, true, repeatition);
-  benchmark(1, 56, 56, 128,  3, 1, 2,  true, NONE,  1, 256, 1,  false, NONE,  if_find_best_algo, true, repeatition);
-  benchmark(1, 28, 28, 256,  3, 1, 1,  true, NONE,  1, 256, 1,  false, NONE,  if_find_best_algo, true, repeatition);
-  benchmark(1, 28, 28, 256,  3, 1, 2,  true, NONE,  1, 512, 1,  false, NONE,  if_find_best_algo, true, repeatition);
-  benchmark(1, 14, 14, 512,  3, 1, 1,  true, NONE,  1, 512, 1,  false, NONE,  if_find_best_algo, true, repeatition);
-  benchmark(1, 14, 14, 512,  3, 1, 2,  true, NONE,  1, 1024, 1,  false, NONE,  if_find_best_algo, true, repeatition);
-  benchmark(1, 7, 7, 512,  3, 1, 1,  true, NONE,  1, 1024, 1,  false, NONE,  if_find_best_algo, true, repeatition);
+  // // MobileNet-v1
+  // benchmark(/*Input params*/    1, 112, 112, 32,
+  //   /*Kernel_2 params*/         3, 1, 1,
+  //   /*Depthwise? Activation?*/  true, NONE,
+  //   /*Kernel_2 params*/         1, 64, 1,
+  //   /*Depthwise? Activation?*/  false, NONE,
+  //   /*Find best algorithm?*/    find_best_algo,
+  //   /*Benchmark with NCHW?*/    BENCH_NCHW);
+  // benchmark(1, 112, 112, 64,  3, 1, 2,  true, NONE,  1, 128, 1,  false, NONE,  find_best_algo, BENCH_NCHW);
+  // benchmark(1, 56, 56, 128,  3, 1, 1,  true, NONE,  1, 128, 1,  false, NONE,  find_best_algo, BENCH_NCHW);
+  // benchmark(1, 56, 56, 128,  3, 1, 2,  true, NONE,  1, 256, 1,  false, NONE,  find_best_algo, BENCH_NCHW);
+  // benchmark(1, 28, 28, 256,  3, 1, 1,  true, NONE,  1, 256, 1,  false, NONE,  find_best_algo, BENCH_NCHW);
+  // benchmark(1, 28, 28, 256,  3, 1, 2,  true, NONE,  1, 512, 1,  false, NONE,  find_best_algo, BENCH_NCHW);
+  // benchmark(1, 14, 14, 512,  3, 1, 1,  true, NONE,  1, 512, 1,  false, NONE,  find_best_algo, BENCH_NCHW);
+  // benchmark(1, 14, 14, 512,  3, 1, 2,  true, NONE,  1, 1024, 1,  false, NONE,  find_best_algo, BENCH_NCHW);
+  // benchmark(1, 7, 7, 512,  3, 1, 1,  true, NONE,  1, 1024, 1,  false, NONE,  find_best_algo, BENCH_NCHW);
 
-  // MobileNet-v2
-  benchmark(1, 112, 112, 32,  3, 1, 1,  true, NONE,  1, 16, 1,  false, NONE,  if_find_best_algo, true, repeatition);
-  benchmark(1, 112, 112, 96,  3, 1, 2,  true, NONE,  1, 24, 1,  false, NONE,  if_find_best_algo, true, repeatition);
-  benchmark(1, 56, 56, 144,  3, 1, 2,  true, NONE,  1, 32, 1,  false, NONE,  if_find_best_algo, true, repeatition);
-  benchmark(1, 28, 28, 192,  3, 1, 2,  true, NONE,  1, 64, 1,  false, NONE,  if_find_best_algo, true, repeatition);
-  benchmark(1, 14, 14, 384,  3, 1, 1,  true, NONE,  1, 96, 1,  false, NONE,  if_find_best_algo, true, repeatition);
-  benchmark(1, 14, 14, 576,  3, 1, 2,  true, NONE,  1, 160, 1,  false, NONE,  if_find_best_algo, true, repeatition);
-  benchmark(1, 7, 7, 960,  3, 1, 1,  true, NONE,  1, 320, 1,  false, NONE,  if_find_best_algo, true, repeatition);
+  // // MobileNet-v2
+  // benchmark(1, 112, 112, 32,  3, 1, 1,  true, NONE,  1, 16, 1,  false, NONE,  find_best_algo, BENCH_NCHW);
+  // benchmark(1, 112, 112, 96,  3, 1, 2,  true, NONE,  1, 24, 1,  false, NONE,  find_best_algo, BENCH_NCHW);
+  // benchmark(1, 56, 56, 144,  3, 1, 2,  true, NONE,  1, 32, 1,  false, NONE,  find_best_algo, BENCH_NCHW);
+  // benchmark(1, 28, 28, 192,  3, 1, 2,  true, NONE,  1, 64, 1,  false, NONE,  find_best_algo, BENCH_NCHW);
+  // benchmark(1, 14, 14, 384,  3, 1, 1,  true, NONE,  1, 96, 1,  false, NONE,  find_best_algo, BENCH_NCHW);
+  // benchmark(1, 14, 14, 576,  3, 1, 2,  true, NONE,  1, 160, 1,  false, NONE,  find_best_algo, BENCH_NCHW);
+  // benchmark(1, 7, 7, 960,  3, 1, 1,  true, NONE,  1, 320, 1,  false, NONE,  find_best_algo, BENCH_NCHW);
+
+  // Conv conv
+  benchmark(1, 56, 56, 128, 3, 128, 1, false, NONE, 3, 128, 1, false, NONE,  find_best_algo, BENCH_NCHW);
 }

@@ -54,35 +54,27 @@ def schedule_conv_conv_fused_nhwc(outs, stages, params, bn_relu1=None, bn_relu2=
     num_vthread_y = 1
     num_vthread_x = 32
 
-    #
-    # [Input](Global) -> [PaddedInput](shared) -> 
-    #
-
     # ######## Input data, weights, BN, etc
     s[PaddedInput].compute_inline()
     PaddedSharedInput = s.cache_read(PaddedInput, "shared", [Inter])
-    # ---
     FS_1 = s.cache_read(F_1, "shared", [Inter])
     FS_2 = s.cache_read(F_2, "shared", [Out])
-    # ---
-    # FL_1 = s.cache_read(F_1, "local", [Inter])
-    # FL_2 = s.cache_read(F_2, "local", [Out])
-    # ---
+    s[Inter].set_scope("local")
+    ConvLocalAccumulator = Inter
+
+    # Put the input of the second stage into the shared memory
     if hasPaddedInter:
-        s[IntermediateStage].compute_inline()
         s[PaddedInter].set_scope("shared")
-        IntermediateStage = PaddedInter
     else:
         s[IntermediateStage].set_scope("shared")
 
     if bn_relu1 is not None:
         s[InterScaleShift].compute_inline()
-        s[Inter].set_scope("local")
         ScaleL_1 = s.cache_read(Scale_1, "local", [InterScaleShift])
         ShiftL_1 = s.cache_read(Shift_1, "local", [InterScaleShift])
-        ConvLocalAccumulator = Inter
-    else:
-        ConvLocalAccumulator = s.cache_write(IntermediateStage, "local")
+        if hasPaddedInter:
+            s[IntermediateStage].compute_inline()
+    IntermediateStage = PaddedInter
 
     if bn_relu2 is not None:
         s[OutScaleShift].compute_inline()
@@ -168,7 +160,7 @@ def schedule_conv_conv_fused_nhwc(outs, stages, params, bn_relu1=None, bn_relu2=
     s[IntermediateStage].bind(inter_ic, thread_x)
     s[IntermediateStage].bind(vthz, vthread_z)
 
-    # ######## Intermediate output local accumulator
+    ######## Intermediate output local accumulator
     s[ConvLocalAccumulator].compute_at(s[IntermediateStage], inter_ic)
     ry, rx, rc = s[ConvLocalAccumulator].op.reduce_axis
     nl, h, w, c = s[ConvLocalAccumulator].op.axis
