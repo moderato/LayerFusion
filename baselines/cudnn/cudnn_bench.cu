@@ -19,6 +19,8 @@ void benchmark(int input_batch, int input_height, int input_width, int input_cha
                 bool find_best_algo, 
                 /* if benchmark in NCHW */ bool is_NCHW) {
 
+  std::cout << "#######################" << std::endl;
+
   // create handles
   cudnnHandle_t cudnn_handle;
   cudnnCreate(&cudnn_handle);
@@ -86,41 +88,41 @@ void benchmark(int input_batch, int input_height, int input_width, int input_cha
                       is_f2_depthwise,
                       is_NCHW);
 
-  // Find best convolution algorithms if necessary
+  // Find the best convolution algorithms if necessary
   findBestAlgorithm(cudnn_handle,
                     convolution_descriptor_1,
-                    input_descriptor, kernel_1_descriptor, output_descriptor,
+                    input_descriptor, kernel_1_descriptor, inter_descriptor,
                     convolution_algorithm_1,
-                    find_best_algo);
+                    find_best_algo, is_f1_depthwise);
   findBestAlgorithm(cudnn_handle,
                     convolution_descriptor_2,
                     inter_descriptor, kernel_2_descriptor, output_descriptor,
                     convolution_algorithm_2,
-                    find_best_algo);
-  convolution_algorithm_1 = (cudnnConvolutionFwdAlgo_t)0;
-  convolution_algorithm_2 = (cudnnConvolutionFwdAlgo_t)1;
-  std::cout << "Best algorithms: stage 1: " << convolution_algorithm_1 << ", stage 2: " << convolution_algorithm_2 << std::endl;
+                    find_best_algo, is_f2_depthwise);
+  interpretBestAlgorithm(convolution_algorithm_1);
+  interpretBestAlgorithm(convolution_algorithm_2);
 
   // Calculate workspace
   size_t workspace_bytes_1{0};
   size_t workspace_bytes_2{0};
   getWorkSpaceSize(cudnn_handle,
                     convolution_descriptor_1,
-                    input_descriptor, kernel_1_descriptor, output_descriptor,
+                    input_descriptor, kernel_1_descriptor, inter_descriptor,
                     convolution_algorithm_1,
                     workspace_bytes_1);
+#ifdef DEBUG
+  std::cerr << "Workspace_1 size: " << (workspace_bytes_1 / 1048576.0) << "MB"
+            << std::endl; // sometimes 0 but can run normally
+#endif
+
   getWorkSpaceSize(cudnn_handle,
                     convolution_descriptor_2,
                     inter_descriptor, kernel_2_descriptor, output_descriptor,
                     convolution_algorithm_2,
                     workspace_bytes_2);
-
 #ifdef DEBUG
-  std::cerr << "Workspace_1 size: " << (workspace_bytes_1 / 1048576.0) << "MB"
-            << std::endl; // sometimes 0 but can run normally
   std::cerr << "Workspace_2 size: " << (workspace_bytes_2 / 1048576.0) << "MB"
             << std::endl; // sometimes 0 but can run normally
-  // assert((workspace_bytes_1 > 0) && (workspace_bytes_2 > 0));
 #endif
 
   // filenames
@@ -139,7 +141,7 @@ void benchmark(int input_batch, int input_height, int input_width, int input_cha
                                 (is_f2_depthwise ? "True_" : "False_") +
                                 "None/";
   std::string input_name = folder_name + (is_NCHW ? "input_NCHW.npy" : "input.npy");
-  std::string kernel_1_name = folder_name + "filter_1.npy";
+  std::string kernel_1_name = folder_name + (is_f1_depthwise ? "filter_1_d.npy" : "filter_1.npy");
   std::string kernel_2_name = folder_name + "filter_2.npy";
   std::string output_name = folder_name + (is_NCHW ? "output_NCHW.npy" : "output.npy");
   // std::string scale_1_name = folder_name + "scale_1.npy";
@@ -256,7 +258,6 @@ void benchmark(int input_batch, int input_height, int input_width, int input_cha
       count++;
   }
   printf("Output wrong count: %d\n", count);
-  printf("#######################\n");
 
   // Free pointers
   free(output_result);
@@ -282,10 +283,11 @@ void benchmark(int input_batch, int input_height, int input_width, int input_cha
 int main(int argc, const char* argv[]) {
   // gpu_id
   int gpu_id = (argc > 1) ? std::atoi(argv[1]) : 0;
-  std::cerr << "GPU: " << gpu_id << std::endl;
+  // std::cerr << "GPU: " << gpu_id << std::endl;
   cudaSetDevice(gpu_id);
-  bool find_best_algo = false;
+  bool find_best_algo = true;
 
+  /******************************************************************/
   // // MobileNet-v1
   // benchmark(/*Input params*/    1, 112, 112, 32,
   //   /*Kernel_2 params*/         3, 1, 1,
@@ -301,7 +303,7 @@ int main(int argc, const char* argv[]) {
   // benchmark(1, 28, 28, 256,  3, 1, 2,  true, NONE,  1, 512, 1,  false, NONE,  find_best_algo, BENCH_NCHW);
   // benchmark(1, 14, 14, 512,  3, 1, 1,  true, NONE,  1, 512, 1,  false, NONE,  find_best_algo, BENCH_NCHW);
   // benchmark(1, 14, 14, 512,  3, 1, 2,  true, NONE,  1, 1024, 1,  false, NONE,  find_best_algo, BENCH_NCHW);
-  // benchmark(1, 7, 7, 512,  3, 1, 1,  true, NONE,  1, 1024, 1,  false, NONE,  find_best_algo, BENCH_NCHW);
+  // benchmark(1, 7, 7, 1024,  3, 1, 1,  true, NONE,  1, 1024, 1,  false, NONE,  find_best_algo, BENCH_NCHW);
 
   // // MobileNet-v2
   // benchmark(1, 112, 112, 32,  3, 1, 1,  true, NONE,  1, 16, 1,  false, NONE,  find_best_algo, BENCH_NCHW);
@@ -311,7 +313,17 @@ int main(int argc, const char* argv[]) {
   // benchmark(1, 14, 14, 384,  3, 1, 1,  true, NONE,  1, 96, 1,  false, NONE,  find_best_algo, BENCH_NCHW);
   // benchmark(1, 14, 14, 576,  3, 1, 2,  true, NONE,  1, 160, 1,  false, NONE,  find_best_algo, BENCH_NCHW);
   // benchmark(1, 7, 7, 960,  3, 1, 1,  true, NONE,  1, 320, 1,  false, NONE,  find_best_algo, BENCH_NCHW);
+  /******************************************************************/
 
-  // Conv conv
-  benchmark(1, 56, 56, 128, 3, 128, 1, false, NONE, 3, 128, 1, false, NONE,  find_best_algo, BENCH_NCHW);
+  /******************************************************************/
+  // // AlexNet
+  // benchmark(1, 55, 55, 96, 3, 256, 2, false, NONE, 3, 384, 2, false, NONE,  find_best_algo, BENCH_NCHW);
+  // benchmark(1, 27, 27, 256, 3, 384, 2, false, NONE, 3, 384, 2, false, NONE,  find_best_algo, BENCH_NCHW);
+  // benchmark(1, 13, 13, 384, 3, 384, 1, false, NONE, 3, 256, 1, false, NONE,  find_best_algo, BENCH_NCHW);
+
+  // // VGG
+  benchmark(1, 112, 112, 128, 3, 128, 1, false, NONE, 3, 128, 1, false, NONE,  find_best_algo, BENCH_NCHW);
+  // benchmark(1, 56, 56, 256, 3, 256, 1, false, NONE, 3, 256, 1, false, NONE,  find_best_algo, BENCH_NCHW);
+  // benchmark(1, 28, 28, 512, 3, 128, 1, false, NONE, 3, 512, 1, false, NONE,  find_best_algo, BENCH_NCHW);
+  // benchmark(1, 14, 14, 512, 3, 128, 1, false, NONE, 3, 512, 1, false, NONE,  find_best_algo, BENCH_NCHW);
 }

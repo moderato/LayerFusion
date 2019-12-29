@@ -19,6 +19,42 @@
     }                                                        \
   }
 
+#define interpretBestAlgorithm(algo_code)                               \
+  {                                                                     \
+    int algo = (algo_code);                                             \
+    std::string algo_name;                                              \
+    switch (algo) {                                                     \
+      case 0:                                                           \
+        algo_name = "CUDNN_CONVOLUTION_FWD_ALGO_IMPLICIT_GEMM";         \
+        break;                                                          \
+      case 1:                                                           \
+        algo_name = "CUDNN_CONVOLUTION_FWD_ALGO_IMPLICIT_PRECOMP_GEMM"; \
+        break;                                                          \
+      case 2:                                                           \
+        algo_name = "CUDNN_CONVOLUTION_FWD_ALGO_GEMM";                  \
+        break;                                                          \
+      case 3:                                                           \
+        algo_name = "CUDNN_CONVOLUTION_FWD_ALGO_DIRECT";                \
+        break;                                                          \
+      case 4:                                                           \
+        algo_name = "CUDNN_CONVOLUTION_FWD_ALGO_FFT";                   \
+        break;                                                          \
+      case 5:                                                           \
+        algo_name = "CUDNN_CONVOLUTION_FWD_ALGO_FFT_TILING";            \
+        break;                                                          \
+      case 6:                                                           \
+        algo_name = "CUDNN_CONVOLUTION_FWD_ALGO_WINOGRAD";              \
+        break;                                                          \
+      case 7:                                                           \
+        algo_name = "CUDNN_CONVOLUTION_FWD_ALGO_WINOGRAD_NONFUSED";     \
+        break;                                                          \
+      default:                                                          \
+        std::cerr << "Unknown convolution algorithm!" << std::endl;     \
+        std::exit(EXIT_FAILURE);                                        \
+    }                                                                   \
+    std::cout << "Best algorithm: " << algo_name << std::endl;          \
+  }
+
 void setCudnnDescriptors(cudnnHandle_t cudnn_handle,
                           cudnnConvolutionDescriptor_t convolution_descriptor,
                           cudnnTensorDescriptor_t input_descriptor,
@@ -106,8 +142,10 @@ void findBestAlgorithm(cudnnHandle_t cudnn_handle,
                         cudnnFilterDescriptor_t kernel_descriptor,
                         cudnnTensorDescriptor_t output_descriptor,
                         cudnnConvolutionFwdAlgo_t& convolution_algorithm,
-                        bool find_best_algo) {
-  if (find_best_algo) {
+                        bool find_best_algo, bool depthwise) {
+  if (depthwise) { // No searching for depthwise convolution
+    convolution_algorithm = (cudnnConvolutionFwdAlgo_t)0; // 0 by default for depthwise convolution
+  } else if (find_best_algo) {
     // find algorithm
     checkCUDNN(cudnnGetConvolutionForwardAlgorithm(cudnn_handle,
                                                   input_descriptor,
@@ -118,7 +156,7 @@ void findBestAlgorithm(cudnnHandle_t cudnn_handle,
                                                   /*memoryLimitInBytes=*/0,
                                                   &convolution_algorithm));
   } else {
-    convolution_algorithm = (cudnnConvolutionFwdAlgo_t)0;
+    convolution_algorithm = (cudnnConvolutionFwdAlgo_t)1; // 1 by default for normal convolution
   }
 }
 

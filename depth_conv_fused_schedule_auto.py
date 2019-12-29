@@ -83,7 +83,6 @@ def schedule_depth_conv_fused_nhwc_auto(outs, stages, params, device="cuda", bn_
         s[OutputStage].bind(thz, thread_z)
         s[OutputStage].bind(thy, thread_y)
         s[OutputStage].bind(thx, thread_x)
-    # ---
     num_thread_z = output_step_tile_size_h = cfg["split_h"].size[1]
     num_thread_y = output_step_tile_size_w = cfg["split_h"].size[2]
     num_thread_x = cfg["split_c"].size[2]

@@ -35,29 +35,38 @@ def get_workloads():
     depth_conv_workloads = {}
 
     ##################### Conv conv workloads ######################
-    conv_conv_workloads['tmp'] = (1, 56, 56, 128, 3, 128, 1, False, 'relu', 3, 128, 1, False, 'relu')
+    # AlexNet
+    # conv_conv_workloads['alex_2_3'] = (1, 55, 55, 96, 3, 256, 2, False, None, 3, 384, 2, False, None) # / 701.73 us
+    # conv_conv_workloads['alex_3_4'] = (1, 27, 27, 256, 3, 384, 2, False, None, 3, 384, 2, False, None) # / 705.09 us
+    # conv_conv_workloads['alex_4_5'] = (1, 13, 13, 384, 3, 384, 1, False, None, 3, 256, 1, False, None) # / 630.92 us
+
+    # VGG
+    conv_conv_workloads['vgg_3_4'] = (1, 112, 112, 128, 3, 128, 1, False, None, 3, 128, 1, False, None) # / 2049.59 us
+    # conv_conv_workloads['vgg_5_6'] = (1, 56, 56, 256, 3, 256, 1, False, None, 3, 256, 1, False, None) # / 2519.97 us
+    # conv_conv_workloads['vgg_8_9'] = (1, 28, 28, 512, 3, 128, 1, False, None, 3, 512, 1, False, None) # / 877.67 us
+    # conv_conv_workloads['vgg_11_12'] = (1, 14, 14, 512, 3, 128, 1, False, None, 3, 512, 1, False, None) # / 359.19 us
     ################################################################
 
     ##################### Depth conv workloads #####################
-    # MobileNet-v1
-    # depth_conv_workloads['mv1_1'] = (1, 112, 112, 32, 3, 1, 1, True, None, 1, 64, 1, False, None)
-    # depth_conv_workloads['mv1_2'] = (1, 112, 112, 64, 3, 1, 2, True, None, 1, 128, 1, False, None)
-    # depth_conv_workloads['mv1_3'] = (1, 56, 56, 128, 3, 1, 1, True, None, 1, 128, 1, False, None) # 108.12 us (4, 4, 16, 4)
-    # depth_conv_workloads['mv1_4'] = (1, 56, 56, 128, 3, 1, 2, True, None, 1, 256, 1, False, None)
-    # depth_conv_workloads['mv1_5'] = (1, 28, 28, 256, 3, 1, 1, True, None, 1, 256, 1, False, None) # 117.21 us (2, 2, 8, 8)
-    # depth_conv_workloads['mv1_6'] = (1, 28, 28, 256, 3, 1, 2, True, None, 1, 512, 1, False, None)
-    # depth_conv_workloads['mv1_7-11'] = (1, 14, 14, 512, 3, 1, 1, True, None, 1, 512, 1, False, None) # 316.24 us
-    # depth_conv_workloads['mv1_12'] = (1, 14, 14, 512, 3, 1, 2, True, None, 1, 1024, 1, False, None)
-    # depth_conv_workloads['mv1_13'] = (1, 7, 7, 1024, 3, 1, 1, True, None, 1, 1024, 1, False, None)
+    # # MobileNet-v1
+    # depth_conv_workloads['mv1_1'] = (1, 112, 112, 32, 3, 1, 1, True, None, 1, 64, 1, False, None) # 61.28 us / 183.70us
+    # depth_conv_workloads['mv1_2'] = (1, 112, 112, 64, 3, 1, 2, True, None, 1, 128, 1, False, None) # 91.97 us / 124.78 us
+    # depth_conv_workloads['mv1_3'] = (1, 56, 56, 128, 3, 1, 1, True, None, 1, 128, 1, False, None) # 74.98 us / 134.67 us / 108.12 us (4, 4, 16, 4)
+    # depth_conv_workloads['mv1_4'] = (1, 56, 56, 128, 3, 1, 2, True, None, 1, 256, 1, False, None) # 74.40 us / 75.01 us
+    # depth_conv_workloads['mv1_5'] = (1, 28, 28, 256, 3, 1, 1, True, None, 1, 256, 1, False, None) # 86.20 us / 110.06 us / 117.21 us (2, 2, 8, 8)
+    # depth_conv_workloads['mv1_6'] = (1, 28, 28, 256, 3, 1, 2, True, None, 1, 512, 1, False, None) # 76.81 us / 64.22 us
+    # depth_conv_workloads['mv1_7-11'] = (1, 14, 14, 512, 3, 1, 1, True, None, 1, 512, 1, False, None) # 107.26 us / 112.37 us
+    # depth_conv_workloads['mv1_12'] = (1, 14, 14, 512, 3, 1, 2, True, None, 1, 1024, 1, False, None) # 117.29 us / 164.36 us
+    # depth_conv_workloads['mv1_13'] = (1, 7, 7, 1024, 3, 1, 1, True, None, 1, 1024, 1, False, None) # 129.61 us / 220.23 us
 
-    # MobileNet-v2
-    # depth_conv_workloads['mv2_1'] = (1, 112, 112, 32, 3, 1, 1, True, None, 1, 16, 1, False, None)
-    # # depth_conv_workloads['mv2_2'] = (1, 112, 112, 96, 3, 1, 2, True, None, 1, 24, 1, False, None)
-    # # depth_conv_workloads['mv2_3'] = (1, 56, 56, 144, 3, 1, 2, True, None, 1, 32, 1, False, None)
-    # # depth_conv_workloads['mv2_4'] = (1, 28, 28, 192, 3, 1, 2, True, None, 1, 64, 1, False, None)
-    # depth_conv_workloads['mv2_5'] = (1, 14, 14, 384, 3, 1, 1, True, None, 1, 96, 1, False, None)
-    # depth_conv_workloads['mv2_6'] = (1, 14, 14, 576, 3, 1, 2, True, None, 1, 160, 1, False, None)
-    # depth_conv_workloads['mv2_7'] = (1, 7, 7, 960, 3, 1, 1, True, None, 1, 320, 1, False, None)
+    # # MobileNet-v2
+    # depth_conv_workloads['mv2_1'] = (1, 112, 112, 32, 3, 1, 1, True, None, 1, 16, 1, False, None) # 38.19 us / 123.81 us
+    # depth_conv_workloads['mv2_2'] = (1, 112, 112, 96, 3, 1, 2, True, None, 1, 24, 1, False, None) # 129.60 us / 117.13 us
+    # depth_conv_workloads['mv2_3'] = (1, 56, 56, 144, 3, 1, 2, True, None, 1, 32, 1, False, None) # 46.01 us / 53.14 us
+    # depth_conv_workloads['mv2_4'] = (1, 28, 28, 192, 3, 1, 2, True, None, 1, 64, 1, False, None) # 15.57 us / 35.55 us
+    # depth_conv_workloads['mv2_5'] = (1, 14, 14, 384, 3, 1, 1, True, None, 1, 96, 1, False, None) # 37.07 us / 51.26 us
+    # depth_conv_workloads['mv2_6'] = (1, 14, 14, 576, 3, 1, 2, True, None, 1, 160, 1, False, None) # 86.82 us / 65.03 us
+    # depth_conv_workloads['mv2_7'] = (1, 7, 7, 960, 3, 1, 1, True, None, 1, 320, 1, False, None) # 104.16 us / 162.04 us
     ################################################################
 
     workloads['depth_conv'] = depth_conv_workloads
@@ -106,13 +115,13 @@ def get_ref_data(parameters, dtype="float32", layout="NHWC", save_data=False, na
     Input, Filters = get_input_and_filters(Parameters(parameters))
 
     # Pretending the input_data is some output_data from stage -1
-    output_data = np.random.uniform(size=get_const_tuple(Input.shape)).astype(dtype)
+    output_data = np.random.uniform(0.0, 0.1, size=get_const_tuple(Input.shape)).astype(dtype)
     ref_data = [output_data]
     # params names for saving data
     params_name = ["input"]
     
     for idx, f in enumerate(Filters):
-        filter_data = np.random.uniform(size=get_const_tuple(f.placeholder.shape)).astype(dtype)
+        filter_data = np.random.uniform(0.0, 0.1, size=get_const_tuple(f.placeholder.shape)).astype(dtype)
         ref_data.append(filter_data)
 
         if f.depthwise:
@@ -124,8 +133,8 @@ def get_ref_data(parameters, dtype="float32", layout="NHWC", save_data=False, na
 
         if f.bn_relu is not None:
             n, h, w, oc = output_data.shape
-            scale_np = np.random.uniform(size=(oc,)).astype(dtype)
-            shift_np = np.random.uniform(size=(oc,)).astype(dtype)
+            scale_np = np.random.uniform(0.0, 0.1, size=(oc,)).astype(dtype)
+            shift_np = np.random.uniform(0.0, 0.1, size=(oc,)).astype(dtype)
             ref_data.append(scale_np)
             ref_data.append(shift_np)
 
@@ -292,13 +301,14 @@ if __name__ == "__main__":
 
     for t, workload in workloads.items():
         for workload_name, parameters in workload.items():
+            print(workload_name, parameters)
             verify_fused(workload_name,
                             parameters,
-                            print_ir=True,
+                            print_ir=False,
                             print_src=False,
                             save_data=True,
                             export_code=False,
-                            auto_tvm=False,
-                            auto_tvm_skip_training=False,
+                            auto_tvm=True,
+                            auto_tvm_skip_training=True,
                             auto_tvm_trials=2000,
                             name=t)

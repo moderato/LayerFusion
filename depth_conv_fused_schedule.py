@@ -29,8 +29,8 @@ def schedule_depth_conv_fused_nhwc(outs, stages, params, bn_relu1=None, bn_relu2
     output_step_tile_size_w = 2
     step_num_h = 2
     step_num_w = 2
-    reduce_split = 8
-    intermediate_reuse = 8 # How many 32x32 blocks of 1x1 filter reuse the intermediate data
+    reduce_split = 4
+    intermediate_reuse = 4 # How many 32x32 blocks of 1x1 filter reuse the intermediate data
     num_thread_x = 32
     # --------------------
     output_tile_size_h = output_step_tile_size_h * step_num_h
