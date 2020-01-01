@@ -4,6 +4,7 @@ def schedule_conv_conv_fused_nhwc(outs, stages, params, bn_relu1=None, bn_relu2=
     outs = [outs] if isinstance(outs, tvm.tensor.Tensor) else outs
     s = tvm.create_schedule([x.op for x in outs])
 
+    ######## Get stages
     PaddedInput = stages[1][0]
     if bn_relu1 is not None:
         Inter, InterScaleShift, InterReLU = stages[2]
@@ -34,14 +35,14 @@ def schedule_conv_conv_fused_nhwc(outs, stages, params, bn_relu1=None, bn_relu2=
         OutputStage = Out
         F_2 = params[2][0]
  
-    # Searchable parameters
+    ######## Searchable parameters
     # --------------------
     output_step_tile_size_h = 2
     output_step_tile_size_w = 2
     step_num_h = 2
     step_num_w = 2
     reduce_split1 = 8
-    reduce_split2 = 4
+    reduce_split2 = 8
     input_reuse = 2
     intermediate_reuse = 4
     num_thread_x = 32
@@ -53,8 +54,9 @@ def schedule_conv_conv_fused_nhwc(outs, stages, params, bn_relu1=None, bn_relu2=
     num_vthread_z = step_num_h * step_num_w
     num_vthread_y = 1
     num_vthread_x = 32
+    # --------------------
 
-    # ######## Input data, weights, BN, etc
+    ######## Input data, weights, BN, etc
     s[PaddedInput].compute_inline()
     PaddedSharedInput = s.cache_read(PaddedInput, "shared", [Inter])
     FS_1 = s.cache_read(F_1, "shared", [Inter])
@@ -85,13 +87,13 @@ def schedule_conv_conv_fused_nhwc(outs, stages, params, bn_relu1=None, bn_relu2=
     else:
         OL = s.cache_write(OutputStage, "local")
 
-    # ######## Blocks and threads
+    ######## Blocks and threads
     block_x = tvm.thread_axis("blockIdx.x")
     thread_x = tvm.thread_axis((0, num_thread_x), "threadIdx.x")
     thread_y = tvm.thread_axis((0, num_thread_y), "threadIdx.y")
     thread_z = tvm.thread_axis((0, num_thread_z), "threadIdx.z")
 
-    # ######## Vthreads
+    ######## Vthreads
     vthread_x = tvm.thread_axis((0, num_vthread_x), "vthread", name="vthread_x")
     vthread_y = tvm.thread_axis((0, num_vthread_y), "vthread", name="vthread_y")
     vthread_z = tvm.thread_axis((0, num_vthread_z), "vthread", name="vthread_z")
@@ -106,10 +108,10 @@ def schedule_conv_conv_fused_nhwc(outs, stages, params, bn_relu1=None, bn_relu2=
     vthy, w_tile = s[OutputStage].split(w_tile, nparts=num_vthread_y)
     s[OutputStage].reorder(n, ho, wo, recompute, reuse, vthy, thz, thy, thx, h_tile, w_tile)
     fused_blx = s[OutputStage].fuse(n, ho, wo, recompute)
-    s[OutputStage].bind(thz, thread_z)
     s[OutputStage].bind(fused_blx, block_x)
-    s[OutputStage].bind(vthy, vthread_y)
     s[OutputStage].bind(reuse, vthread_x)
+    s[OutputStage].bind(vthy, vthread_y)
+    s[OutputStage].bind(thz, thread_z)
     s[OutputStage].bind(thy, thread_y)
     s[OutputStage].bind(thx, thread_x)
 
@@ -119,7 +121,7 @@ def schedule_conv_conv_fused_nhwc(outs, stages, params, bn_relu1=None, bn_relu2=
     orc, irc = s[OL].split(rc, factor=num_thread_x)
     oirc, iirc = s[OL].split(irc, factor=reduce_split2)
     n, h, w, c = s[OL].op.axis
-    s[OL].reorder(n, orc, oirc, iirc, h, w, c)
+    s[OL].reorder(n, orc, oirc, ry, rx, iirc, h, w, c)
 
     if bn_relu2 is not None:
         s[ScaleL_2].compute_at(s[OutputStage], thx)
@@ -127,7 +129,7 @@ def schedule_conv_conv_fused_nhwc(outs, stages, params, bn_relu1=None, bn_relu2=
 
     ######## Filter 2
     # ---
-    s[FS_2].compute_at(s[OL], oirc)
+    s[FS_2].compute_at(s[OL], rx)
     h, w, i, o = s[FS_2].op.axis
     io = s[FS_2].fuse(i, o)
     io, iox = s[FS_2].split(io, factor=num_thread_x * 4)
@@ -147,18 +149,25 @@ def schedule_conv_conv_fused_nhwc(outs, stages, params, bn_relu1=None, bn_relu2=
     s[IntermediateStage].compute_at(s[OL], orc)
     n, h, w, c = s[IntermediateStage].op.axis
     inter_oc, inter_ic = s[IntermediateStage].split(c, factor=num_thread_x)
-    ho, wo, h_tile, w_tile = s[IntermediateStage].tile(h, w, x_factor=output_tile_size_h, y_factor=output_tile_size_w)
-    h_step, w_step, h_step_tile, w_step_tile = s[IntermediateStage].tile(h_tile, w_tile, x_factor=output_step_tile_size_h, y_factor=output_step_tile_size_w)
+    # ho, wo, h_tile, w_tile = s[IntermediateStage].tile(h, w, x_factor=output_tile_size_h, y_factor=output_tile_size_w)
     # ---
-    s[IntermediateStage].reorder(n, ho, wo, inter_oc, h_step, w_step, h_step_tile, w_step_tile, inter_ic)
+    # h_step, w_step, h_step_tile, w_step_tile = s[IntermediateStage].tile(h_tile, w_tile, x_factor=output_step_tile_size_h, y_factor=output_step_tile_size_w)
+    # s[IntermediateStage].reorder(n, ho, wo, inter_oc, h_step, w_step, h_step_tile, w_step_tile, inter_ic)
+    # vthz = s[IntermediateStage].fuse(h_step, w_step)
+    # s[IntermediateStage].bind(h_step_tile, thread_z)
+    # s[IntermediateStage].bind(w_step_tile, thread_y)
+    # s[IntermediateStage].bind(inter_ic, thread_x)
+    # s[IntermediateStage].bind(vthz, vthread_z)
     # ---
-    # s[IntermediateStage].reorder(n, inter_oc, h_step, w_step, h_step_tile, w_step_tile, inter_ic, ho, wo)
-    # ---
-    vthz = s[IntermediateStage].fuse(h_step, w_step)
-    s[IntermediateStage].bind(h_step_tile, thread_z)
-    s[IntermediateStage].bind(w_step_tile, thread_y)
+    thz, h_tile = s[IntermediateStage].split(h, nparts=num_thread_z)
+    thy, h_tile = s[IntermediateStage].split(h_tile, nparts=num_thread_y)
+    vthy, w_tile = s[IntermediateStage].split(w, nparts=num_vthread_y)
+    s[IntermediateStage].reorder(n, inter_oc, vthy, thz, thy, inter_ic, h_tile, w_tile)
+    s[IntermediateStage].bind(vthy, vthread_y)
+    s[IntermediateStage].bind(thz, thread_z)
+    s[IntermediateStage].bind(thy, thread_y)
     s[IntermediateStage].bind(inter_ic, thread_x)
-    s[IntermediateStage].bind(vthz, vthread_z)
+    # ---
 
     ######## Intermediate output local accumulator
     s[ConvLocalAccumulator].compute_at(s[IntermediateStage], inter_ic)
@@ -178,13 +187,15 @@ def schedule_conv_conv_fused_nhwc(outs, stages, params, bn_relu1=None, bn_relu2=
     # # s[ConvLocalAccumulator].bind(ic, thread_x)
     # # s[ConvLocalAccumulator].bind(w_step_tile, thread_y)
     # # s[ConvLocalAccumulator].bind(h_step_tile, thread_z)
+    # s[ConvLocalAccumulator].unroll(h)
+    s[ConvLocalAccumulator].unroll(w)
 
     if bn_relu1 is not None:
         s[ScaleL_1].compute_at(s[IntermediateStage], n)
         s[ShiftL_1].compute_at(s[IntermediateStage], n)
 
     # ######## Filter 1
-    s[FS_1].compute_at(s[ConvLocalAccumulator], oirc)
+    s[FS_1].compute_at(s[ConvLocalAccumulator], rx)
     h, w, i, o = s[FS_1].op.axis
     io = s[FS_1].fuse(i, o)
     io, iox = s[FS_1].split(io, factor=num_thread_x * 4)

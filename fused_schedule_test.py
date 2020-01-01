@@ -20,7 +20,10 @@ targets = {
     "cuda": {
         "key": "1050ti",
         "host": None,
-        "timeout": 10
+        "timeout": {
+            "depth_conv": 10,
+            "conv_conv": 500
+        }
     },
     # "llvm -mcpu=corei7-avx": {
     #     "key": "i7_7700K",
@@ -195,17 +198,17 @@ def get_schedule(parameters, auto_tvm=False, device="cuda", name='depth_conv'):
     return s, flatten_list(params)
 
 def verify_fused(workload_name,
-                            parameters,
-                            dtype="float32", 
-                            layout="NHWC", 
-                            print_ir=False, 
-                            print_src=False, 
-                            save_data=False, 
-                            export_code=False, 
-                            auto_tvm=False, 
-                            auto_tvm_skip_training=False, 
-                            auto_tvm_trials=20, 
-                            name='depth_conv'):
+                    parameters,
+                    dtype="float32", 
+                    layout="NHWC", 
+                    print_ir=False, 
+                    print_src=False, 
+                    save_data=False, 
+                    export_code=False, 
+                    auto_tvm=False, 
+                    auto_tvm_skip_training=False, 
+                    auto_tvm_trials=20, 
+                    name='depth_conv'):
     assert layout in ["NHWC", "NCHW", "NCHWc16", "NCHWc4"]
 
     ref_data = get_ref_data(parameters, dtype=dtype, layout=layout, save_data=save_data, name=name)
@@ -245,7 +248,7 @@ def verify_fused(workload_name,
                     builder=autotvm.LocalBuilder(),
                     runner=autotvm.RPCRunner(
                         targets[device]["key"], '0.0.0.0', 9190,
-                        number=100, repeat=3, timeout=targets[device]["timeout"], min_repeat_ms=100)
+                        number=10, repeat=3, timeout=targets[device]["timeout"][name], min_repeat_ms=100)
                 )
                 tuner = autotvm.tuner.XGBTuner(task)
                 tuner.tune(n_trial=auto_tvm_trials,
@@ -275,7 +278,7 @@ def verify_fused(workload_name,
             cuda_code = func.imported_modules[0].get_source()
             write_code(cuda_code, "generated_kernels/kernel_{}_{}.cuh".format(name, workload_name))
 
-        timer_1 = func.time_evaluator(func.entry_name, ctx, number=1000)
+        timer_1 = func.time_evaluator(func.entry_name, ctx, number=10)
         tcost_1 = timer_1(*nd_arrays).mean
         # np.testing.assert_allclose(nd_arrays[-1].asnumpy(), ref_data[-1], rtol=1e-3)
         d = ~np.isclose(nd_arrays[-1].asnumpy(), ref_data[-1], rtol=1e-3)
@@ -306,9 +309,9 @@ if __name__ == "__main__":
                             parameters,
                             print_ir=False,
                             print_src=False,
-                            save_data=True,
+                            save_data=False,
                             export_code=False,
                             auto_tvm=True,
-                            auto_tvm_skip_training=True,
-                            auto_tvm_trials=2000,
+                            auto_tvm_skip_training=False,
+                            auto_tvm_trials=40,
                             name=t)
