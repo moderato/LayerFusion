@@ -41,19 +41,24 @@ def schedule_conv_conv_fused_nhwc(outs, stages, params, bn_relu1=None, bn_relu2=
     output_step_tile_size_w = 2
     step_num_h = 2
     step_num_w = 2
-    reduce_split1 = 8
-    reduce_split2 = 8
+    reduce_split1 = 4
+    reduce_split2 = 4
     input_reuse = 2
     intermediate_reuse = 4
+    intermediate_block_split = 2
+    output_block_split = 2
     num_thread_x = 32
     # --------------------
     output_tile_size_h = output_step_tile_size_h * step_num_h
     output_tile_size_w = output_step_tile_size_w * step_num_w
     num_thread_y = output_step_tile_size_w
     num_thread_z = output_step_tile_size_h
-    num_vthread_z = step_num_h * step_num_w
-    num_vthread_y = 1
+    # num_vthread_z = step_num_h * step_num_w
+    num_vthread_z = step_num_h
+    num_vthread_y = step_num_w
     num_vthread_x = 32
+    num_vthread_w = 32
+    num_vthread_u = 32
     # --------------------
 
     ######## Input data, weights, BN, etc
@@ -97,38 +102,71 @@ def schedule_conv_conv_fused_nhwc(outs, stages, params, bn_relu1=None, bn_relu2=
     vthread_x = tvm.thread_axis((0, num_vthread_x), "vthread", name="vthread_x")
     vthread_y = tvm.thread_axis((0, num_vthread_y), "vthread", name="vthread_y")
     vthread_z = tvm.thread_axis((0, num_vthread_z), "vthread", name="vthread_z")
+    vthread_w = tvm.thread_axis((0, num_vthread_w), "vthread", name="vthread_w")
+    vthread_u = tvm.thread_axis((0, num_vthread_u), "vthread", name="vthread_u")
 
     ######## Global output
     n, h, w, c = s[OutputStage].op.axis
+    # ---
     oc, thx = s[OutputStage].split(c, factor=num_thread_x)
     recompute, reuse = s[OutputStage].split(oc, factor=intermediate_reuse)
     ho, wo, h_tile, w_tile = s[OutputStage].tile(h, w, x_factor=output_tile_size_h, y_factor=output_tile_size_w)
-    thz, h_tile = s[OutputStage].split(h_tile, nparts=num_thread_z)
-    thy, h_tile = s[OutputStage].split(h_tile, nparts=num_thread_y)
-    vthy, w_tile = s[OutputStage].split(w_tile, nparts=num_vthread_y)
-    s[OutputStage].reorder(n, ho, wo, recompute, reuse, vthy, thz, thy, thx, h_tile, w_tile)
+    thz, h = s[OutputStage].split(h_tile, nparts=num_thread_z)
+    vthz, h = s[OutputStage].split(h, nparts=num_vthread_z)
+    thy, w = s[OutputStage].split(w_tile, nparts=num_thread_y)
+    vthy, w = s[OutputStage].split(w, nparts=num_vthread_y)
+    s[OutputStage].reorder(n, ho, wo, recompute, reuse, vthz, vthy, thz, thy, thx, h, w)
     fused_blx = s[OutputStage].fuse(n, ho, wo, recompute)
     s[OutputStage].bind(fused_blx, block_x)
-    s[OutputStage].bind(reuse, vthread_x)
+    s[OutputStage].bind(vthz, vthread_z)
     s[OutputStage].bind(vthy, vthread_y)
+    s[OutputStage].bind(reuse, vthread_x)
     s[OutputStage].bind(thz, thread_z)
     s[OutputStage].bind(thy, thread_y)
     s[OutputStage].bind(thx, thread_x)
+    global_thx = thx
+    # ---
+
+    # ---
 
     ######## Local output
+    # ---
     s[OL].compute_at(s[OutputStage], thx)
     ry, rx, rc = s[OL].op.reduce_axis
     orc, irc = s[OL].split(rc, factor=num_thread_x)
     oirc, iirc = s[OL].split(irc, factor=reduce_split2)
+    oorc, iorc = s[OL].split(orc, factor=output_block_split)
     n, h, w, c = s[OL].op.axis
-    s[OL].reorder(n, orc, oirc, ry, rx, iirc, h, w, c)
-
-    if bn_relu2 is not None:
-        s[ScaleL_2].compute_at(s[OutputStage], thx)
-        s[ShiftL_2].compute_at(s[OutputStage], thx)
-
-    ######## Filter 2
+    s[OL].reorder(n, oorc, iorc, oirc, ry, rx, iirc, h, w, c)
     # ---
+    # s[OL].compute_root()
+    # s[OL].compute_at(s[OutputStage], thx)
+    # ry, rx, rc = s[OL].op.reduce_axis
+    # n, h, w, c = s[OL].op.axis
+    # orc, irc = s[OL].split(rc, factor=num_thread_x)
+    # oirc, iirc = s[OL].split(irc, factor=reduce_split1)
+    # oorc, iorc = s[OL].split(orc, factor=intermediate_block_split)
+    # s[OL].reorder(n, oorc, iorc, oirc, ry, rx, iirc, h, w, c)
+    # oc, thx = s[OL].split(c, factor=num_thread_x)
+    # recompute, reuse = s[OL].split(oc, factor=intermediate_reuse)
+    # thz, h = s[OL].split(h, nparts=num_thread_z)
+    # vthz, h = s[OL].split(h, nparts=num_vthread_z)
+    # thy, w = s[OL].split(w, nparts=num_thread_y)
+    # vthy, w = s[OL].split(w, nparts=num_vthread_y)
+    # s[OL].reorder(n, recompute, reuse, vthz, vthy, thz, thy, thx, h, w)
+    # s[OL].bind(vthz, vthread_z)
+    # s[OL].bind(vthy, vthread_y)
+    # s[OL].bind(reuse, vthread_x)
+    # s[OL].bind(thz, thread_z)
+    # s[OL].bind(thy, thread_y)
+    # s[OL].bind(thx, thread_x)
+    # ---
+
+    # if bn_relu2 is not None:
+    #     s[ScaleL_2].compute_at(s[OutputStage], thx)
+    #     s[ShiftL_2].compute_at(s[OutputStage], thx)
+
+    # ######## Filter 2
     s[FS_2].compute_at(s[OL], rx)
     h, w, i, o = s[FS_2].op.axis
     io = s[FS_2].fuse(i, o)
@@ -141,81 +179,109 @@ def schedule_conv_conv_fused_nhwc(outs, stages, params, bn_relu1=None, bn_relu2=
     s[FS_2].bind(iox, thread_x)
     s[FS_2].bind(ioy, thread_y)
     s[FS_2].vectorize(io4)
-    # ---
-    # s[FS_2].compute_at(s[OL], oirc)
-    # ---
 
-    ######## Intermediate output in shared memory
-    s[IntermediateStage].compute_at(s[OL], orc)
+    # ######## Intermediate output in shared memory
+    # s[IntermediateStage].compute_at(s[OL], iorc)
     n, h, w, c = s[IntermediateStage].op.axis
-    inter_oc, inter_ic = s[IntermediateStage].split(c, factor=num_thread_x)
-    # ho, wo, h_tile, w_tile = s[IntermediateStage].tile(h, w, x_factor=output_tile_size_h, y_factor=output_tile_size_w)
     # ---
-    # h_step, w_step, h_step_tile, w_step_tile = s[IntermediateStage].tile(h_tile, w_tile, x_factor=output_step_tile_size_h, y_factor=output_step_tile_size_w)
-    # s[IntermediateStage].reorder(n, ho, wo, inter_oc, h_step, w_step, h_step_tile, w_step_tile, inter_ic)
-    # vthz = s[IntermediateStage].fuse(h_step, w_step)
-    # s[IntermediateStage].bind(h_step_tile, thread_z)
-    # s[IntermediateStage].bind(w_step_tile, thread_y)
-    # s[IntermediateStage].bind(inter_ic, thread_x)
+    oc, thx = s[IntermediateStage].split(c, factor=num_thread_x)
+    # recompute, reuse = s[IntermediateStage].split(oc, factor=input_reuse)
+    # thz, h = s[IntermediateStage].split(h, nparts=num_thread_z)
+    # vthz, h = s[IntermediateStage].split(h, nparts=num_vthread_z)
+    # thy, w = s[IntermediateStage].split(w, nparts=num_thread_y)
+    # vthy, w = s[IntermediateStage].split(w, nparts=num_vthread_y)
+    # s[IntermediateStage].reorder(n, recompute, reuse, vthz, vthy, thz, thy, thx, h, w)
     # s[IntermediateStage].bind(vthz, vthread_z)
+    # s[IntermediateStage].bind(vthy, vthread_y)
+    # s[IntermediateStage].bind(reuse, vthread_w)
+    # s[IntermediateStage].bind(thz, thread_z)
+    # s[IntermediateStage].bind(thy, thread_y)
+    # s[IntermediateStage].bind(thx, thread_x)
     # ---
-    thz, h_tile = s[IntermediateStage].split(h, nparts=num_thread_z)
-    thy, h_tile = s[IntermediateStage].split(h_tile, nparts=num_thread_y)
-    vthy, w_tile = s[IntermediateStage].split(w, nparts=num_vthread_y)
-    s[IntermediateStage].reorder(n, inter_oc, vthy, thz, thy, inter_ic, h_tile, w_tile)
+    thz, h = s[IntermediateStage].split(h, nparts=num_thread_z)
+    vthz, h = s[IntermediateStage].split(h, nparts=num_vthread_z)
+    thy, w = s[IntermediateStage].split(w, nparts=num_thread_y)
+    vthy, w = s[IntermediateStage].split(w, nparts=num_vthread_y)
+    s[IntermediateStage].reorder(n, oc, vthz, vthy, thz, thy, thx, h, w)
+    s[IntermediateStage].bind(vthz, vthread_z)
     s[IntermediateStage].bind(vthy, vthread_y)
     s[IntermediateStage].bind(thz, thread_z)
     s[IntermediateStage].bind(thy, thread_y)
-    s[IntermediateStage].bind(inter_ic, thread_x)
+    # s[IntermediateStage].bind(oc, vthread_w)
+    s[IntermediateStage].bind(thx, thread_x)
+    # ---
+    # oc, thx = s[IntermediateStage].split(c, factor=num_thread_x)
     # ---
 
-    ######## Intermediate output local accumulator
-    s[ConvLocalAccumulator].compute_at(s[IntermediateStage], inter_ic)
+    # ######## Intermediate output local accumulator
+    s[ConvLocalAccumulator].compute_root()
+    # s[ConvLocalAccumulator].compute_at(s[OutputStage], global_thx)
+    # s[ConvLocalAccumulator].compute_at(s[IntermediateStage], n)
     ry, rx, rc = s[ConvLocalAccumulator].op.reduce_axis
-    nl, h, w, c = s[ConvLocalAccumulator].op.axis
-    # oc, ic = s[ConvLocalAccumulator].split(c, factor=num_thread_x)
-    # recompute, reuse = s[ConvLocalAccumulator].split(oc, factor=input_reuse)
+    n, h, w, c = s[ConvLocalAccumulator].op.axis
     orc, irc = s[ConvLocalAccumulator].split(rc, factor=num_thread_x)
     oirc, iirc = s[ConvLocalAccumulator].split(irc, factor=reduce_split1)
+    oorc, iorc = s[ConvLocalAccumulator].split(orc, factor=intermediate_block_split)
+    oc, thx = s[ConvLocalAccumulator].split(c, factor=num_thread_x)
+    recompute, reuse = s[ConvLocalAccumulator].split(oc, factor=input_reuse)
+    thz, h = s[ConvLocalAccumulator].split(h, nparts=num_thread_z)
+    vthz, h = s[ConvLocalAccumulator].split(h, nparts=num_vthread_z)
+    thy, w = s[ConvLocalAccumulator].split(w, nparts=num_thread_y)
+    vthy, w = s[ConvLocalAccumulator].split(w, nparts=num_vthread_y)
+    s[ConvLocalAccumulator].reorder(n, recompute, oorc, iorc, oirc, ry, rx, iirc, reuse, vthz, vthy, thz, thy, thx, h, w)
+    s[ConvLocalAccumulator].bind(vthz, vthread_z)
+    s[ConvLocalAccumulator].bind(vthy, vthread_y)
+    s[ConvLocalAccumulator].bind(thz, thread_z)
+    s[ConvLocalAccumulator].bind(thy, thread_y)
+    s[ConvLocalAccumulator].bind(thx, thread_x)
     # # ---
-    # # h_step, w_step, h_step_tile, w_step_tile = s[ConvLocalAccumulator].tile(h, w, x_factor=output_step_tile_size_h, y_factor=output_step_tile_size_w)
-    # # s[ConvLocalAccumulator].reorder(nl, orc, recompute, reuse, oirc, ry, rx, iirc, h_step, w_step, h_step_tile, w_step_tile, ic)
-    # # vthz = s[ConvLocalAccumulator].fuse(h_step, w_step)
-    # # s[ConvLocalAccumulator].bind(vthz, vthread_z)
-    # # ---
-    s[ConvLocalAccumulator].reorder(nl, orc, oirc, ry, rx, iirc, h, w, c)
-    # # s[ConvLocalAccumulator].bind(ic, thread_x)
-    # # s[ConvLocalAccumulator].bind(w_step_tile, thread_y)
-    # # s[ConvLocalAccumulator].bind(h_step_tile, thread_z)
-    # s[ConvLocalAccumulator].unroll(h)
-    s[ConvLocalAccumulator].unroll(w)
+    s[ConvLocalAccumulator].bind(reuse, vthread_w)
+    s[ConvLocalAccumulator].bind(recompute, vthread_u)
+    # # s[ConvLocalAccumulator].bind(thx, thread_x)
+    # # ooc, ioc = s[ConvLocalAccumulator].split(oc, factor=2)
+    # # s[ConvLocalAccumulator].reorder(n, ooc, ioc, h, w, thx)
 
-    if bn_relu1 is not None:
-        s[ScaleL_1].compute_at(s[IntermediateStage], n)
-        s[ShiftL_1].compute_at(s[IntermediateStage], n)
+    # if bn_relu1 is not None:
+    #     s[ScaleL_1].compute_at(s[IntermediateStage], n)
+    #     s[ShiftL_1].compute_at(s[IntermediateStage], n)
 
-    # ######## Filter 1
-    s[FS_1].compute_at(s[ConvLocalAccumulator], rx)
-    h, w, i, o = s[FS_1].op.axis
-    io = s[FS_1].fuse(i, o)
-    io, iox = s[FS_1].split(io, factor=num_thread_x * 4)
-    ioz, io = s[FS_1].split(io, nparts=num_thread_z)
-    ioy, io = s[FS_1].split(io, nparts=num_thread_y)
-    iox, io4 = s[FS_1].split(iox, factor=4)
-    s[FS_1].reorder(h, w, io, ioz, ioy, iox, io4)
-    s[FS_1].bind(ioz, thread_z)
-    s[FS_1].bind(iox, thread_x)
-    s[FS_1].bind(ioy, thread_y)
-    s[FS_1].vectorize(io4)
+    # # ######## Filter 1
+    # s[FS_1].compute_at(s[ConvLocalAccumulator], rx)
+    # h, w, i, o = s[FS_1].op.axis
+    # io = s[FS_1].fuse(i, o)
+    # io, iox = s[FS_1].split(io, factor=num_thread_x * 4)
+    # ioz, io = s[FS_1].split(io, nparts=num_thread_z)
+    # ioy, io = s[FS_1].split(io, nparts=num_thread_y)
+    # iox, io4 = s[FS_1].split(iox, factor=4)
+    # s[FS_1].reorder(h, w, io, ioz, ioy, iox, io4)
+    # s[FS_1].bind(ioz, thread_z)
+    # s[FS_1].bind(iox, thread_x)
+    # s[FS_1].bind(ioy, thread_y)
+    # s[FS_1].vectorize(io4)
 
-    ####### Shared Input
-    s[PaddedSharedInput].compute_at(s[ConvLocalAccumulator], orc)
-    n, h, w, c = s[PaddedSharedInput].op.axis
-    co, ci = s[PaddedSharedInput].split(c, factor=num_thread_x)
-    ho, wo, h_tile, w_tile = s[PaddedSharedInput].tile(h, w, x_factor=output_step_tile_size_h, y_factor=output_step_tile_size_w)
-    s[PaddedSharedInput].reorder(co, n, ho, wo, h_tile, w_tile, ci)
-    s[PaddedSharedInput].bind(h_tile, thread_z)
-    s[PaddedSharedInput].bind(w_tile, thread_y)
-    s[PaddedSharedInput].bind(ci, thread_x)
+    # ####### Shared Input
+    # # s[PaddedSharedInput].compute_at(s[ConvLocalAccumulator], oorc)
+    # s[PaddedSharedInput].compute_at(s[ConvLocalAccumulator], iorc)
+
+    # # h, w, i, o = s[FS_2].op.axis
+    # # io = s[FS_2].fuse(i, o)
+    # # io, iox = s[FS_2].split(io, factor=num_thread_x * 4)
+    # # ioz, io = s[FS_2].split(io, nparts=num_thread_z)
+    # # ioy, io = s[FS_2].split(io, nparts=num_thread_y)
+    # # iox, io4 = s[FS_2].split(iox, factor=4)
+    # # s[FS_2].reorder(h, w, io, ioz, ioy, iox, io4)
+    # # s[FS_2].bind(ioz, thread_z)
+    # # s[FS_2].bind(iox, thread_x)
+    # # s[FS_2].bind(ioy, thread_y)
+    # # s[FS_2].vectorize(io4)
+
+    # n, h, w, c = s[PaddedSharedInput].op.axis
+    # # hwc = s[PaddedSharedInput].fuse(h, w, c)
+    # co, ci = s[PaddedSharedInput].split(c, factor=num_thread_x)
+    # ho, wo, h_tile, w_tile = s[PaddedSharedInput].tile(h, w, x_factor=output_step_tile_size_h, y_factor=output_step_tile_size_w)
+    # s[PaddedSharedInput].reorder(co, n, ho, wo, h_tile, w_tile, ci)
+    # s[PaddedSharedInput].bind(h_tile, thread_z)
+    # s[PaddedSharedInput].bind(w_tile, thread_y)
+    # s[PaddedSharedInput].bind(ci, thread_x)
 
     return s

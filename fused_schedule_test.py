@@ -1,6 +1,6 @@
 import tvm, topi
 import topi.testing
-import os, logging, sys
+import os, logging, sys, argparse
 import numpy as np
 import topi.tag as tag
 from scipy import signal
@@ -12,6 +12,8 @@ from depth_conv_fused_schedule import *
 from depth_conv_fused_schedule_auto import *
 from conv_conv_fused_schedule import *
 from conv_conv_fused_schedule_auto import *
+from block_fused_schedule import *
+from block_fused_schedule_auto import *
 from general_fused_compute import *
 from helper import *
 
@@ -32,51 +34,6 @@ targets = {
     # }
 }
 
-def get_workloads():
-    workloads = {}
-    conv_conv_workloads = {}
-    depth_conv_workloads = {}
-
-    ##################### Conv conv workloads ######################
-    # AlexNet
-    # conv_conv_workloads['alex_2_3'] = (1, 55, 55, 96, 3, 256, 2, False, None, 3, 384, 2, False, None) # / 701.73 us
-    # conv_conv_workloads['alex_3_4'] = (1, 27, 27, 256, 3, 384, 2, False, None, 3, 384, 2, False, None) # / 705.09 us
-    # conv_conv_workloads['alex_4_5'] = (1, 13, 13, 384, 3, 384, 1, False, None, 3, 256, 1, False, None) # / 630.92 us
-
-    # VGG
-    conv_conv_workloads['vgg_3_4'] = (1, 112, 112, 128, 3, 128, 1, False, None, 3, 128, 1, False, None) # / 2049.59 us
-    # conv_conv_workloads['vgg_5_6'] = (1, 56, 56, 256, 3, 256, 1, False, None, 3, 256, 1, False, None) # / 2519.97 us
-    # conv_conv_workloads['vgg_8_9'] = (1, 28, 28, 512, 3, 128, 1, False, None, 3, 512, 1, False, None) # / 877.67 us
-    # conv_conv_workloads['vgg_11_12'] = (1, 14, 14, 512, 3, 128, 1, False, None, 3, 512, 1, False, None) # / 359.19 us
-    ################################################################
-
-    ##################### Depth conv workloads #####################
-    # # MobileNet-v1
-    # depth_conv_workloads['mv1_1'] = (1, 112, 112, 32, 3, 1, 1, True, None, 1, 64, 1, False, None) # 61.28 us / 183.70us
-    # depth_conv_workloads['mv1_2'] = (1, 112, 112, 64, 3, 1, 2, True, None, 1, 128, 1, False, None) # 91.97 us / 124.78 us
-    # depth_conv_workloads['mv1_3'] = (1, 56, 56, 128, 3, 1, 1, True, None, 1, 128, 1, False, None) # 74.98 us / 134.67 us / 108.12 us (4, 4, 16, 4)
-    # depth_conv_workloads['mv1_4'] = (1, 56, 56, 128, 3, 1, 2, True, None, 1, 256, 1, False, None) # 74.40 us / 75.01 us
-    # depth_conv_workloads['mv1_5'] = (1, 28, 28, 256, 3, 1, 1, True, None, 1, 256, 1, False, None) # 86.20 us / 110.06 us / 117.21 us (2, 2, 8, 8)
-    # depth_conv_workloads['mv1_6'] = (1, 28, 28, 256, 3, 1, 2, True, None, 1, 512, 1, False, None) # 76.81 us / 64.22 us
-    # depth_conv_workloads['mv1_7-11'] = (1, 14, 14, 512, 3, 1, 1, True, None, 1, 512, 1, False, None) # 107.26 us / 112.37 us
-    # depth_conv_workloads['mv1_12'] = (1, 14, 14, 512, 3, 1, 2, True, None, 1, 1024, 1, False, None) # 117.29 us / 164.36 us
-    # depth_conv_workloads['mv1_13'] = (1, 7, 7, 1024, 3, 1, 1, True, None, 1, 1024, 1, False, None) # 129.61 us / 220.23 us
-
-    # # MobileNet-v2
-    # depth_conv_workloads['mv2_1'] = (1, 112, 112, 32, 3, 1, 1, True, None, 1, 16, 1, False, None) # 38.19 us / 123.81 us
-    # depth_conv_workloads['mv2_2'] = (1, 112, 112, 96, 3, 1, 2, True, None, 1, 24, 1, False, None) # 129.60 us / 117.13 us
-    # depth_conv_workloads['mv2_3'] = (1, 56, 56, 144, 3, 1, 2, True, None, 1, 32, 1, False, None) # 46.01 us / 53.14 us
-    # depth_conv_workloads['mv2_4'] = (1, 28, 28, 192, 3, 1, 2, True, None, 1, 64, 1, False, None) # 15.57 us / 35.55 us
-    # depth_conv_workloads['mv2_5'] = (1, 14, 14, 384, 3, 1, 1, True, None, 1, 96, 1, False, None) # 37.07 us / 51.26 us
-    # depth_conv_workloads['mv2_6'] = (1, 14, 14, 576, 3, 1, 2, True, None, 1, 160, 1, False, None) # 86.82 us / 65.03 us
-    # depth_conv_workloads['mv2_7'] = (1, 7, 7, 960, 3, 1, 1, True, None, 1, 320, 1, False, None) # 104.16 us / 162.04 us
-    ################################################################
-
-    workloads['depth_conv'] = depth_conv_workloads
-    workloads['conv_conv'] = conv_conv_workloads
-
-    return workloads
-
 def write_code(code, fname):
     with open(fname, "w") as f:
         f.write(code)
@@ -91,7 +48,6 @@ def get_input_and_filters(p):
     Input = tvm.placeholder(input_shape, name='Input')
     Filter_1 = tvm.placeholder(filter_1_shape, name='Filter_1')
     Filter_2 = tvm.placeholder(filter_2_shape, name='Filter_2')
-    dtype = Input.dtype
 
     # For getting ref data
     placeholders = []
@@ -116,6 +72,7 @@ def get_input_and_filters(p):
 
 def get_ref_data(parameters, dtype="float32", layout="NHWC", save_data=False, name='depth_conv'):
     Input, Filters = get_input_and_filters(Parameters(parameters))
+    is_block = parameters[-1]
 
     # Pretending the input_data is some output_data from stage -1
     output_data = np.random.uniform(0.0, 0.1, size=get_const_tuple(Input.shape)).astype(dtype)
@@ -127,11 +84,13 @@ def get_ref_data(parameters, dtype="float32", layout="NHWC", save_data=False, na
         filter_data = np.random.uniform(0.0, 0.1, size=get_const_tuple(f.placeholder.shape)).astype(dtype)
         ref_data.append(filter_data)
 
+        input_data = np.copy(output_data)
+
         if f.depthwise:
-            output_data = topi.testing.depthwise_conv2d_python_nhwc(output_data, filter_data, stride=[f.stride, f.stride], padding=f.padding).astype(dtype)
+            output_data = topi.testing.depthwise_conv2d_python_nhwc(input_data, filter_data, stride=[f.stride, f.stride], padding=f.padding).astype(dtype)
             params_name.append("filter_{}_d".format(idx+1)) # Mark depthwise filter
         else: # Normal convolution
-            output_data = topi.testing.conv2d_nhwc_python(output_data, filter_data, f.stride, f.padding).astype(dtype)
+            output_data = topi.testing.conv2d_nhwc_python(input_data, filter_data, f.stride, f.padding).astype(dtype)
             params_name.append("filter_{}".format(idx+1))
 
         if f.bn_relu is not None:
@@ -145,6 +104,11 @@ def get_ref_data(parameters, dtype="float32", layout="NHWC", save_data=False, na
             relu_scipy = np.zeros(shape=(n, h, w, oc))
             for c in range(oc):
                 scale_shift_scipy[:,:,:,c] = output_data[:,:,:,c] * scale_np[c] + shift_np[c]
+
+                # For ResNet / DenseNet blocks, etc
+                if is_block:
+                    scale_shift_scipy[:,:,:,c] = scale_shift_scipy[:,:,:,c] + input_data[:,:,:,c]
+
                 relu_scipy[:,:,:,c] = np.maximum(scale_shift_scipy[:,:,:,c], 0)
                 if f.bn_relu == "relu6":
                     relu_scipy[:,:,:,c] = np.minimum(relu_scipy[:,:,:,c], 6).astype(dtype)
@@ -181,17 +145,27 @@ def get_schedule(parameters, auto_tvm=False, device="cuda", name='depth_conv'):
 
     p = Parameters(parameters)
     Input, Filters = get_input_and_filters(p)
+    is_block = p.get_is_block()
 
     # Get the graph
     # stages: all output stages in the graph
     # params: inputs & outputs of the graph, including filters, BNs, etc
-    stages, params = fused_convs(Input, Filters)
+    stages, params = fused_convs(Input, Filters, is_block=is_block)
     output_stage = stages[-1][-1]
 
+    # TODO: Don't use workload name to select the schedule
     if auto_tvm:
-        f = schedule_depth_conv_fused_nhwc_auto if name == 'depth_conv' else schedule_conv_conv_fused_nhwc_auto # conv_conv
+        f = schedule_depth_conv_fused_nhwc_auto \
+            if name == 'depth_conv' else \
+                (schedule_conv_conv_fused_nhwc_auto \
+                    if name == 'conv_conv' else \
+                        schedule_block_fused_nhwc_auto) # resnet block, etc
     else:
-        f = schedule_depth_conv_fused_nhwc if name == 'depth_conv' else schedule_conv_conv_fused_nhwc # conv_conv
+        f = schedule_depth_conv_fused_nhwc \
+            if name == 'depth_conv' else \
+                (schedule_conv_conv_fused_nhwc \
+                    if name == 'conv_conv' else \
+                        schedule_block_fused_nhwc) # resnet block, etc
 
     s = f(output_stage, stages, params,
             bn_relu1=p.get_f1_bn_relu(), bn_relu2=p.get_f2_bn_relu())
@@ -201,7 +175,7 @@ def verify_fused(workload_name,
                     parameters,
                     dtype="float32", 
                     layout="NHWC", 
-                    print_ir=False, 
+                    no_print_ir=False, 
                     print_src=False, 
                     save_data=False, 
                     export_code=False, 
@@ -222,13 +196,6 @@ def verify_fused(workload_name,
             ctx = tvm.cpu()
         else: # cuda
             ctx = tvm.context(device, 0)
-
-        nd_arrays = []
-        for idx, array in enumerate(ref_data):
-            if idx != len(ref_data) - 1: # Append data to nd_arrays
-                nd_arrays.append(tvm.nd.array(array, ctx))
-            else: # Leave the last nd_array as all-zero
-                nd_arrays.append(tvm.nd.array(np.zeros(get_const_tuple(array.shape), dtype=dtype), ctx)) # Append 0 output data
 
         if auto_tvm:
             log_name = 'logs/{}_fused_{}.log'.format(name, workload_name)
@@ -269,7 +236,7 @@ def verify_fused(workload_name,
             with tvm.target.create(device):
                 s, flatten_params = get_schedule(parameters, auto_tvm, device, name)
 
-        if print_ir:
+        if not no_print_ir:
             print(tvm.lower(s, flatten_params, simple_mode=True))
         func = tvm.build(s, flatten_params, device, name=("{}_fused_2".format(name)))
         if print_src:
@@ -277,6 +244,14 @@ def verify_fused(workload_name,
         if export_code:
             cuda_code = func.imported_modules[0].get_source()
             write_code(cuda_code, "generated_kernels/kernel_{}_{}.cuh".format(name, workload_name))
+
+        # Prepare data
+        nd_arrays = []
+        for idx, array in enumerate(ref_data):
+            if idx != len(ref_data) - 1: # Append data to nd_arrays
+                nd_arrays.append(tvm.nd.array(array, ctx))
+            else: # Leave the last nd_array as all-zero
+                nd_arrays.append(tvm.nd.array(np.zeros(get_const_tuple(array.shape), dtype=dtype), ctx)) # Append 0 output data
 
         timer_1 = func.time_evaluator(func.entry_name, ctx, number=10)
         tcost_1 = timer_1(*nd_arrays).mean
@@ -300,6 +275,19 @@ if __name__ == "__main__":
     # terminal 2: python -m tvm.exec.rpc_server --tracker=0.0.0.0:9190 --key=1050ti
     # terminal 3: run this code
 
+    def get_options():
+        parser = argparse.ArgumentParser(description="Parses command.")
+        parser.add_argument("-n", "--no_print_ir", action="store_true", help="Don't print IR code.")
+        parser.add_argument("-s", "--print_src", action="store_true", help="Print source code.")
+        parser.add_argument("-d", "--save_data", action="store_true", help="Save numpy data as npy files.")
+        parser.add_argument("-c", "--export_code", action="store_true", help="Export generated kernel code.")
+        parser.add_argument("-a", "--auto_tvm", action="store_true", help="AutoTVM for auto tuning.")
+        parser.add_argument("-k", "--auto_tvm_skip_training", action="store_true", help="Run AutoTVM tuned kernel.")
+        parser.add_argument("-t", "--auto_tvm_trials", type=int, default=20, help="Number of AutoTVM trials")
+        options = parser.parse_args()
+        return options
+
+    options = get_options()
     workloads = get_workloads()
 
     for t, workload in workloads.items():
@@ -307,11 +295,11 @@ if __name__ == "__main__":
             print(workload_name, parameters)
             verify_fused(workload_name,
                             parameters,
-                            print_ir=False,
-                            print_src=False,
-                            save_data=False,
-                            export_code=False,
-                            auto_tvm=True,
-                            auto_tvm_skip_training=False,
-                            auto_tvm_trials=40,
+                            no_print_ir=options.no_print_ir,
+                            print_src=options.print_src,
+                            save_data=options.save_data,
+                            export_code=options.export_code,
+                            auto_tvm=options.auto_tvm,
+                            auto_tvm_skip_training=options.auto_tvm_skip_training,
+                            auto_tvm_trials=options.auto_tvm_trials,
                             name=t)

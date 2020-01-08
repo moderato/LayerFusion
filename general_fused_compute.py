@@ -4,11 +4,11 @@ import tvm
 from topi.nn.dilate import dilate
 from topi.nn.pad import pad
 from topi.nn.util import get_pad_tuple
-from topi.util import simplify
+from topi.util import simplify, get_const_tuple
 
 from helper import *
 
-def fused_convs(input_data, filters, resnet_block=False):
+def fused_convs(input_data, filters, is_block=False):
 	out_dtype = input_data.dtype
 
 	Input = None
@@ -18,7 +18,7 @@ def fused_convs(input_data, filters, resnet_block=False):
 	conv_count = 0
 	depthwise_count = 0
 
-	for f in filters:
+	for idx, f in enumerate(filters):
 		Input = stages[-1][-1]
 		Filter = f.placeholder
 		layout = f.layout
@@ -60,9 +60,9 @@ def fused_convs(input_data, filters, resnet_block=False):
 		out_height = simplify((in_height - dilated_kernel_h + pad_top + pad_down) // stride_h + 1)
 		out_width = simplify((in_width - dilated_kernel_w + pad_left + pad_right) // stride_w + 1)
 
-		if f.kernel > 1:
+		# Padding
+		if kernel > 1:
 			# print("Padding is needed!")
-
 			pad_before = [0, pad_top, pad_left, 0]
 			pad_after = [0, pad_down, pad_right, 0]
 
@@ -73,14 +73,12 @@ def fused_convs(input_data, filters, resnet_block=False):
 			# Update Input
 			Input = PaddedInput
 			batch, in_height, in_width, in_channel = Input.shape
-
-		if not depthwise:
-			rc = tvm.reduce_axis((0, in_channel), name='rc')
-		if kernel > 1:
+			# Reduce axis
 			ry = tvm.reduce_axis((0, kernel_h), name='ry')
 			rx = tvm.reduce_axis((0, kernel_w), name='rx')
-
+			
 		if not depthwise: # Normal convolution
+			rc = tvm.reduce_axis((0, in_channel), name='rc')
 			if kernel > 1:
 				Output = tvm.compute(
 				(batch, out_height, out_width, out_channel),
@@ -125,38 +123,39 @@ def fused_convs(input_data, filters, resnet_block=False):
 								name='ScaleShift_{}_{}'.format(
 									'DepthwiseConv2d' if depthwise else 'Conv2d', number),
 								tag='scaleshift_nhwc')
+
+			tmp_params.append(Scale)
+			tmp_params.append(Shift)
+			tmp_stages.append(ScaleShift)
+
+		# If there's an elementwise add at the end, e.g. ResNet / DenseNet block
+		if is_block and (idx == len(filters)-1):
+			First = stages[0][0]
+			Last = tmp_stages[-1] # Output if bn_relu is None, ScaleShift if it's not None
+			assert sorted(get_const_tuple(First.shape)) == sorted(get_const_tuple(Last.shape)), "{} is not the same as {}".format(First.shape, Last.shape)
+			Output = tvm.compute(
+				(batch, out_height, out_width, out_channel),
+				lambda b, i, j, c: (First[b, i, j, c] + (Last[b, i, j, c])),
+				name='ElementwiseAddOutput_{}'.format(depthwise_count), tag="elem_nhwc").astype(out_dtype)
+			tmp_stages.append(Output)
+
+		if bn_relu is not None:
+			Last = tmp_stages[-1] # ScaleShift if it's not a block, Output is it's a block
 			if bn_relu == 'relu':
-				ReLU = tvm.compute(ScaleShift.shape, lambda *i: tvm.max(ScaleShift(*i), tvm.const(0, ScaleShift.dtype)),
+				ReLU = tvm.compute(Last.shape, lambda *i: tvm.max(Last(*i), tvm.const(0, Last.dtype)),
 								name='ReLU_{}_{}'.format(
 									'DepthwiseConv2d' if depthwise else 'Conv2d', number),
 								tag='relu_nhwc')
 			else: # 'relu6'
-				ReLU = tvm.compute(ScaleShift.shape, lambda *i: tvm.min(
-									tvm.max(ScaleShift(*i), tvm.const(0, ScaleShift.dtype)),
-									tvm.const(6, ScaleShift.dtype)),
+				ReLU = tvm.compute(Last.shape, lambda *i: tvm.min(
+									tvm.max(Last(*i), tvm.const(0, Last.dtype)),
+									tvm.const(6, Last.dtype)),
 								name='ReLU6_{}_{}'.format(
 									'DepthwiseConv2d' if depthwise else 'Conv2d', number),
 								tag='relu')
-
-			tmp_stages.append(ScaleShift)
 			tmp_stages.append(ReLU)
-			tmp_params.append(Scale)
-			tmp_params.append(Shift)
-
 		stages.append(tmp_stages)
 		params.append(tmp_params)
-
-	if resnet_block:
-		First = stages[0][0]
-		Last = stages[-1][-1]
-		assert (First.shape == Last.shape)
-		Output = tvm.compute(
-			(batch, out_height, out_width, out_channel),
-			lambda b, i, j, c: tvm.sum(
-				(First[b, i, j, c].astype(out_dtype) + 
-				(Last[b, i, j, c]).astype(out_dtype))),
-			name='ElementwiseAddOutput_{}'.format(depthwise_count), tag="elem_nhwc")
-		stages.append([Output])
 
 	params.append([stages[-1][-1]]) # Final output
 
