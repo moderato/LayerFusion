@@ -70,7 +70,12 @@ def get_input_and_filters(p):
 
     return Input, Filters
 
-def get_ref_data(parameters, dtype="float32", layout="NHWC", save_data=False, name='depth_conv'):
+def get_ref_data(workload_name,
+                    parameters, 
+                    dtype="float32", 
+                    layout="NHWC", 
+                    save_data=False, 
+                    name='depth_conv'):
     Input, Filters = get_input_and_filters(Parameters(parameters))
     is_block = parameters[-1]
 
@@ -122,19 +127,20 @@ def get_ref_data(parameters, dtype="float32", layout="NHWC", save_data=False, na
     if save_data:
         # Save ref data
         for i in range(0, len(ref_data)):
-            filename = "npy/{}_{}/".format(name, '_'.join(str(s) for s in Parameters(parameters).get_params()))
+            # filename = "npy/{}_{}/".format(name, '_'.join(str(s) for s in Parameters(parameters).get_params()))
+            filename = "npy/{}/".format(workload_name)
             if not os.path.exists(filename):
                 os.mkdir(filename)
             filename += params_name[i]
             # Transpose filter for cudnn: should be non-fortran order
             if layout == "NHWC":
+                np.save(filename, ref_data[i])
                 if "filter" in filename:
                     if "_d" in filename:
-                        np.save(filename, np.array(ref_data[i].transpose(2, 3, 0, 1), order='C'))
+                        np.save(filename+"_transposed", np.array(ref_data[i].transpose(2, 3, 0, 1), order='C'))
                     else:
-                        np.save(filename, np.array(ref_data[i].transpose(3, 2, 0, 1), order='C'))
+                        np.save(filename+"_transposed", np.array(ref_data[i].transpose(3, 2, 0, 1), order='C'))
                 else:
-                    np.save(filename, ref_data[i])
                     if len(ref_data[i].shape) == 4: # Don't need to save NCHW format scale and shift data
                         np.save(filename+"_NCHW", np.array(ref_data[i].transpose(0, 3, 1, 2), order='C'))
 
@@ -185,7 +191,7 @@ def verify_fused(workload_name,
                     name='depth_conv'):
     assert layout in ["NHWC", "NCHW", "NCHWc16", "NCHWc4"]
 
-    ref_data = get_ref_data(parameters, dtype=dtype, layout=layout, save_data=save_data, name=name)
+    ref_data = get_ref_data(workload_name, parameters, dtype=dtype, layout=layout, save_data=save_data, name=name)
 
     def check_device(device):
         if not tvm.module.enabled(device):
@@ -228,6 +234,10 @@ def verify_fused(workload_name,
             print("\nBest config:")
             print(best_config)
 
+            # export kernel launch config, e.g. thxyz, blxyz
+            output_shape = ref_data[0].shape
+            export_kernel_launch_config(workload_name, output_shape, best_config)
+
             # apply history best from log file
             with autotvm.apply_history_best(log_name):
                 with tvm.target.create(device):
@@ -238,12 +248,12 @@ def verify_fused(workload_name,
 
         if not no_print_ir:
             print(tvm.lower(s, flatten_params, simple_mode=True))
-        func = tvm.build(s, flatten_params, device, name=("{}_fused_2".format(name)))
+        func = tvm.build(s, flatten_params, device, name=("fused_2"))
         if print_src:
             print(func.imported_modules[0].get_source())
         if export_code:
             cuda_code = func.imported_modules[0].get_source()
-            write_code(cuda_code, "generated_kernels/kernel_{}_{}.cuh".format(name, workload_name))
+            write_code(cuda_code, "generated_kernels/{}.cuh".format(workload_name))
 
         # Prepare data
         nd_arrays = []
@@ -253,7 +263,7 @@ def verify_fused(workload_name,
             else: # Leave the last nd_array as all-zero
                 nd_arrays.append(tvm.nd.array(np.zeros(get_const_tuple(array.shape), dtype=dtype), ctx)) # Append 0 output data
 
-        timer_1 = func.time_evaluator(func.entry_name, ctx, number=10)
+        timer_1 = func.time_evaluator(func.entry_name, ctx, number=1000)
         tcost_1 = timer_1(*nd_arrays).mean
         # np.testing.assert_allclose(nd_arrays[-1].asnumpy(), ref_data[-1], rtol=1e-3)
         d = ~np.isclose(nd_arrays[-1].asnumpy(), ref_data[-1], rtol=1e-3)
@@ -289,6 +299,7 @@ if __name__ == "__main__":
 
     options = get_options()
     workloads = get_workloads()
+    # workloads = get_workloads_from_file()
 
     for t, workload in workloads.items():
         for workload_name, parameters in workload.items():
