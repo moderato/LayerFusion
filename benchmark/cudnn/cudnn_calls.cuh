@@ -428,6 +428,7 @@ void benchmark_cudnn(std::string workload_name,
     runtime_ms_2 += tmp_t_2 / REPEATITION;
     runtime_ms += tmp_t_2 / REPEATITION;
   }
+
   printf("Stage 1 runtime is %f us.\nStage 2 runtime is %f us.\nFusion runtime is %f us.\n", runtime_ms_1 * 1000, runtime_ms_2 * 1000, runtime_ms * 1000);
 
   // Verification

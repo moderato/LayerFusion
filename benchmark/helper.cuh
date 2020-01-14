@@ -10,7 +10,7 @@ void getKernelConfig(std::string workload_name,
                         int& thx, int& thy, int& thz, int& blx) {
     std::fstream fin;
 
-    std::string filename = "../generated_kernels/" + workload_name + "_config.csv";
+    std::string filename = "../generated_kernels/kernel_launch_config/" + workload_name + "_config.csv";
     fin.open(filename, std::ios::in);
 
     std::string line, word;
@@ -79,13 +79,22 @@ void benchmark_generated(std::string workload_name,
     int kernel_2_shape = kernel_2_height * kernel_2_width * kernel_2_in_channel * kernel_2_out_channel;
     int output_shape = output_batch * output_height * output_width * output_channel;
 
-    std::cout << input_shape << "," << kernel_1_shape << "," << kernel_2_shape << "," << output_shape << std::endl;
+#ifdef DEBUG
+    std::cout << "input_shape: (" << input_batch << ", " << input_height << ", " << input_width << ", " << input_channel << ")" << std::endl;
+    std::cout << "kernel_1_shape: (" << kernel_1_height << ", " << kernel_1_width << ", " << kernel_1_in_channel << ", " << kernel_1_out_channel_or_multiplier << ")" << std::endl;
+    std::cout << "kernel_2_shape: (" << kernel_2_height << ", " << kernel_2_width << ", " << kernel_2_in_channel << ", " << kernel_2_out_channel << ")" << std::endl;
+    std::cout << "output_shape: (" << output_batch << ", " << output_height << ", " << output_width << ", " << output_channel << ")" << std::endl;
+#endif
 
     // Get config for kernel launch
     int thx, thy, thz, blx;
     getKernelConfig(workload_name, thx, thy, thz, blx);
     dim3 block_dim(thx, thy, thz);
     dim3 grid_dim(blx, 1, 1);
+
+#ifdef DEBUG
+    std::cout << "Launch config: (" << thx << ", " << thy << ", " << thz << ", " << blx << ")"<< std::endl;
+#endif
 
     // GPU pointers
     float* d_input{nullptr};

@@ -235,7 +235,7 @@ def verify_fused(workload_name,
             print(best_config)
 
             # export kernel launch config, e.g. thxyz, blxyz
-            output_shape = ref_data[0].shape
+            output_shape = ref_data[-1].shape
             export_kernel_launch_config(workload_name, output_shape, best_config)
 
             # apply history best from log file
@@ -298,8 +298,8 @@ if __name__ == "__main__":
         return options
 
     options = get_options()
-    workloads = get_workloads()
-    # workloads = get_workloads_from_file()
+    # workloads = get_workloads()
+    workloads = get_workloads_from_file()
 
     for t, workload in workloads.items():
         for workload_name, parameters in workload.items():
