@@ -87,10 +87,10 @@ class Parameters:
 def flatten_list(lst):
 	return sum(([x] if not isinstance(x, list) else flatten_list(x) for x in lst), [])
 
-# workload_name=["depth_conv", "conv_conv", "block"]
-def get_workloads_from_file(workload_type=["depth_conv"]):
+# workload_types=["depth_conv", "conv_conv", "block"]
+def get_workloads_from_file(workload_types=["depth_conv"]):
     workloads = {}
-    for w in workload_type:
+    for w in workload_types:
         filename = "workloads/"+ w + "_workloads.csv"
         with open(filename , "r") as f:
             tmp = {}

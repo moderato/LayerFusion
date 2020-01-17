@@ -26,38 +26,62 @@ do
       ./benchmark "$line" 1 &> /tmp/runtime_cudnn.txt
       cudnn_runtime="$(cat /tmp/runtime_cudnn.txt | grep Fusion | awk '{ printf "%10s\n", $4 }')"
 
-      # Repeatition=1 for arithmetic intensity
+      # Repeatition=20 for arithmetic intensity
       nvcc -arch=sm_35 -std=c++11 -O2 \
         -I ${CUDA_HOME}/include \
         -L ${CUDA_HOME}/lib -L/usr/local/lib \
-        -D REPEATITION=1 \
+        -D REPEATITION=20 \
         benchmark.cu \
         -o benchmark \
         -lcnpy -lz -lcudnn -include ../generated_kernels/${workload_name}.cuh >& /dev/null
-      nvprof --metrics flop_count_sp --metrics dram_read_transactions --metrics dram_write_transactions --log-file /tmp/nvprof_generated.txt ./benchmark "$line" 0 >& /dev/null
+      nvprof --metrics flop_count_sp \
+              --metrics dram_read_transactions \
+              --metrics dram_write_transactions \
+              --metrics l2_read_transactions \
+              --metrics l2_write_transactions \
+              --log-file /tmp/nvprof_generated.txt \
+              ./benchmark "$line" 0 >& /dev/null
       total_dram_read="$(cat /tmp/nvprof_generated.txt | grep dram_read_transactions | awk '{ x=gensub("\t","","G",$9); printf x "+" } END{ print 0 }' | bc -l)"
       total_dram_write="$(cat /tmp/nvprof_generated.txt | grep dram_write_transactions | awk '{ x=gensub("\t","","G",$9); printf x "+" } END{ print 0 }' | bc -l)"
-      total_flop="$(cat /tmp/nvprof_generated.txt | grep flop_count_sp | awk '{ x=gensub("\t","","G",$9); printf x "+" } END{ print 0 }' | bc -l)"
-      generated_kernel_arithmetic_intensity="$( echo "scale=4; $total_flop * 1.0 / (($total_dram_read + $total_dram_write) * 32)" | bc)"
-      nvprof --metrics flop_count_sp --metrics dram_read_transactions --metrics dram_write_transactions --log-file /tmp/nvprof_cudnn.txt ./benchmark "$line" 1 >& /dev/null
+      total_l2_read="$(cat /tmp/nvprof_generated.txt | grep l2_read_transactions | awk '{ x=gensub("\t","","G",$8); printf x "+" } END{ print 0 }' | bc -l)"
+      total_l2_write="$(cat /tmp/nvprof_generated.txt | grep l2_write_transactions | awk '{ x=gensub("\t","","G",$8); printf x "+" } END{ print 0 }' | bc -l)"
+      generated_kernel_total_flop="$(cat /tmp/nvprof_generated.txt | grep flop_count_sp | awk '{ x=gensub("\t","","G",$9); printf x "+" } END{ print 0 }' | bc -l)"
+      generated_kernel_dram_ai="$( echo "scale=4; $generated_kernel_total_flop * 1.0 / (($total_dram_read + $total_dram_write) * 32)" | bc)"
+      generated_kernel_l2_ai="$( echo "scale=4; $generated_kernel_total_flop * 1.0 / (($total_l2_read + $total_l2_write) * 32)" | bc)"
+      nvprof --metrics flop_count_sp \
+              --metrics dram_read_transactions \
+              --metrics dram_write_transactions \
+              --metrics l2_read_transactions \
+              --metrics l2_write_transactions \
+              --log-file /tmp/nvprof_cudnn.txt \
+              ./benchmark "$line" 1 >& /dev/null
       total_dram_read="$(cat /tmp/nvprof_cudnn.txt | grep dram_read_transactions | awk '{ x=gensub("\t","","G",$9); printf x "+" } END{ print 0 }' | bc -l)"
       total_dram_write="$(cat /tmp/nvprof_cudnn.txt | grep dram_write_transactions | awk '{ x=gensub("\t","","G",$9); printf x "+" } END{ print 0 }' | bc -l)"
-      total_flop="$(cat /tmp/nvprof_cudnn.txt | grep flop_count_sp | awk '{ x=gensub("\t","","G",$9); printf x "+" } END{ print 0 }' | bc -l)"
-      cudnn_arithmetic_intensity="$( echo "scale=4; $total_flop * 1.0 / (($total_dram_read + $total_dram_write) * 32)" | bc)"
+      total_l2_read="$(cat /tmp/nvprof_cudnn.txt | grep l2_read_transactions | awk '{ x=gensub("\t","","G",$8); printf x "+" } END{ print 0 }' | bc -l)"
+      total_l2_write="$(cat /tmp/nvprof_cudnn.txt | grep l2_write_transactions | awk '{ x=gensub("\t","","G",$8); printf x "+" } END{ print 0 }' | bc -l)"
+      cudnn_total_flop="$(cat /tmp/nvprof_cudnn.txt | grep flop_count_sp | awk '{ x=gensub("\t","","G",$9); printf x "+" } END{ print 0 }' | bc -l)"
+      cudnn_dram_ai="$( echo "scale=4; $cudnn_total_flop * 1.0 / (($total_dram_read + $total_dram_write) * 32)" | bc)"
+      cudnn_l2_ai="$( echo "scale=4; $cudnn_total_flop * 1.0 / (($total_l2_read + $total_l2_write) * 32)" | bc)"
       
       # Output results to files
       cd ..
       mkdir -p logs/runtime/gpu
-      echo "generated,cudnn\\n$generated_kernel_runtime,$cudnn_runtime" > "logs/runtime/gpu/${workload_name}.csv"
+      echo -e "generated,cudnn\n$generated_kernel_runtime,$cudnn_runtime" > "logs/runtime/gpu/${workload_name}.csv"
       mkdir -p logs/arithmetic_intensity/gpu
-      echo "generated,cudnn\\n$generated_kernel_arithmetic_intensity,$cudnn_arithmetic_intensity" > "logs/arithmetic_intensity/gpu/${workload_name}.csv"
+      echo -e "generated_dram,cudnn_dram,generated_l2,cudnn_l2\n$generated_kernel_dram_ai,$cudnn_dram_ai,$generated_kernel_l2_ai,$cudnn_l2_ai" > "logs/arithmetic_intensity/gpu/${workload_name}.csv"
+      mkdir -p logs/flops/gpu
+      generated_kernel_total_flops="$(echo "scale=4; $generated_kernel_total_flop * 1.0 / $generated_kernel_runtime / 1000.0" | bc -l)"
+      cudnn_total_flops="$(echo "scale=4; $cudnn_total_flop * 1.0 / $cudnn_runtime / 1000.0" | bc -l)"
+      echo -e "generated,cudnn\n$generated_kernel_total_flops,$cudnn_total_flops" > "logs/flops/gpu/${workload_name}.csv"
       cd scripts
 
       # Print results
       echo "###################"
       echo "Workload name: ${workload_name}"
       echo "Generated/cuDNN runtime: ${generated_kernel_runtime} us, ${cudnn_runtime} us."
-      echo "Generated/cuDNN arithmetic intensity: ${generated_kernel_arithmetic_intensity}, ${cudnn_arithmetic_intensity}."
+      echo "Generated/cuDNN dram arithmetic intensity: ${generated_kernel_dram_ai}, ${cudnn_dram_ai}."
+      echo "Generated/cuDNN L2 arithmetic intensity: ${generated_kernel_l2_ai}, ${cudnn_l2_ai}."
+      echo "Generated/cuDNN FLOPS: ${generated_kernel_total_flops}, ${cudnn_total_flops}."
     fi
   done < "$input"
 done
