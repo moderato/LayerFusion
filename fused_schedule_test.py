@@ -19,19 +19,22 @@ from helper import *
 
 np.random.seed(42)
 targets = {
-    "cuda": {
-        "key": "1050ti",
-        "host": None,
+    # "cuda": {
+    #     "key": "1050ti",
+    #     "host": None,
+    #     "timeout": {
+    #         "depth_conv": 10,
+    #         "conv_conv": 500
+    #     }
+    # },
+    "llvm -mcpu=core-avx2": {
+        "key": "i7_7700K",
+        "host": "llvm -target=x86_64-linux-gnu",
         "timeout": {
-            "depth_conv": 10,
-            "conv_conv": 500
+            "depth_conv": 200,
+            "conv_conv": 10000
         }
-    },
-    # "llvm -mcpu=corei7-avx": {
-    #     "key": "i7_7700K",
-    #     "host": "llvm -target=x86_64-linux-gnu",
-    #     "timeout": 200
-    # }
+    }
 }
 
 def write_code(code, fname):
@@ -192,19 +195,22 @@ def verify_fused(workload_name,
     assert layout in ["NHWC", "NCHW", "NCHWc16", "NCHWc4"]
 
     ref_data = get_ref_data(workload_name, parameters, dtype=dtype, layout=layout, save_data=save_data, name=name)
+    # ref_data = None
 
     def check_device(device):
         if not tvm.module.enabled(device):
             print("Skip because %s is not enabled" % device)
             return
         print("Running on target: %s" % device)
-        if device == "llvm":
+        if "llvm" in device:
             ctx = tvm.cpu()
+            device_name = "cpu"
         else: # cuda
             ctx = tvm.context(device, 0)
+            device_name = "gpu"
 
         if auto_tvm:
-            log_name = 'logs/{}_fused_{}.log'.format(name, workload_name)
+            log_name = 'logs/autotvm/{}/{}_fused_{}.log'.format(device_name, name, workload_name)
             
             # logging
             logging.getLogger('autotvm').setLevel(logging.DEBUG)
@@ -248,13 +254,18 @@ def verify_fused(workload_name,
 
         if not no_print_ir:
             print(tvm.lower(s, flatten_params, simple_mode=True))
-        func = tvm.build(s, flatten_params, device, name=("fused_2"))
+        func = tvm.build(s, flatten_params, device, name="fused_2")
         if print_src:
-            print(func.imported_modules[0].get_source())
+            if device == "cuda":
+                print(func.imported_modules[0].get_source())
+            else:
+                print(func.get_source("asm")) # assembly code
         if export_code:
-            cuda_code = func.imported_modules[0].get_source()
-            write_code(cuda_code, "generated_kernels/{}.cuh".format(workload_name))
+            if device == "cuda": # Only support cuda for now
+                code = func.imported_modules[0].get_source()
+                write_code(code, "generated_kernels/{}.cuh".format(workload_name))
 
+        # return
         # Prepare data
         nd_arrays = []
         for idx, array in enumerate(ref_data):
@@ -263,7 +274,7 @@ def verify_fused(workload_name,
             else: # Leave the last nd_array as all-zero
                 nd_arrays.append(tvm.nd.array(np.zeros(get_const_tuple(array.shape), dtype=dtype), ctx)) # Append 0 output data
 
-        timer_1 = func.time_evaluator(func.entry_name, ctx, number=1000)
+        timer_1 = func.time_evaluator(func.entry_name, ctx, number=10)
         tcost_1 = timer_1(*nd_arrays).mean
         # np.testing.assert_allclose(nd_arrays[-1].asnumpy(), ref_data[-1], rtol=1e-3)
         d = ~np.isclose(nd_arrays[-1].asnumpy(), ref_data[-1], rtol=1e-3)
@@ -314,3 +325,4 @@ if __name__ == "__main__":
                             auto_tvm_skip_training=options.auto_tvm_skip_training,
                             auto_tvm_trials=options.auto_tvm_trials,
                             name=t)
+            break
