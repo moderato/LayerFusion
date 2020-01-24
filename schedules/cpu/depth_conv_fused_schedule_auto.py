@@ -80,22 +80,6 @@ def schedule_depth_conv_fused_nhwc_auto(outs, stages, params, device="cuda", bn_
         s[ShiftL_2].compute_at(s[OutputStage], vthy)
 
     # ######## Intermediate output in shared memory
-    # ---
-    # s[IntermediateStage].compute_at(s[OL], xocc)
-    # n, h, w, c = s[IntermediateStage].op.axis
-    # ry, rx = s[IntermediateStage].op.reduce_axis
-    # inter_oc, inter_ic = s[IntermediateStage].split(c, factor=num_thread_x)
-    # ho, wo, h_tile, w_tile = s[IntermediateStage].tile(h, w, x_factor=output_tile_size_h, y_factor=output_tile_size_w)
-    # h_step, w_step, h_step_tile, w_step_tile = s[IntermediateStage].tile(h_tile, w_tile, x_factor=output_step_tile_size_h, y_factor=output_step_tile_size_w)
-    # s[IntermediateStage].reorder(n, ho, wo, inter_oc, h_step, w_step, h_step_tile, w_step_tile, inter_ic)
-    
-    # cfg.define_reorder("inter_reorder", [ry, rx, inter_ic], "all")
-    # cfg["inter_reorder"].apply(s, IntermediateStage, [ry, rx, inter_ic])
-    # cfg.define_split("split_inter_vec", inter_ic, num_outputs=2, filter=lambda x: x.size[-1] <= num_thread_x and x.size[-1] in [4, 8, 16, 32, 64, 128, 256]) # _, reduce_split
-    # inter_oic, inter_iic = cfg["split_inter_vec"].apply(s, IntermediateStage, inter_ic)
-    # s[IntermediateStage].unroll(inter_oic)
-    # s[IntermediateStage].vectorize(inter_iic)
-    # ---
     s[IntermediateStage].compute_at(s[OL], xocc)
     n, h, w, c = s[IntermediateStage].op.axis
     ry, rx = s[IntermediateStage].op.reduce_axis
@@ -111,7 +95,6 @@ def schedule_depth_conv_fused_nhwc_auto(outs, stages, params, device="cuda", bn_
 
     s[IntermediateStage].unroll(inter_oic)
     s[IntermediateStage].vectorize(inter_iic)
-    # ---
 
     if bn_relu1 is not None:
         s[ScaleL_1].compute_at(s[IntermediateStage], inter_ci)

@@ -95,7 +95,7 @@ def schedule_depth_conv_fused_nhwc_auto(outs, stages, params, device="cuda", bn_
     ######## Local output
     s[OL].compute_at(s[OutputStage], thx)
     n, h, w, c = s[OL].op.axis
-    rc, = s[OL].op.reduce_axis[0]
+    rc, = s[OL].op.reduce_axis
     cfg.define_split("split_rc", rc, num_outputs=3, filter=lambda x: x.size[-1] == num_thread_x) # _, reduce_split
     xocc, xoicc, xiicc = cfg["split_rc"].apply(s, OL, rc)
     s[OL].reorder(n, xocc, xoicc, h, w, c, xiicc)

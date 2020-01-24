@@ -1,3 +1,8 @@
+import numpy as np
+import topi, topi.testing
+from general_fused_compute import *
+from tvm import autotvm
+
 class FilterParams:
 	def __init__(self, placeholder, layout="NHWC", depthwise=False, bn_relu=None, kernel=3, stride=1, padding="SAME", dilation=1):
 		assert bn_relu in [None, "relu", "relu6"]
@@ -87,6 +92,10 @@ class Parameters:
 def flatten_list(lst):
 	return sum(([x] if not isinstance(x, list) else flatten_list(x) for x in lst), [])
 
+def write_code(code, fname):
+    with open(fname, "w") as f:
+        f.write(code)
+
 # workload_types=["depth_conv", "conv_conv", "block"]
 def get_workloads_from_file(workload_types=["depth_conv"]):
     workloads = {}
@@ -167,26 +176,168 @@ def export_kernel_launch_config(workload_name, output_shape, best_config):
     wo = output_shape[2]
     recompute = output_shape[3]
 
-    print("n: {}, ho: {}, wo: {}, recompute: {}".format(n, ho, wo, recompute))
+    # print("n: {}, ho: {}, wo: {}, recompute: {}".format(n, ho, wo, recompute))
     for e in config_dict['e']:
         if e[0] == "split_h":
             thz = e[2][1]
             thy = e[2][2]
             for ee in e[2][1:]:
                 ho = (ho + ee - 1) // ee
-                print("ho: {}", ho)
+                # print("ho: {}", ho)
         elif e[0] == "split_w":
             for ee in e[2][1:]:
                 wo = (wo + ee - 1) // ee
-                print("wo: {}", wo)
+                # print("wo: {}", wo)
         elif e[0] == "split_c":
             reuse = e[2][1]
             thx = e[2][2]
             for ee in e[2][1:]:
                 recompute = (recompute + ee - 1) // ee
-                print("recompute: {}", recompute)
+                # print("recompute: {}", recompute)
     print("n: {}, ho: {}, wo: {}, recompute: {}".format(n, ho, wo, recompute))
     blx = n * ho * wo * recompute
 
     with open("generated_kernels/kernel_launch_config/{}_config.csv".format(workload_name), "w") as f:
         f.write("{},{},{},{}".format(thx, thy, thz, blx))
+
+def get_ref_data(workload_name,
+                    parameters, 
+                    dtype="float32", 
+                    layout="NHWC", 
+                    save_data=False, 
+                    name='depth_conv'):
+    Input, Filters = get_input_and_filters(Parameters(parameters))
+    is_block = parameters[-1]
+
+    # Pretending the input_data is some output_data from stage -1
+    output_data = np.random.uniform(0.0, 0.1, size=get_const_tuple(Input.shape)).astype(dtype)
+    ref_data = [output_data]
+    # params names for saving data
+    params_name = ["input"]
+    
+    for idx, f in enumerate(Filters):
+        filter_data = np.random.uniform(0.0, 0.1, size=get_const_tuple(f.placeholder.shape)).astype(dtype)
+        ref_data.append(filter_data)
+
+        input_data = np.copy(output_data)
+
+        if f.depthwise:
+            output_data = topi.testing.depthwise_conv2d_python_nhwc(input_data, filter_data, stride=[f.stride, f.stride], padding=f.padding).astype(dtype)
+            params_name.append("filter_{}_d".format(idx+1)) # Mark depthwise filter
+        else: # Normal convolution
+            output_data = topi.testing.conv2d_nhwc_python(input_data, filter_data, f.stride, f.padding).astype(dtype)
+            params_name.append("filter_{}".format(idx+1))
+
+        if f.bn_relu is not None:
+            n, h, w, oc = output_data.shape
+            scale_np = np.random.uniform(0.0, 0.1, size=(oc,)).astype(dtype)
+            shift_np = np.random.uniform(0.0, 0.1, size=(oc,)).astype(dtype)
+            ref_data.append(scale_np)
+            ref_data.append(shift_np)
+
+            scale_shift_scipy = np.zeros(shape=(n, h, w, oc))
+            relu_scipy = np.zeros(shape=(n, h, w, oc))
+            for c in range(oc):
+                scale_shift_scipy[:,:,:,c] = output_data[:,:,:,c] * scale_np[c] + shift_np[c]
+
+                # For ResNet / DenseNet blocks, etc
+                if is_block:
+                    scale_shift_scipy[:,:,:,c] = scale_shift_scipy[:,:,:,c] + input_data[:,:,:,c]
+
+                relu_scipy[:,:,:,c] = np.maximum(scale_shift_scipy[:,:,:,c], 0)
+                if f.bn_relu == "relu6":
+                    relu_scipy[:,:,:,c] = np.minimum(relu_scipy[:,:,:,c], 6).astype(dtype)
+            output_data = relu_scipy
+            params_name.extend(['scale_{}'.format(idx+1), 'shift_{}'.format(idx+1)])
+
+        if idx == len(Filters) - 1: # At the last stage, append output_data as the final output for reference
+            ref_data.append(output_data)
+    params_name.append('output')
+    
+    if save_data:
+        # Save ref data
+        for i in range(0, len(ref_data)):
+            # filename = "npy/{}_{}/".format(name, '_'.join(str(s) for s in Parameters(parameters).get_params()))
+            filename = "npy/{}/".format(workload_name)
+            if not os.path.exists(filename):
+                os.mkdir(filename)
+            filename += params_name[i]
+            # Transpose filter for cudnn: should be non-fortran order
+            if layout == "NHWC":
+                np.save(filename, ref_data[i])
+                if "filter" in filename:
+                    if "_d" in filename:
+                        np.save(filename+"_transposed", np.array(ref_data[i].transpose(2, 3, 0, 1), order='C'))
+                    else:
+                        np.save(filename+"_transposed", np.array(ref_data[i].transpose(3, 2, 0, 1), order='C'))
+                else:
+                    if len(ref_data[i].shape) == 4: # Don't need to save NCHW format scale and shift data
+                        np.save(filename+"_NCHW", np.array(ref_data[i].transpose(0, 3, 1, 2), order='C'))
+
+    return ref_data
+
+def get_input_and_filters(p):
+    input_shape = p.get_shape("input")
+    filter_1_shape = p.get_shape("f1")
+    filter_2_shape = p.get_shape("f2")
+
+    # placeholder (NHWC)
+    # Input: NHWC, Kernel: HWIO for both depthwise and conv2d
+    Input = tvm.placeholder(input_shape, name='Input')
+    Filter_1 = tvm.placeholder(filter_1_shape, name='Filter_1')
+    Filter_2 = tvm.placeholder(filter_2_shape, name='Filter_2')
+
+    # For getting ref data
+    placeholders = []
+    placeholders.append(Input)
+    placeholders.append(Filter_1)
+    placeholders.append(Filter_2)
+
+    # For getting schedule
+    Filters = []
+    Filters.append(FilterParams(
+                    Filter_1,
+                    depthwise=p.is_f1_depthwise(),
+                    bn_relu=p.get_f1_bn_relu(),
+                    kernel=p.get_f1_K(), stride=p.get_f1_stride(), dilation=1))
+    Filters.append(FilterParams(
+                    Filter_2,
+                    depthwise=p.is_f2_depthwise(),
+                    bn_relu=p.get_f2_bn_relu(),
+                    kernel=p.get_f2_K(), stride=p.get_f2_stride(), dilation=1))
+
+    return Input, Filters
+
+@autotvm.template
+def get_schedule(parameters, auto_tvm=False, device="cuda", name='depth_conv'):
+
+    p = Parameters(parameters)
+    Input, Filters = get_input_and_filters(p)
+    is_block = p.get_is_block()
+
+    # Get the graph
+    # stages: all output stages in the graph
+    # params: inputs & outputs of the graph, including filters, BNs, etc
+    stages, params = fused_convs(Input, Filters, is_block=is_block)
+    output_stage = stages[-1][-1]
+
+    if device == "cuda":
+        from schedules.schedules import gpu_schedules as sch
+    else:
+        from schedules.schedules import cpu_schedules as sch
+
+    f = sch(name, auto_tvm)
+    s = f(output_stage, stages, params,
+            bn_relu1=p.get_f1_bn_relu(), bn_relu2=p.get_f2_bn_relu())
+    return s, flatten_list(params)
+
+if __name__ == "__main__":
+    parameters = (1, 56, 56, 128, 3, 1, 1, True, None, 1, 128, 1, False, None, False)
+    auto_tvm = False
+    device = "cuda"
+    name = 'depth_conv'
+    import tvm
+    from tvm import autotvm
+    with tvm.target.create(device):
+        s, flatten_params = get_schedule(parameters, auto_tvm, device, name)
+    print(tvm.lower(s, flatten_params, simple_mode=True))

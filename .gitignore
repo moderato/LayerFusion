@@ -8,3 +8,6 @@ benchmark/cudnn/cudnn_bench
 benchmark/benchmark
 *.png
 *.eps
+schedules/__pycache__/*
+schedules/cpu/__pycache__/*
+schedules/gpu/__pycache__/*
