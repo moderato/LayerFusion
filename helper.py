@@ -2,6 +2,7 @@ import numpy as np
 import topi, topi.testing
 from general_fused_compute import *
 from tvm import autotvm
+import os
 
 class FilterParams:
 	def __init__(self, placeholder, layout="NHWC", depthwise=False, bn_relu=None, kernel=3, stride=1, padding="SAME", dilation=1):
@@ -197,7 +198,7 @@ def export_kernel_launch_config(workload_name, output_shape, best_config):
     print("n: {}, ho: {}, wo: {}, recompute: {}".format(n, ho, wo, recompute))
     blx = n * ho * wo * recompute
 
-    with open("generated_kernels/kernel_launch_config/{}_config.csv".format(workload_name), "w") as f:
+    with open("generated_kernels/gpu/kernel_launch_config/{}_config.csv".format(workload_name), "w") as f:
         f.write("{},{},{},{}".format(thx, thy, thz, blx))
 
 def get_ref_data(workload_name,
