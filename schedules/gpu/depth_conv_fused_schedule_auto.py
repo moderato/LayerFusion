@@ -64,9 +64,6 @@ def schedule_depth_conv_fused_nhwc_auto(outs, stages, params, bn_relu1=None, bn_
     ######## AutoTVM config
     cfg = autotvm.get_config()
 
-    ######## Vectorization
-    vec = 4
-
     ######## Global output
     n, h, w, c = s[OutputStage].op.axis
     cfg.define_split("split_h", h, num_outputs=4)
@@ -93,7 +90,7 @@ def schedule_depth_conv_fused_nhwc_auto(outs, stages, params, bn_relu1=None, bn_
     s[OL].compute_at(s[OutputStage], thx)
     n, h, w, c = s[OL].op.axis
     rc, = s[OL].op.reduce_axis
-    cfg.define_split("split_rc", rc, num_outputs=3, filter=lambda x: (x.size[-2] * x.size[-1] == num_thread_x)) # _, reduce_split
+    cfg.define_split("split_rc", rc, num_outputs=3) # _, _, reduce_split
     xocc, xoicc, xiicc = cfg["split_rc"].apply(s, OL, rc)
     s[OL].reorder(n, xocc, xoicc, h, w, c, xiicc)
 
@@ -105,7 +102,7 @@ def schedule_depth_conv_fused_nhwc_auto(outs, stages, params, bn_relu1=None, bn_
     s[FS_2].compute_at(s[OL], xoicc)
     h1, w1, i1, o1 = s[FS_2].op.axis
     io = s[FS_2].fuse(i1, o1)
-    io, iox = s[FS_2].split(io, factor=num_thread_x * vec)
+    io, iox = s[FS_2].split(io, factor=num_thread_x * 4)
     ioz, io = s[FS_2].split(io, nparts=num_thread_z)
     ioy, io = s[FS_2].split(io, nparts=num_thread_y)
     iox, io4 = s[FS_2].split(iox, factor=4)

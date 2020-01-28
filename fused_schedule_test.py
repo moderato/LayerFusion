@@ -11,22 +11,33 @@ from helper import *
 
 np.random.seed(42)
 targets = {
-    # "cuda": {
-    #     "key": "1050ti",
-    #     "host": None,
-    #     "timeout": {
-    #         "depth_conv": 10,
-    #         "conv_conv": 500
-    #     }
-    # },
-    "llvm -mcpu=core-avx2": {
-        "key": "i7_7700K",
-        "host": "llvm -target=x86_64-linux-gnu",
-        "timeout": {
-            "depth_conv": 200,
-            "conv_conv": 10000
+    "cuda": {
+        "key": "1050ti",
+        "host": None,
+        "config_params": {
+            "number": 100, # Number of runs for averaging runtime
+            "repeat": 3, # (number of runs) = 1 repeats
+            # Suggested min_repeat_ms = 150 on GPUs
+            "min_repeat_ms": 300, # Dynamically adjust number of runs, i.e. time of one repeat = min(min_repeat_ms, number * kernel_runtime)
+            "timeout": { # Timeout of a compilation
+                "depth_conv": 10,
+                "conv_conv": 500
+            }
         }
-    }
+    },
+    # "llvm -mcpu=core-avx2": {
+    #     "key": "i7_7700K",
+    #     "host": "llvm -target=x86_64-linux-gnu",
+    #     "config_params": {
+    #         "number": 10,
+    #         "repeat": 1,
+    #         "min_repeat_ms": 300,
+    #         "timeout": {
+    #             "depth_conv": 200,
+    #             "conv_conv": 10000
+    #         }
+    #     }
+    # }
 }
 
 def verify_fused(workload_name,
@@ -78,7 +89,10 @@ def verify_fused(workload_name,
                     builder=autotvm.LocalBuilder(),
                     runner=autotvm.RPCRunner(
                         targets[device]["key"], '0.0.0.0', 9190,
-                        number=10, repeat=1, timeout=targets[device]["timeout"][name], min_repeat_ms=500)
+                        number=targets[device]["config_params"]["number"],
+                        repeat=targets[device]["config_params"]["repeat"],
+                        timeout=targets[device]["config_params"]["timeout"][name],
+                        min_repeat_ms=targets[device]["config_params"]["min_repeat_ms"])
                 )
                 tuner = autotvm.tuner.XGBTuner(task)
                 tuner.tune(n_trial=auto_tvm_trials,
@@ -91,7 +105,7 @@ def verify_fused(workload_name,
             print("\nBest config:")
             print(best_config)
 
-            # export kernel launch config only for gpus, e.g. thxyz, blxy
+            # export kernel launch config ONLY FOR GPUS, e.g. thxyz, blxy
             output_shape = ref_data[-1].shape
             if device == "cuda":
                 export_kernel_launch_config(workload_name, output_shape, best_config)
@@ -113,9 +127,12 @@ def verify_fused(workload_name,
             else:
                 print(func.get_source("asm")) # assembly code
         if export_code:
-            if device == "cuda": # Only support cuda for now
+            if device == "cuda":
                 code = func.imported_modules[0].get_source()
-                write_code(code, "generated_kernels/{}.cuh".format(workload_name))
+                write_code(code, "generated_kernels/gpu/{}.cuh".format(workload_name))
+            else: # CPU
+                code = func.get_source("asm")
+                write_code(code, "generated_kernels/cpu/{}.asm".format(workload_name))
 
         # Prepare data
         nd_arrays = []
@@ -125,7 +142,7 @@ def verify_fused(workload_name,
             else: # Leave the last nd_array as all-zero
                 nd_arrays.append(tvm.nd.array(np.zeros(get_const_tuple(array.shape), dtype=dtype), ctx)) # Append 0 output data
 
-        timer_1 = func.time_evaluator(func.entry_name, ctx, number=10)
+        timer_1 = func.time_evaluator(func.entry_name, ctx, number=100)
         tcost_1 = timer_1(*nd_arrays).mean
         # np.testing.assert_allclose(nd_arrays[-1].asnumpy(), ref_data[-1], rtol=1e-3)
         d = ~np.isclose(nd_arrays[-1].asnumpy(), ref_data[-1], rtol=1e-3)
@@ -135,7 +152,7 @@ def verify_fused(workload_name,
             print(ref_data[-1][d])
             print(np.where(d))
         # print("Error rate: {:.2f}%".format((len(d) / len(ref_data[-1]) * 100)))
-        print("{}_fused of 2 layers ({}): average running time is {:.2f} us.".format(name, layout, tcost_1 * 1e6))
+        print("{}_fused of {} ({}): average running time is {:.2f} us.".format(name, workload_name, layout, tcost_1 * 1e6))
 
     for device in targets.keys():
         check_device(device)
