@@ -10,7 +10,7 @@ all: conv
 
 conv: $(TARGET).cu
 	$(CXX) $(CXXFLAGS) $(HEADERS) $(LIBS) $(TARGET).cu -o $(TARGET) \
-	-lcnpy -lz -lcudnn -include ../generated_kernels/mv1_3.cuh
+	-lcnpy -lz -lcudnn -include ../generated_kernels/gpu/mv1_1.cuh
 
 .phony: clean
 

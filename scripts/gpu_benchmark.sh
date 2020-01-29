@@ -19,7 +19,7 @@ do
         -D REPEATITION=1000 \
         benchmark.cu \
         -o benchmark \
-        -lcnpy -lz -lcudnn -include ../generated_kernels/${workload_name}.cuh >& /dev/null
+        -lcnpy -lz -lcudnn -include ../generated_kernels/gpu/${workload_name}.cuh >& /dev/null
 
       ./benchmark "$line" 0 &> /tmp/runtime_generated.txt
       generated_kernel_runtime="$(cat /tmp/runtime_generated.txt | grep Fusion | awk '{ printf  "%10s\n", $4 }')"
@@ -33,7 +33,8 @@ do
         -D REPEATITION=20 \
         benchmark.cu \
         -o benchmark \
-        -lcnpy -lz -lcudnn -include ../generated_kernels/${workload_name}.cuh >& /dev/null
+        -lcnpy -lz -lcudnn -include ../generated_kernels/gpu/${workload_name}.cuh >& /dev/null
+
       nvprof --metrics flop_count_sp \
               --metrics dram_read_transactions \
               --metrics dram_write_transactions \
@@ -79,8 +80,8 @@ do
       echo "###################"
       echo "Workload name: ${workload_name}"
       echo "Generated/cuDNN runtime: ${generated_kernel_runtime} us, ${cudnn_runtime} us."
-      echo "Generated/cuDNN dram arithmetic intensity: ${generated_kernel_dram_ai}, ${cudnn_dram_ai}."
-      echo "Generated/cuDNN L2 arithmetic intensity: ${generated_kernel_l2_ai}, ${cudnn_l2_ai}."
+      echo "Generated/cuDNN DRAM AI: ${generated_kernel_dram_ai}, ${cudnn_dram_ai}."
+      echo "Generated/cuDNN L2 AI: ${generated_kernel_l2_ai}, ${cudnn_l2_ai}."
       echo "Generated/cuDNN FLOPS: ${generated_kernel_total_flops}, ${cudnn_total_flops}."
     fi
   done < "$input"

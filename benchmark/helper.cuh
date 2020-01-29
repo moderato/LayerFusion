@@ -3,14 +3,15 @@
 #include <fstream>
 #include "cudnn/cudnn_calls.cuh"
 
-#define GENERATED 0
+#define GENERATED_GPU 0
 #define CUDNN 1
+#define GENERATED_CPU 2
 
 void getKernelConfig(std::string workload_name, 
                         int& thx, int& thy, int& thz, int& blx) {
     std::fstream fin;
 
-    std::string filename = "../generated_kernels/kernel_launch_config/" + workload_name + "_config.csv";
+    std::string filename = "../generated_kernels/gpu/kernel_launch_config/" + workload_name + "_config.csv";
     fin.open(filename, std::ios::in);
 
     std::string line, word;
@@ -28,14 +29,14 @@ void getKernelConfig(std::string workload_name,
     fin.close();
 }
 
-void benchmark_generated(std::string workload_name,
-                            int input_batch, int input_height, int input_width, int input_channel,
-                            int kernel_1, int kernel_1_out_channel_or_multiplier, int kernel_1_stride,
-                            bool is_f1_depthwise, int f1_activation,
-                            int kernel_2, int kernel_2_out_channel, int kernel_2_stride,
-                            bool is_f2_depthwise, int f2_activation,
-                            bool find_best_algo,
-                            /* if benchmark in NCHW, dummy*/ bool is_NCHW) {
+void benchmark_generated_gpu(std::string workload_name,
+                                int input_batch, int input_height, int input_width, int input_channel,
+                                int kernel_1, int kernel_1_out_channel_or_multiplier, int kernel_1_stride,
+                                bool is_f1_depthwise, int f1_activation,
+                                int kernel_2, int kernel_2_out_channel, int kernel_2_stride,
+                                bool is_f2_depthwise, int f2_activation,
+                                bool find_best_algo,
+                                /* if benchmark in NCHW, dummy*/ bool is_NCHW) {
 
     std::cout << "#######################" << std::endl;
 
@@ -264,13 +265,22 @@ void benchmarkWithWorkloadString(std::string workload, int type) {
                         kernel_2, kernel_2_out_channel, kernel_2_stride,
                         is_f2_depthwise, f2_activation,
                         true, BENCH_NCHW);
-    } else { // generated kernel
-        benchmark_generated(workload_name,
-                        input_batch, input_height, input_width, input_channel,
-                        kernel_1, kernel_1_out_channel_or_multiplier, kernel_1_stride,
-                        is_f1_depthwise, f1_activation,
-                        kernel_2, kernel_2_out_channel, kernel_2_stride,
-                        is_f2_depthwise, f2_activation,
-                        true, BENCH_NHWC);
-    }
+    } else if (type == GENERATED_GPU) { // generated gpu kernel
+        benchmark_generated_gpu(workload_name,
+                                input_batch, input_height, input_width, input_channel,
+                                kernel_1, kernel_1_out_channel_or_multiplier, kernel_1_stride,
+                                is_f1_depthwise, f1_activation,
+                                kernel_2, kernel_2_out_channel, kernel_2_stride,
+                                is_f2_depthwise, f2_activation,
+                                true, BENCH_NHWC);
+        }
+    // } else { // generated cpu kernel
+    //     benchmark_generated_cpu(workload_name,
+    //                             input_batch, input_height, input_width, input_channel,
+    //                             kernel_1, kernel_1_out_channel_or_multiplier, kernel_1_stride,
+    //                             is_f1_depthwise, f1_activation,
+    //                             kernel_2, kernel_2_out_channel, kernel_2_stride,
+    //                             is_f2_depthwise, f2_activation,
+    //                             true, BENCH_NHWC);
+    // }
 }
