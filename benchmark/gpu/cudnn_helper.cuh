@@ -5,19 +5,25 @@
 #include <cassert>
 #include "cnpy.h"
 
-#define NONE  0
-#define RELU  1
-#define RELU6 2
+#ifndef REPEATITION
+    #define REPEATITION 1000
+#endif
+
+#ifndef NONE
+    #define NONE 0
+#endif
+#ifndef RELU
+    #define RELU  1
+#endif
+#ifndef RELU6
+    #define RELU6 2
+#endif
 
 #define USE_DEFAULT_ALGO 0
 #define FIND_BEST_ALGO 1
 
 #define BENCH_NCHW true
 #define BENCH_NHWC false
-
-#ifndef REPEATITION
-  #define REPEATITION 1000
-#endif
 
 // #define DEBUG 1
 
@@ -330,7 +336,7 @@ void benchmark_cudnn(std::string workload_name,
 #endif
 
   // filenames
-  std::string folder_name = "../npy/" + workload_name + "/";
+  std::string folder_name = "../../npy/" + workload_name + "/";
   std::string input_name = folder_name + (is_NCHW ? "input_NCHW.npy" : "input.npy");
   std::string kernel_1_name = folder_name + (is_f1_depthwise ? "filter_1_d_transposed.npy" : "filter_1_transposed.npy");
   std::string kernel_2_name = folder_name + "filter_2_transposed.npy";

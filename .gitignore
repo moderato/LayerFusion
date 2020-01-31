@@ -4,10 +4,12 @@ __pycache__/*
 generated_kernels/*
 logs/*
 npy/*
-benchmark/cudnn/cudnn_bench
-benchmark/benchmark
+benchmark/gpu/gpu_bench
+benchmark/cpu/cpu_bench
+benchmark/cpu/*.o
 *.png
 *.eps
 schedules/__pycache__/*
 schedules/cpu/__pycache__/*
 schedules/gpu/__pycache__/*
+.vscode
