@@ -4,95 +4,66 @@ do
   line_count=0
   while IFS= read -r line
   do
-    IFS=',' read -ra PARAM <<< "$line"
     line_count=$((line_count+1))
     if [ $line_count != 1 ]; # Skip first line
     then
-      idx=0
-      workload_name=${PARAM[0]}
+      # Get workload layer descriptions
+      ./parse_workload_input.sh $line > /tmp/workload_layers.txt
+      workload_name="$(cat /tmp/workload_layers.txt | grep -e 'workload_name' | awk '{ printf "%s\n", $2 }')"
+      layer_1_desc="$(cat /tmp/workload_layers.txt | grep -e 'layer_1_desc' | awk '{ printf "%s\n", $2 }')"
+      layer_2_desc="$(cat /tmp/workload_layers.txt | grep -e 'layer_2_desc' | awk '{ printf "%s\n", $2 }')"
 
-      cd ../benchmark
+      # echo ${workload_name}
+      # echo ${layer_1_desc}
+      # echo ${layer_2_desc}
 
-      echo ${PARAM[*]}
+      # Runtime and flops measurement
+      benchdnn --conv --mode=p -v0 --mb=1 --dir=FWD_I --cfg=f32 ${layer_1_desc} ${layer_2_desc} &> /tmp/runtime_mkldnn.txt
+      mkldnn_total_flop=0
+      mkldnn_runtime=0
+      while IFS= read -r l
+      do
+        if [ "${l:0:8}" == "perf,cpu" ];
+        then
+          result="$(echo $l | awk '{ printf "%s\n", $3 }')"
+          IFS=',' read -ra PARAM <<< $result
+          mkldnn_total_flop="$( echo "scale=4; $mkldnn_total_flop + ${PARAM[1]} * 1000000000" | bc)"
+          mkldnn_runtime="$( echo "scale=4; $mkldnn_runtime + ${PARAM[5]} * 1000.0" | bc)" # In microseconds
+        fi
+      done < "/tmp/runtime_mkldnn.txt"
+      mkldnn_gflops="$( echo "scale=4; $mkldnn_total_flop / $mkldnn_runtime * 1000000 / 1000000000" | bc)"
+      # echo $mkldnn_total_flop
+      # echo $mkldnn_runtime
+      # echo $mkldnn_gflops
 
-      # Layer 1
-      mb_1=${PARAM[1]}
-      ih_1=${PARAM[2]}
-      iw_1=${PARAM[3]}
-      ic_1=${PARAM[4]}
+      # BW measurement
+      # Relu: --attr="post_ops='relu'"
+      rm -rf /tmp/vtune_report
+      vtune -r /tmp/vtune_report -q -collect memory-access -finalization-mode=none -data-limit=0 benchdnn --conv --mode=PC -v1 --mb=1 --dir=FWD_I --cfg=f32 --alg=AUTO ${layer_1_desc} ${layer_2_desc} &> /dev/null
+      vtune -report hw-events -report-knob show-issues=false -r /tmp/vtune_report -q -group-by=package -format=csv -column=UNC_IMC_DRAM_DATA_READS,UNC_IMC_DRAM_DATA_WRITES -csv-delimiter=comma > /tmp/cpu_bench_report.summary
+      ./parse_vtune.sh -v /tmp/cpu_bench_report.summary > /tmp/bw_mkldnn.txt
+      total_dram_read="$(cat /tmp/bw_mkldnn.txt | grep -e 'Total read transactions' | awk '{ printf "%s\n", $5 }')"
+      total_dram_write="$(cat /tmp/bw_mkldnn.txt | grep -e 'Total write transactions' | awk '{ printf "%s\n", $5 }')"
+      # echo $total_dram_read
+      # echo $total_dram_write
+      mkldnn_dram_ai="$( echo "scale=4; ($mkldnn_total_flop / (($total_dram_read + $total_dram_write) * 64))" | bc)"
 
-      kh_1=${PARAM[5]}
-      kw_1=${PARAM[5]}
-      sh_1=${PARAM[7]}
-      sw_1=${PARAM[7]}
+      cd ..
+      mkdir -p logs/runtime/cpu
+      echo -e "generated,mkldnn\n0.0,$mkldnn_runtime" > "logs/runtime/cpu/${workload_name}.csv"
+      mkdir -p logs/arithmetic_intensity/cpu
+      echo -e "generated_dram,mkldnn_dram\n0.0,$mkldnn_dram_ai" > "logs/arithmetic_intensity/cpu/${workload_name}.csv"
+      mkdir -p logs/gflops/cpu
+      echo -e "generated,mkldnn\n0.0,$mkldnn_gflops" > "logs/gflops/cpu/${workload_name}.csv"
+      cd scripts
 
-      is_depthwise_1=${PARAM[8]}
-      if [ $is_depthwise_1 ]
-      then
-        g_1=${PARAM[4]}
-        oc_1=$(( $ic_1 * ${PARAM[6]} ))
-      else # conv
-        g_1=1
-        oc_1=$(( ${PARAM[6]} ))
-      fi
-      
-      if [ $sh_1 == 1 ]
-      then
-        oh_1=$ih_1
-        ow_1=$iw_1
-      else # Assume sh_1 = sw_1 = 2 for all non-1 cases
-        oh_1=$(( $ih_1 / 2 ))
-        ow_1=$(( $iw_1 / 2 ))
-      fi
+      # Print results
+      echo "###################"
+      echo "Workload name: ${workload_name}"
+      echo "Generated/mkldnn runtime: 0.0 us, ${mkldnn_runtime} us."
+      echo "Generated/mkldnn DRAM AI: 0.0, ${mkldnn_dram_ai}."
+      echo "Generated/mkldnn GFLOPS: 0.0, ${mkldnn_gflops}."
 
-      if [ $kh_1 == 1 ]
-      then
-        ph_1=0
-        pw_1=0
-      else # Assume kh_1 = kw_1 = 3 for all non-1 cases
-        ph_1=1
-        pw_1=1
-      fi
-
-      # Layer 2
-      mb_2=$mb_1
-      ih_2=$oh_1
-      iw_2=$ow_1
-      ic_2=$oc_1
-
-      kh_2=${PARAM[10]}
-      kw_2=${PARAM[10]}
-      sh_2=${PARAM[12]}
-      sw_2=${PARAM[12]}
-      g_2=1
-      oc_2=$(( ${PARAM[11]} ))
-
-      if [ $sh_2 == 1 ]
-      then
-        oh_2=$ih_2
-        ow_2=$iw_2
-      else # Assume sh_2 = sw_2 = 2 for all non-1 cases
-        oh_2=$(( $ih_2 / 2 ))
-        ow_2=$(( $iw_2 / 2 ))
-      fi
-
-      if [ $kh_2 == 1 ]
-      then
-        ph_2=0
-        pw_2=0
-      else # Assume kh_2 = kw_2 = 3 for all non-1 cases
-        ph_2=1
-        pw_2=1
-      fi
-
-      layer1_command=$"g${g_1}mb${mb_1}ic${ic_1}ih${ih_1}iw${iw_1}oc${oc_1}oh${oh_1}ow${ow_1}kh${kh_1}kw${kw_1}sh${sh_1}sw${sw_1}ph${ph_1}pw${pw_1}n"
-      layer2_command=$"g${g_2}mb${mb_2}ic${ic_2}ih${ih_2}iw${iw_2}oc${oc_2}oh${oh_2}ow${ow_2}kh${kh_2}kw${kw_2}sh${sh_2}sw${sw_2}ph${ph_2}pw${pw_2}n"
-
-      # echo ${layer1_command}
-      # echo ${layer2_command}
-
-      benchdnn --conv --mode=PC -v0 --mb=1 --dir=FWD_I --cfg=f32 ${layer1_command} ${layer2_command}
-      
     fi
   done < "$input"
 done
