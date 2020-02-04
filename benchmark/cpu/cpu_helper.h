@@ -2,18 +2,26 @@
 #include <cstring>
 #include <iostream>
 #include <fstream>
+#include <cstdio>
+#include <chrono>
+#include <dlpack/dlpack.h>
+#include <tvm/runtime/module.h>
+#include <tvm/runtime/registry.h>
+#include <tvm/runtime/packed_func.h>
 #include "cnpy.h"
 
 #ifndef REPEATITION
   #define REPEATITION 1000
 #endif
 
-#define DEBUG 1
+// For SDE benchmarking purpose
+#ifndef __SSC_MARK
+#define __SSC_MARK(tag)                                                        \
+        __asm__ __volatile__("movl %0, %%ebx; .byte 0x64, 0x67, 0x90 "         \
+                             ::"i"(tag) : "%ebx")
+#endif
 
-extern "C" void fused_2(float* Input,
-                        float* Filter_1,
-                        float* Filter_2,
-                        float* Conv2dOutput_0);
+#define DEBUG 1
 
 void benchmark_generated_cpu(std::string workload_name,
     int input_batch, int input_height, int input_width, int input_channel,
@@ -58,15 +66,6 @@ void benchmark_generated_cpu(std::string workload_name,
 #ifdef DEBUG
     std::cout << "npy file names:" << std::endl;
     std::cout << input_name << std::endl << kernel_1_name << std::endl << kernel_2_name << std::endl << output_name << std::endl;
-#endif
-
-    // tensor sizes
-    int input_shape = input_batch * input_height * input_width * input_channel;
-    int kernel_1_shape = kernel_1_height * kernel_1_width * kernel_1_in_channel * kernel_1_out_channel_or_multiplier;
-    int kernel_2_shape = kernel_2_height * kernel_2_width * kernel_2_in_channel * kernel_2_out_channel;
-    int output_shape = output_batch * output_height * output_width * output_channel;
-
-#ifdef DEBUG
     std::cout << "input_shape: (" << input_batch << ", " << input_height << ", " << input_width << ", " << input_channel << ")" << std::endl;
     std::cout << "kernel_1_shape: (" << kernel_1_height << ", " << kernel_1_width << ", " << kernel_1_in_channel << ", " << kernel_1_out_channel_or_multiplier << ")" << std::endl;
     std::cout << "kernel_2_shape: (" << kernel_2_height << ", " << kernel_2_width << ", " << kernel_2_in_channel << ", " << kernel_2_out_channel << ")" << std::endl;
@@ -75,51 +74,75 @@ void benchmark_generated_cpu(std::string workload_name,
 
     // Load data
     cnpy::NpyArray input_npy = cnpy::npy_load(input_name);
-    float* input = input_npy.data<float>();
-
     cnpy::NpyArray kernel_1_npy = cnpy::npy_load(kernel_1_name);
-    float* filter_1 = kernel_1_npy.data<float>();
-
     cnpy::NpyArray kernel_2_npy = cnpy::npy_load(kernel_2_name);
-    float* filter_2 = kernel_2_npy.data<float>();
-
-    float* output = (float*)malloc(output_shape * sizeof(float));
 
     // For verification
     cnpy::NpyArray output_npy = cnpy::npy_load(output_name);
     float *tmp = output_npy.data<float>();
 
+    // DLTensor initialization
+    tvm::runtime::Module mod = tvm::runtime::Module::LoadFromFile("kernel.so");
+    tvm::runtime::PackedFunc fused_2 = mod.GetFunction("fused_2");
+    assert(fused_2 != nullptr);
+    DLTensor *input, *filter_1, *filter_2, *output;
+    int ndim = 4;
+    int dtype_code = kDLFloat;
+    int dtype_bits = 32;
+    int dtype_lanes = 1;
+    int device_type = kDLCPU;
+    int device_id = 0;
+    int64_t input_shape_tuple[4] = {input_batch, input_height, input_width, input_channel};
+    int64_t filter_1_shape_tuple[4] = {kernel_1_height, kernel_1_width, kernel_1_in_channel, kernel_1_out_channel_or_multiplier};
+    int64_t filter_2_shape_tuple[4] = {kernel_2_height, kernel_2_width, kernel_2_in_channel, kernel_2_out_channel};
+    int64_t output_shape_tuple[4] = {output_batch, output_height, output_width, output_channel};
+    TVMArrayAlloc(input_shape_tuple, ndim, dtype_code, dtype_bits, dtype_lanes,
+                    device_type, device_id, &input);
+    TVMArrayAlloc(filter_1_shape_tuple, ndim, dtype_code, dtype_bits, dtype_lanes,
+                    device_type, device_id, &filter_1);
+    TVMArrayAlloc(filter_2_shape_tuple, ndim, dtype_code, dtype_bits, dtype_lanes,
+                    device_type, device_id, &filter_2);
+    TVMArrayAlloc(output_shape_tuple, ndim, dtype_code, dtype_bits, dtype_lanes,
+                    device_type, device_id, &output);
+    input->data = input_npy.data<float>();
+    filter_1->data = kernel_1_npy.data<float>();
+    filter_2->data = kernel_2_npy.data<float>();
+
 #ifdef DEBUG
-    std::cout << "npy_input_shape: (" << input_npy.shape[0] << ", " << input_npy.shape[1] << ", " << input_npy.shape[2] << ", " << input_npy.shape[3] << ")" << std::endl;
-    std::cout << "npy_kernel_1_shape: (" << kernel_1_npy.shape[0] << ", " << kernel_1_npy.shape[1] << ", " << kernel_1_npy.shape[2] << ", " << kernel_1_npy.shape[3] << ")" << std::endl;
-    std::cout << "npy_kernel_2_shape: (" << kernel_2_npy.shape[0] << ", " << kernel_2_npy.shape[1] << ", " << kernel_2_npy.shape[2] << ", " << kernel_2_npy.shape[3] << ")" << std::endl;
+    std::cout << "npy_input_shape: (" << input_shape_tuple[0] << ", " << input_shape_tuple[1] << ", " << input_shape_tuple[2] << ", " << input_shape_tuple[3] << ")" << std::endl;
+    std::cout << "npy_kernel_1_shape: (" << filter_1_shape_tuple[0] << ", " << filter_1_shape_tuple[1] << ", " << filter_1_shape_tuple[2] << ", " << filter_1_shape_tuple[3] << ")" << std::endl;
+    std::cout << "npy_kernel_2_shape: (" << filter_2_shape_tuple[0] << ", " << filter_2_shape_tuple[1] << ", " << filter_2_shape_tuple[2] << ", " << filter_2_shape_tuple[3] << ")" << std::endl;
     std::cout << "npy_output_shape: (" << output_npy.shape[0] << ", " << output_npy.shape[1] << ", " << output_npy.shape[2] << ", " << output_npy.shape[3] << ")" << std::endl;
 #endif
 
     // Timing
-    float runtime_ms = 0.0f;
-
+    float runtime_us = 0.0f;
+    int output_shape = output_batch * output_height * output_width * output_channel;
     for (int i = 0; i < REPEATITION; i++) {
-        memset(output, 0, output_shape * sizeof(float));
+        memset(output->data, 0, output_shape * sizeof(float));
+        auto start = std::chrono::high_resolution_clock::now();
 
-        float tmp_t = 0.0f;
-
+        __SSC_MARK(0x111);
         // asm function call here
         fused_2(input, filter_1, filter_2, output);
+        __SSC_MARK(0x222);
 
-        runtime_ms += tmp_t / REPEATITION;
+        auto elapsed = std::chrono::high_resolution_clock::now() - start;
+        long long ns = std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count();
+        runtime_us += ns / 1000.0f / REPEATITION;
     }
+    printf("Fusion runtime is %f us.\n", runtime_us);
 
-    printf("Fusion runtime is %f us.\n", runtime_ms * 1000);
-
+    // Verification
     int count = 0;
     for(int i = 0; i < output_shape; i++) {
+        float output_element = static_cast<float*>(output->data)[i];
 #ifdef DEBUG
-        printf("%d, %f, %lf\n", i, output[i], tmp[i]);
-        assert(std::abs(output[i] - (float)tmp[i]) < 1e-3);
+        printf("%d, %f, %lf\n", i, output_element, tmp[i]);
+        assert(std::abs(output_element - (float)tmp[i]) < 1e-3);
 #endif
-        if (std::abs(output[i] - tmp[i]) > 1e-3) // A few nums have bigger errors
-        count++;
+        if (std::abs(output_element - tmp[i]) > 1e-3) // A few nums have bigger errors
+            count++;
     }
     printf("Output wrong count: %d\n", count);
 }

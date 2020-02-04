@@ -13,13 +13,7 @@ do
       cd ../benchmark/gpu
 
       # Repeatition=1000 for runtime measurement
-      nvcc -arch=sm_35 -std=c++11 -O2 \
-        -I ${CUDA_HOME}/include \
-        -L ${CUDA_HOME}/lib -L/usr/local/lib \
-        -D REPEATITION=1000 \
-        gpu_bench.cu \
-        -o gpu_bench \
-        -lcnpy -lz -lcudnn -include ../../generated_kernels/gpu/${workload_name}.cuh >& /dev/null
+      make KERNEL=../../generated_kernels/gpu/${workload_name}.cuh >& /dev/null
 
       ./gpu_bench "$line" 0 &> /tmp/runtime_generated.txt
       generated_kernel_runtime="$(cat /tmp/runtime_generated.txt | grep Fusion | awk '{ printf  "%10s\n", $4 }')"
@@ -27,13 +21,7 @@ do
       cudnn_runtime="$(cat /tmp/runtime_cudnn.txt | grep Fusion | awk '{ printf "%10s\n", $4 }')"
 
       # Repeatition=20 for arithmetic intensity
-      nvcc -arch=sm_35 -std=c++11 -O2 \
-        -I ${CUDA_HOME}/include \
-        -L ${CUDA_HOME}/lib -L/usr/local/lib \
-        -D REPEATITION=20 \
-        gpu_bench.cu \
-        -o gpu_bench \
-        -lcnpy -lz -lcudnn -include ../../generated_kernels/gpu/${workload_name}.cuh >& /dev/null
+      make KERNEL=../../generated_kernels/gpu/${workload_name}.cuh REPEATITION=20 >& /dev/null
 
       nvprof --metrics flop_count_sp \
               --metrics dram_read_transactions \
@@ -71,9 +59,9 @@ do
       mkdir -p logs/arithmetic_intensity/gpu
       echo -e "generated_dram,cudnn_dram,generated_l2,cudnn_l2\n$generated_kernel_dram_ai,$cudnn_dram_ai,$generated_kernel_l2_ai,$cudnn_l2_ai" > "logs/arithmetic_intensity/gpu/${workload_name}.csv"
       mkdir -p logs/gflops/gpu
-      generated_kernel_total_gflops="$(echo "scale=4; $generated_kernel_total_flop * 1.0 / $generated_kernel_runtime / 1000.0" | bc -l)"
-      cudnn_total_gflops="$(echo "scale=4; $cudnn_total_flop * 1.0 / $cudnn_runtime / 1000.0" | bc -l)"
-      echo -e "generated,cudnn\n$generated_kernel_total_gflops,$cudnn_total_gflops" > "logs/gflops/gpu/${workload_name}.csv"
+      generated_kernel_gflops="$(echo "scale=4; $generated_kernel_total_flop * 1.0 / $generated_kernel_runtime / 1000.0" | bc -l)"
+      cudnn_gflops="$(echo "scale=4; $cudnn_total_flop * 1.0 / $cudnn_runtime / 1000.0" | bc -l)"
+      echo -e "generated,cudnn\n$generated_kernel_gflops,$cudnn_gflops" > "logs/gflops/gpu/${workload_name}.csv"
       cd scripts
 
       # Print results
@@ -82,7 +70,7 @@ do
       echo "Generated/cuDNN runtime: ${generated_kernel_runtime} us, ${cudnn_runtime} us."
       echo "Generated/cuDNN DRAM AI: ${generated_kernel_dram_ai}, ${cudnn_dram_ai}."
       echo "Generated/cuDNN L2 AI: ${generated_kernel_l2_ai}, ${cudnn_l2_ai}."
-      echo "Generated/cuDNN GFLOPS: ${generated_kernel_total_gflops}, ${cudnn_total_gflops}."
+      echo "Generated/cuDNN GFLOPS: ${generated_kernel_gflops}, ${cudnn_gflops}."
     fi
   done < "$input"
 done

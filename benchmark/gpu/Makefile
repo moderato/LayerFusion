@@ -5,10 +5,18 @@ CUDNN_PATH := $(CUDA_PATH)
 HEADERS := -I $(CUDNN_PATH)/include
 LIBS := -L $(CUDNN_PATH)/lib64 -L/usr/local/lib
 CXXFLAGS := -arch=sm_35 -std=c++11 -O2
+KERNEL ?= ../../generated_kernels/gpu/mv1_1.cuh
+REPEATITION ?= 1000
 
 all: $(TARGET).cu
-	$(CXX) $(CXXFLAGS) $(HEADERS) $(LIBS) $(TARGET).cu -o $(TARGET) \
-	-lcnpy -lz -lcudnn -include ../../generated_kernels/gpu/mv1_1.cuh
+	$(CXX) $(CXXFLAGS) \
+		$(HEADERS) \
+		$(LIBS) \
+		-include $(KERNEL) \
+		-D REPEATITION=$(REPEATITION) \
+		$(TARGET).cu \
+		-o $(TARGET) \
+		-lcnpy -lz -lcudnn
 
 .phony: clean
 

@@ -7,6 +7,8 @@ npy/*
 benchmark/gpu/gpu_bench
 benchmark/cpu/cpu_bench
 benchmark/cpu/*.o
+benchmark/cpu/*.so
+benchmark/cpu/core
 *.png
 *.eps
 schedules/__pycache__/*
