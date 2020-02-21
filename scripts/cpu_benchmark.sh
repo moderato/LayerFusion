@@ -42,7 +42,7 @@ do
 
       #### MKLDNN ####
       # Runtime and flops measurement
-      benchdnn --conv --mode=p -v0 --mb=1 --dir=FWD_I --cfg=f32 ${layer_1_desc} ${layer_2_desc} &> /tmp/runtime_mkldnn.txt
+      numactl -l -C 0-3 benchdnn --conv --mode=p -v0 --mb=1 --dir=FWD_I --cfg=f32 ${layer_1_desc} ${layer_2_desc} &> /tmp/runtime_mkldnn.txt
       mkldnn_total_flop=0
       mkldnn_runtime=0
       while IFS= read -r l
@@ -80,12 +80,13 @@ do
       cd scripts
 
       # Print results
-      echo "###################"
-      echo "Workload name: ${workload_name}"
-      echo "Generated/mkldnn runtime: ${generated_kernel_runtime} us, ${mkldnn_runtime} us."
-      echo "Generated/mkldnn DRAM AI: ${generated_kernel_dram_ai}, ${mkldnn_dram_ai}."
-      echo "Generated/mkldnn GFLOPS: ${generated_kernel_gflops}, ${mkldnn_gflops}."
-
+      echo "|--------------------"
+      echo "| Workload name: ${workload_name}"
+      echo "|--------------------"
+      echo "| Generated/mkldnn runtime: ${generated_kernel_runtime} us, ${mkldnn_runtime} us."
+      echo "| Generated/mkldnn DRAM AI: ${generated_kernel_dram_ai}, ${mkldnn_dram_ai}."
+      echo "| Generated/mkldnn GFLOPS: ${generated_kernel_gflops}, ${mkldnn_gflops}."
+      echo "|--------------------"
     fi
   done < "$input"
 done
