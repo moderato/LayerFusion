@@ -8,7 +8,7 @@ from topi.util import simplify, get_const_tuple
 
 from helper import *
 
-def fused_convs(input_data, filters, is_block=False):
+def fused_convs(input_data, filters, is_block=False, device="cuda"):
 	out_dtype = input_data.dtype
 
 	Input = None
@@ -83,17 +83,36 @@ def fused_convs(input_data, filters, is_block=False):
 				Output = tvm.compute(
 				(batch, out_height, out_width, out_channel),
 				lambda nn, yy, xx, ff: tvm.sum(
-					Input[nn, yy * stride_h + ry * dilation_h,
-								xx * stride_w + rx * dilation_w, rc].astype(out_dtype) *
-					Filter[ry, rx, rc, ff].astype(out_dtype), axis=[ry, rx, rc]),
-					name="Conv2dOutput_{}".format(conv_count), tag="conv2d_nhwc")
-			else: # Only reduce rc axis
-				Output = tvm.compute(
-				(batch, out_height, out_width, out_channel),
-				lambda nn, yy, xx, ff: tvm.sum(
-					Input[nn, yy * stride_h, xx * stride_w, rc].astype(out_dtype) *
-					Filter[0, 0, rc, ff].astype(out_dtype), axis=[rc]),
-					name="Conv2dOutput_{}".format(conv_count), tag="conv2d_nhwc")
+											Input[nn, yy * stride_h + ry * dilation_h,
+														xx * stride_w + rx * dilation_w, rc].astype(out_dtype) *
+											Filter[ry, rx, rc, ff].astype(out_dtype), axis=[ry, rx, rc]),
+										name="Conv2dOutput_{}".format(conv_count), 
+										tag="conv2d_nhwc")
+			else: # 1x1: only reduce rc axis
+				if device == "cuda":
+					Output = tvm.compute(
+						(batch, out_height, out_width, out_channel),
+						lambda nn, yy, xx, ff: tvm.sum(
+													Input[nn, yy * stride_h, xx * stride_w, rc].astype(out_dtype) *
+													Filter[0, 0, rc, ff].astype(out_dtype), axis=[rc]),
+												name="Conv2dOutput_{}".format(conv_count), 
+												tag="conv2d_nhwc")
+				else: # CPU: array packing
+					packed_factor = 8
+					PackedFilter = tvm.compute(
+						(1, 1, tvm.indexdiv(num_filter, packed_factor), kernel_channel, packed_factor),
+						lambda v, w, x, y, z: Filter[0, 0, y, x * packed_factor + z],
+						name="PackedFilter_{}".format(idx)
+					)
+					stages.append([PackedFilter])
+					Output = tvm.compute(
+						(batch, out_height, out_width, out_channel),
+						lambda nn, yy, xx, ff: tvm.sum(
+													Input[nn, yy * stride_h, xx * stride_w, rc].astype(out_dtype) *
+													PackedFilter[0, 0, ff // packed_factor, rc, ff % packed_factor].astype(out_dtype), axis=[rc]),
+												name="Conv2dOutput_{}".format(conv_count),
+												tag="conv2d_nhwc")
+
 			conv_count += 1
 		else: # Depthwise convolution (kernel > 1)
 			Output = tvm.compute(
@@ -172,6 +191,9 @@ if __name__ == "__main__":
 					tvm.placeholder((1, 1, 128, 128), name='Conv2dFilter_0'),
 					depthwise=False, bn_relu="relu", kernel=1, stride=1, dilation=1))
 
-	stages, data = fused_convs(Input, Filters)
-	print(stages)
-	print(data)
+	stages, data = fused_convs(Input, Filters, device="cpu")
+	for s in stages:
+		print(s)
+	print("******")
+	for d in data:
+		print(d)
