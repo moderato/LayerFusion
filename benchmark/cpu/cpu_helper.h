@@ -4,6 +4,7 @@
 #include <fstream>
 #include <cstdio>
 #include <chrono>
+#include <ittnotify.h>
 #include <dlpack/dlpack.h>
 #include <tvm/runtime/module.h>
 #include <tvm/runtime/registry.h>
@@ -21,7 +22,7 @@
                              ::"i"(tag) : "%ebx")
 #endif
 
-#define DEBUG 1
+// #define DEBUG 1
 
 void benchmark_generated_cpu(std::string workload_name,
     int input_batch, int input_height, int input_width, int input_channel,
@@ -104,9 +105,9 @@ void benchmark_generated_cpu(std::string workload_name,
                     device_type, device_id, &filter_2);
     TVMArrayAlloc(output_shape_tuple, ndim, dtype_code, dtype_bits, dtype_lanes,
                     device_type, device_id, &output);
-    input->data = input_npy.data<float>();
-    filter_1->data = kernel_1_npy.data<float>();
-    filter_2->data = kernel_2_npy.data<float>();
+    memcpy(input->data, input_npy.data<float>(), input_batch * input_height * input_width * input_channel * sizeof(float));
+    memcpy(filter_1->data, kernel_1_npy.data<float>(), kernel_1_height * kernel_1_width * kernel_1_in_channel * kernel_1_out_channel_or_multiplier * sizeof(float));
+    memcpy(filter_2->data, kernel_2_npy.data<float>(), kernel_2_height * kernel_2_width * kernel_2_in_channel * kernel_2_out_channel * sizeof(float));
 
 #ifdef DEBUG
     std::cout << "npy_input_shape: (" << input_shape_tuple[0] << ", " << input_shape_tuple[1] << ", " << input_shape_tuple[2] << ", " << input_shape_tuple[3] << ")" << std::endl;
@@ -116,10 +117,14 @@ void benchmark_generated_cpu(std::string workload_name,
 #endif
 
     // Timing
-    float runtime_us = 0.0f;
+    float runtime_us = 0.0f, runtime_1_us = 0.0f;
     int output_shape = output_batch * output_height * output_width * output_channel;
-    for (int i = 0; i < REPEATITION; i++) {
-        memset(output->data, 0, output_shape * sizeof(float));
+    __itt_resume();
+    for (int i = 0; i < REPEATITION * 2; i++) {
+        // memset(output->data, 0, output_shape * sizeof(float));
+        if (i == REPEATITION) {
+            runtime_1_us = runtime_us;
+        }
         auto start = std::chrono::high_resolution_clock::now();
 
         __SSC_MARK(0x111);
@@ -131,7 +136,9 @@ void benchmark_generated_cpu(std::string workload_name,
         long long ns = std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count();
         runtime_us += ns / 1000.0f / REPEATITION;
     }
-    printf("Fusion runtime is %f us.\n", runtime_us);
+    __itt_pause();
+
+    printf("Fusion runtime is %f us.\n", runtime_us - runtime_1_us);
 
     // Verification
     int count = 0;

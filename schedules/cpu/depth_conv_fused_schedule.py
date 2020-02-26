@@ -36,7 +36,7 @@ def schedule_depth_conv_fused_nhwc(outs, stages, params, bn_relu1=None, bn_relu2
  
     # Searchable parameters
     # --------------------
-    output_step_tile_size_h = 2
+    output_step_tile_size_h = 4
     output_step_tile_size_w = 4
     step_num_h = 7
     step_num_w = 7
@@ -100,7 +100,7 @@ def schedule_depth_conv_fused_nhwc(outs, stages, params, bn_relu1=None, bn_relu2
     # ####### Packed filter
     _, _, ooc, ic, ioc = s[PackedFilter].op.axis
     # ---
-    s[PackedFilter].compute_root()
+    s[PackedFilter].compute_at(s[OutputStage], fused_blx)
     # ---
     # s[PackedFilter].compute_at(s[OutputStage], fused_blx)
     # s[PackedFilter].parallel(ooc)

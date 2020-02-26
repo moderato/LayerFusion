@@ -4,21 +4,25 @@ TARGET := cpu_bench
 CXXFLAGS := -std=c++11 -O2 -fPIC \
 	-I${TVM_HOME}/include \
 	-I${DMLC_CORE}/include \
-	-I${TVM_HOME}/3rdparty/dlpack/include
-LDFLAGS := -L${TVM_HOME}/build
-ASFLAGS := -march=core-avx2
-KERNEL ?= ../../generated_kernels/cpu/mv1_2.asm
+	-I${TVM_HOME}/3rdparty/dlpack/include \
+	-I${VTUNE_HOME}/include
+LDFLAGS := \
+	-L${TVM_HOME}/build -ltvm_runtime \
+	-L/usr/local/lib \
+	-L${VTUNE_HOME}/lib64 \
+	-littnotify -ldl -pthread -lcnpy -lz 
+ASFLAGS := -march=corei7+fma+avx+avx2+sse3
+KERNEL ?= ../../generated_kernels/cpu/mv1_3.asm
 REPEATITION ?= 1000
 
 all: $(TARGET).cpp
-	$(ASXX) $(KERNEL) -o kernel.o
-	$(CXX) kernel.o -shared -fPIC -m64 -o kernel.so
+	$(ASXX) $(ASFLAGS) $(KERNEL) -o kernel.o
+	$(CXX) kernel.o -shared -fPIC -o kernel.so
 	$(CXX) $(CXXFLAGS) \
-		$(LDFLAGS) \
 		-D REPEATITION=$(REPEATITION) \
 		$(TARGET).cpp \
 		-o $(TARGET) \
-		-ldl -pthread -lcnpy -lz -ltvm_runtime
+		$(LDFLAGS)
 
 .phony: clean
 
