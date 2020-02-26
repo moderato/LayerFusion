@@ -11,33 +11,33 @@ from helper import *
 
 np.random.seed(42)
 targets = {
-    "cuda": {
-        "key": "1050ti",
-        "host": None,
-        "config_params": {
-            "number": 100, # Number of runs for averaging runtime
-            "repeat": 3, # (number of runs) = 1 repeats
-            # Suggested min_repeat_ms = 150 on GPUs
-            "min_repeat_ms": 300, # Dynamically adjust number of runs, i.e. time of one repeat = min(min_repeat_ms, number * kernel_runtime)
-            "timeout": { # Timeout of a compilation
-                "depth_conv": 10,
-                "conv_conv": 500
-            }
-        }
-    },
-    # "llvm -mcpu=core-avx2": {
-    #     "key": "i7_7700K",
-    #     "host": "llvm -target=x86_64-linux-gnu",
+    # "cuda": {
+    #     "key": "1050ti",
+    #     "host": None,
     #     "config_params": {
-    #         "number": 10,
-    #         "repeat": 1,
-    #         "min_repeat_ms": 300,
-    #         "timeout": {
-    #             "depth_conv": 200,
-    #             "conv_conv": 10000
+    #         "number": 100, # Number of runs for runtime averaging
+    #         "repeat": 3, # (number of runs) = 1 repeats
+    #         # Suggested min_repeat_ms = 150 on GPUs
+    #         "min_repeat_ms": 300, # Dynamically adjust number of runs, i.e. time of one repeat = min(min_repeat_ms, number * kernel_runtime)
+    #         "timeout": { # Timeout of a compilation
+    #             "depth_conv": 10,
+    #             "conv_conv": 500
     #         }
     #     }
-    # }
+    # },
+    "llvm -mcpu=core-avx2": {
+        "key": "i7_7700K",
+        "host": "llvm -target=x86_64-linux-gnu",
+        "config_params": {
+            "number": 40,
+            "repeat": 1,
+            "min_repeat_ms": 100,
+            "timeout": {
+                "depth_conv": 200,
+                "conv_conv": 10000
+            }
+        }
+    }
 }
 
 def verify_fused(workload_name,
@@ -46,6 +46,7 @@ def verify_fused(workload_name,
                     layout="NHWC", 
                     no_print_ir=False, 
                     print_src=False, 
+                    dry_run=False,
                     save_data=False, 
                     export_code=False, 
                     auto_tvm=False, 
@@ -57,7 +58,7 @@ def verify_fused(workload_name,
     ref_data = get_ref_data(workload_name, parameters, dtype=dtype, layout=layout, save_data=save_data, name=name)
 
     def check_device(device):
-        if not tvm.module.enabled(device):
+        if not tvm.runtime.enabled(device):
             print("Skip because %s is not enabled" % device)
             return
         print("Running on target: %s" % device)
@@ -126,6 +127,8 @@ def verify_fused(workload_name,
                 print(func.imported_modules[0].get_source())
             else:
                 print(func.get_source("asm")) # assembly code
+        if dry_run: # Only print IR and/or source
+            return
         if export_code:
             if device == "cuda":
                 code = func.imported_modules[0].get_source()
@@ -142,8 +145,14 @@ def verify_fused(workload_name,
             else: # Leave the last nd_array as all-zero
                 nd_arrays.append(tvm.nd.array(np.zeros(get_const_tuple(array.shape), dtype=dtype), ctx)) # Append 0 output data
 
-        timer_1 = func.time_evaluator(func.entry_name, ctx, number=100)
-        tcost_1 = timer_1(*nd_arrays).mean
+        # Measure a 'delta' time
+        run_number = 1000
+        timer_1 = func.time_evaluator(func.entry_name, ctx, number=run_number)
+        tcost_1 = timer_1(*nd_arrays).mean * run_number
+        timer_2 = func.time_evaluator(func.entry_name, ctx, number=run_number*2)
+        tcost_2 = timer_2(*nd_arrays).mean * run_number * 3
+        tcost_d = (tcost_2 - tcost_1) / (run_number * 2)
+
         # np.testing.assert_allclose(nd_arrays[-1].asnumpy(), ref_data[-1], rtol=1e-3)
         d = ~np.isclose(nd_arrays[-1].asnumpy(), ref_data[-1], rtol=1e-3)
         if (np.sum(d) > 0):
@@ -152,7 +161,9 @@ def verify_fused(workload_name,
             print(ref_data[-1][d])
             print(np.where(d))
         # print("Error rate: {:.2f}%".format((len(d) / len(ref_data[-1]) * 100)))
-        print("{}_fused of {} ({}): average running time is {:.2f} us.".format(name, workload_name, layout, tcost_1 * 1e6))
+        print("{}_fused of {} ({}): average running time is {:.2f} us.".format(name, workload_name, layout, tcost_d * 1e6))
+        FLOP = autotvm.task.task.compute_flop(s)
+        print("FLOP: {}, GFLOPS: {:.2f}.".format(FLOP, FLOP / tcost_d / 1e9))
 
     for device in targets.keys():
         check_device(device)
@@ -168,6 +179,7 @@ if __name__ == "__main__":
         parser = argparse.ArgumentParser(description="Parses command.")
         parser.add_argument("-n", "--no_print_ir", action="store_true", help="Don't print IR code.")
         parser.add_argument("-s", "--print_src", action="store_true", help="Print source code.")
+        parser.add_argument("-y", "--dry_run", action="store_true", help="Dry run.")
         parser.add_argument("-d", "--save_data", action="store_true", help="Save numpy data as npy files.")
         parser.add_argument("-c", "--export_code", action="store_true", help="Export generated kernel code.")
         parser.add_argument("-a", "--auto_tvm", action="store_true", help="AutoTVM for auto tuning.")
@@ -188,6 +200,7 @@ if __name__ == "__main__":
                             no_print_ir=options.no_print_ir,
                             print_src=options.print_src,
                             save_data=options.save_data,
+                            dry_run=options.dry_run,
                             export_code=options.export_code,
                             auto_tvm=options.auto_tvm,
                             auto_tvm_skip_training=options.auto_tvm_skip_training,
