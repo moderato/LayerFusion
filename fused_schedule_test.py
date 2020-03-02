@@ -11,29 +11,27 @@ from helper import *
 
 np.random.seed(42)
 targets = {
-    # "cuda": {
-    #     "key": "1050ti",
-    #     "host": None,
-    #     "config_params": {
-    #         "number": 100, # Number of runs for runtime averaging
-    #         "repeat": 3, # (number of runs) = 1 repeats
-    #         # Suggested min_repeat_ms = 150 on GPUs
-    #         "min_repeat_ms": 300, # Dynamically adjust number of runs, i.e. time of one repeat = min(min_repeat_ms, number * kernel_runtime)
-    #         "timeout": { # Timeout of a compilation
-    #             "depth_conv": 10,
-    #             "conv_conv": 500
-    #         }
-    #     }
-    # },
+    "cuda": {
+        "key": "1050ti",
+        "config_params": {
+            "number": 100, # Number of runs for runtime averaging
+            "repeat": 3, # (number of runs) = 1 repeats
+            # Suggested min_repeat_ms = 150 on GPUs
+            "min_repeat_ms": 300, # Dynamically adjust number of runs, i.e. time of one repeat = min(min_repeat_ms, number * kernel_runtime)
+            "timeout": { # Timeout of a compilation
+                "depth_conv": 10,
+                "conv_conv": 500
+            }
+        }
+    },
     "llvm -mcpu=core-avx2": {
         "key": "i7_7700K",
-        "host": "llvm -target=x86_64-linux-gnu",
         "config_params": {
-            "number": 40,
-            "repeat": 1,
-            "min_repeat_ms": 100,
+            "number": 200,
+            "repeat": 3,
+            "min_repeat_ms": 0,
             "timeout": {
-                "depth_conv": 200,
+                "depth_conv": 500,
                 "conv_conv": 10000
             }
         }
@@ -57,20 +55,20 @@ def verify_fused(workload_name,
 
     ref_data = get_ref_data(workload_name, parameters, dtype=dtype, layout=layout, save_data=save_data, name=name)
 
-    def check_device(device):
-        if not tvm.runtime.enabled(device):
-            print("Skip because %s is not enabled" % device)
+    def check_target(target):
+        if not tvm.runtime.enabled(target):
+            print("Skip because %s is not enabled" % target)
             return
-        print("Running on target: %s" % device)
-        if "llvm" in device:
+        print("Running on target: %s" % target)
+        if "llvm" in target:
             ctx = tvm.cpu()
-            device_name = "cpu"
+            device = "cpu"
         else: # cuda
-            ctx = tvm.context(device, 0)
-            device_name = "gpu"
+            ctx = tvm.context(target, 0)
+            device = "gpu"
 
         if auto_tvm:
-            log_name = 'logs/autotvm/{}/{}_fused_{}.log'.format(device_name, name, workload_name)
+            log_name = 'logs/autotvm/{}/{}_fused_{}.log'.format(device, name, workload_name)
             print(log_name)
 
             # logging
@@ -78,8 +76,8 @@ def verify_fused(workload_name,
             logging.getLogger('autotvm').addHandler(logging.StreamHandler(sys.stdout))
 
             # fused schedule auto
-            sargs = autotvm.task.topi_integration.serialize_args([parameters, auto_tvm, device, name])
-            task = autotvm.task.create(get_schedule, args=sargs, target=device, target_host=targets[device]["host"])
+            sargs = autotvm.task.topi_integration.serialize_args([parameters, auto_tvm, target, name])
+            task = autotvm.task.create(get_schedule, args=sargs, target=target)
             print(task.config_space)
             print(task.target)
             print(task.workload)
@@ -89,16 +87,22 @@ def verify_fused(workload_name,
                 measure_option = autotvm.measure_option(
                     builder=autotvm.LocalBuilder(),
                     runner=autotvm.RPCRunner(
-                        targets[device]["key"], '0.0.0.0', 9190,
-                        number=targets[device]["config_params"]["number"],
-                        repeat=targets[device]["config_params"]["repeat"],
-                        timeout=targets[device]["config_params"]["timeout"][name],
-                        min_repeat_ms=targets[device]["config_params"]["min_repeat_ms"])
+                        targets[target]["key"], '0.0.0.0', 9190,
+                        number=targets[target]["config_params"]["number"],
+                        repeat=targets[target]["config_params"]["repeat"],
+                        timeout=targets[target]["config_params"]["timeout"][name],
+                        min_repeat_ms=targets[target]["config_params"]["min_repeat_ms"])
                 )
-                tuner = autotvm.tuner.XGBTuner(task)
+                tuner = autotvm.tuner.XGBTuner(task, feature_type="curve")
+
+                # Transfer learning if the training log exists
+                if os.path.isfile(log_name):
+                    tuner.load_history(autotvm.record.load_from_file(log_name))
+
                 tuner.tune(n_trial=auto_tvm_trials,
-                        measure_option=measure_option,
-                        callbacks=[autotvm.callback.log_to_file(log_name)])
+                            measure_option=measure_option,
+                            callbacks=[autotvm.callback.progress_bar(auto_tvm_trials),
+                                        autotvm.callback.log_to_file(log_name)])
 
             # inspect the best config
             dispatch_context = autotvm.apply_history_best(log_name)
@@ -108,34 +112,38 @@ def verify_fused(workload_name,
 
             # export kernel launch config ONLY FOR GPUS, e.g. thxyz, blxy
             output_shape = ref_data[-1].shape
-            if device == "cuda":
+            if target == "cuda":
                 export_kernel_launch_config(workload_name, output_shape, best_config)
 
             # apply history best from log file
             with autotvm.apply_history_best(log_name):
-                with tvm.target.create(device):
-                    s, flatten_params = get_schedule(parameters, auto_tvm, device, name)
+                with tvm.target.create(target):
+                    s, flatten_params = get_schedule(parameters, auto_tvm, target, name)
         else:
-            with tvm.target.create(device):
-                s, flatten_params = get_schedule(parameters, auto_tvm, device, name)
+            with tvm.target.create(target):
+                s, flatten_params = get_schedule(parameters, auto_tvm, target, name)
 
         if not no_print_ir:
             print(tvm.lower(s, flatten_params, simple_mode=True))
-        func = tvm.build(s, flatten_params, device, name="fused_2")
+        func = tvm.build(s, flatten_params, target, name="fused_2")
         if print_src:
-            if device == "cuda":
+            if target == "cuda":
                 print(func.imported_modules[0].get_source())
             else:
                 print(func.get_source("asm")) # assembly code
         if dry_run: # Only print IR and/or source
             return
         if export_code:
-            if device == "cuda":
+            if target == "cuda":
                 code = func.imported_modules[0].get_source()
                 write_code(code, "generated_kernels/gpu/{}.cuh".format(workload_name))
             else: # CPU
                 code = func.get_source("asm")
                 write_code(code, "generated_kernels/cpu/{}.asm".format(workload_name))
+
+                # func.export_library("benchmark/cpu/kernel.so")
+                # func_sys = tvm.build(s, flatten_params, target + " --system-lib", name="fused_2_sys")
+                # func_sys.save("benchmark/cpu/kernel_sys.o")
 
         # Prepare data
         nd_arrays = []
@@ -165,8 +173,8 @@ def verify_fused(workload_name,
         FLOP = autotvm.task.task.compute_flop(s)
         print("FLOP: {}, GFLOPS: {:.2f}.".format(FLOP, FLOP / tcost_d / 1e9))
 
-    for device in targets.keys():
-        check_device(device)
+    for target in ["llvm -mcpu=core-avx2"]:
+        check_target(target)
     print("############################################")
 
 if __name__ == "__main__":

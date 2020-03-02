@@ -1,5 +1,6 @@
 import tvm
 from tvm import autotvm
+import math
 
 def schedule_depth_conv_fused_nhwc_auto(outs, stages, params, device="cuda", bn_relu1=None, bn_relu2=None):
     outs = [outs] if isinstance(outs, tvm.tensor.Tensor) else outs
@@ -17,11 +18,13 @@ def schedule_depth_conv_fused_nhwc_auto(outs, stages, params, device="cuda", bn_
         F_1 = params[1][0]
 
     if bn_relu2 is not None:
-        Out, OutScaleShift, OutReLU = stages[3]
+        PackedFilter = stages[3][0]
+        Out, OutScaleShift, OutReLU = stages[4]
         OutputStage = OutReLU
         F_2, Scale_2, Shift_2 = params[2]
     else:
-        Out = stages[3][0]
+        PackedFilter = stages[3][0]
+        Out = stages[4][0]
         OutputStage = Out
         F_2 = params[2][0]
 
@@ -39,66 +42,68 @@ def schedule_depth_conv_fused_nhwc_auto(outs, stages, params, device="cuda", bn_
 
     ######## AutoTVM config
     cfg = autotvm.get_config()
+    vec_length = 8
+    avx2_vec_reg_count = 16
 
     # ######## Global output
     n, h, w, c = s[OutputStage].op.axis
-    cfg.define_split("split_h", h, num_outputs=4)
-    cfg.define_split("split_w", w, num_outputs=3)
-    cfg.define_split("split_c", c, num_outputs=4, filter=lambda x: x.size[-1] in [4, 8, 16]) # _, intermediate_reuse, num_thread_x
-    ho, thz, thy, h = cfg["split_h"].apply(s, OutputStage, h)
-    wo, vthy, w = cfg["split_w"].apply(s, OutputStage, w)
-    recompute, reuse, othx, ithx = cfg["split_c"].apply(s, OutputStage, c) # reuse > 1 ??
-    s[OutputStage].reorder(n, ho, wo, recompute, reuse, vthy, thz, thy, othx, ithx, h, w)
-    fused_blx = s[OutputStage].fuse(n, ho, wo, recompute)
-    s[OutputStage].parallel(fused_blx)
-    s[OutputStage].vectorize(ithx)
+    # cfg.define_split("split_output_h", h, num_outputs=3, policy="candidate", candidate=[[2, 7, 4]])
+    # cfg.define_split("split_output_w", w, num_outputs=3, policy="candidate", candidate=[[2, 7, 4]])
+    # cfg.define_split("split_output_c", c, num_outputs=4, policy="candidate", candidate=[[1, 4, 4, 8]])
+    cfg.define_split("split_output_h", h, num_outputs=3, policy="verbose", filter=lambda x: x.size[-1] > 1)
+    cfg.define_split("split_output_w", w, num_outputs=3, policy="verbose", filter=lambda x: x.size[-1] > 1)
+    cfg.define_split("split_output_c", c, num_outputs=4, policy="power2", filter=lambda x: x.size[-1] == vec_length) # _, intermediate_reuse, num_thread_x
+    ht, ho, h = cfg["split_output_h"].apply(s, OutputStage, h)
+    wt, wo, w = cfg["split_output_w"].apply(s, OutputStage, w)
+    recompute, reuse, othx, ithx = cfg["split_output_c"].apply(s, OutputStage, c)
+    s[OutputStage].reorder(n, ht, wt, recompute, ho, wo, h, w, reuse, othx, ithx)
     s[OutputStage].unroll(othx)
-    # unroll tuning
-    cfg.define_annotate('output_unroll', [reuse, vthy, thz, thy, othx, h, w], policy='try_unroll')
-    cfg['output_unroll'].apply(s, OutputStage, [reuse, vthy, thz, thy, othx, h, w])
-    # ------------------
-    num_thread_z = output_step_tile_size_h = cfg["split_h"].size[1]
-    num_thread_y = output_step_tile_size_w = cfg["split_h"].size[2]
-    num_thread_x = cfg["split_c"].size[2] * cfg["split_c"].size[3] # GPU: cfg["split_c"].size[2]
-    output_tile_size_h = cfg["split_h"].size[1] * cfg["split_h"].size[2] * cfg["split_h"].size[3]
-    output_tile_size_w = cfg["split_w"].size[1] * cfg["split_w"].size[2]
+    s[OutputStage].vectorize(ithx)
+    fused_blx = s[OutputStage].fuse(n, ht, wt, recompute)
+    s[OutputStage].parallel(fused_blx)
 
     ######## Local output
-    s[OL].compute_at(s[OutputStage], vthy) # GPU: thx
+    s[OL].compute_at(s[OutputStage], wo)
     n, h, w, c = s[OL].op.axis
     rc, = s[OL].op.reduce_axis
-    cfg.define_split("split_rc", rc, num_outputs=3, filter=lambda x: (x.size[-1] * x.size[-2] == num_thread_x)) # _, reduce_split
-    cfg.define_split("split_output_local_vec", c, num_outputs=3, filter=lambda x: x.size[-1] in [4, 8, 16]) # _, reduce_split
-    xocc, xoicc, xiicc = cfg["split_rc"].apply(s, OL, rc)
-    ooc, ioc, ic = cfg["split_output_local_vec"].apply(s, OL, c)
-    s[OL].reorder(n, xocc, xoicc, h, w, ooc, ioc, ic, xiicc)
+    # cfg.define_split("split_ol_rc", rc, num_outputs=3, filter=lambda x: x.size[-1] == 4 and x.size[-2] == 8)
+    cfg.define_split("split_ol_rc", rc, num_outputs=3, filter=lambda x: (x.size[-1] * x.size[-2] >= vec_length))
+    xocc, xoicc, xiicc = cfg["split_ol_rc"].apply(s, OL, rc)
+    # cfg.define_split("split_ol_c", c, num_outputs=3, filter=lambda x: (x.size[-1] == vec_length) and (x.size[-2] == 2))
+    cfg.define_split("split_ol_c", c, num_outputs=3, filter=lambda x: (x.size[-1] == vec_length) and (x.size[-2] in range(1, math.floor(math.sqrt(avx2_vec_reg_count))+1))) # Limiting L1 block size
+    ooc, ioc, ic = cfg["split_ol_c"].apply(s, OL, c)
+    s[OL].reorder(n,    xocc,    ooc, h,    xoicc,    w, xiicc, ioc, ic)
     s[OL].vectorize(ic)
-    # unroll tuning
-    cfg.define_annotate('output_local_unroll', [h, w, ioc, xiicc], policy='try_unroll')
-    cfg['output_local_unroll'].apply(s, OL, [h, w, ioc, xiicc])
 
-    if bn_relu2 is not None:
-        s[ScaleL_2].compute_at(s[OutputStage], vthy) # GPU: thx
-        s[ShiftL_2].compute_at(s[OutputStage], vthy)
+    # reorder and unroll
+    cfg.define_reorder("output_local_reorder", [h, xoicc, w, xiicc, ioc], policy="all")
+    cfg["output_local_reorder"].apply(s, OL, [h, xoicc, w, xiicc, ioc])
+    # cfg.define_reorder("output_local_reorder", [h, xoicc, w, xiicc],
+    #                     policy="interleave", spatial=[[h, w]], reduce=[[xoicc, xiicc]])
+    # cfg["output_local_reorder"].apply(s, OL, [h, xoicc, w, xiicc])
+    cfg.define_annotate('output_local_unroll', [w, xiicc, ioc], policy='try_unroll')
+    cfg['output_local_unroll'].apply(s, OL, [w, xiicc, ioc])
+
+    # ####### Packed filter
+    s[PackedFilter].compute_root()
+    _, _, ooc, ic, ioc = s[PackedFilter].op.axis
+    s[PackedFilter].vectorize(ioc)
+    s[PackedFilter].parallel(ooc)
+    cfg.define_split("split_packed", ic, num_outputs=2, filter=lambda x: x.size[-1] in [2, 4, 8, 16])
+    oic, iic = cfg["split_packed"].apply(s, PackedFilter, ic)
+    s[PackedFilter].unroll(iic)
 
     ######## Intermediate output in shared memory
     s[IntermediateStage].compute_at(s[OL], xocc)
     n, h, w, c = s[IntermediateStage].op.axis
     ry, rx = s[IntermediateStage].op.reduce_axis
-    cfg.define_split("split_inter_vec", c, num_outputs=3, 
-                        filter=lambda x: x.size[-1] in [4, 8, 16] and x.size[-1] * x.size[-2] == num_thread_x) # _, reduce_split
-    inter_oc, inter_oic, inter_iic = cfg["split_inter_vec"].apply(s, IntermediateStage, c)
-    ho, wo, h_tile, w_tile = s[IntermediateStage].tile(h, w, x_factor=output_tile_size_h, y_factor=output_tile_size_w)
-    h_step, w_step, h_step_tile, w_step_tile = s[IntermediateStage].tile(h_tile, w_tile, x_factor=output_step_tile_size_h, y_factor=output_step_tile_size_w)
-    s[IntermediateStage].reorder(n, ho, wo, inter_oc, h_step, w_step, h_step_tile, w_step_tile, inter_oic, inter_iic)
-    s[IntermediateStage].unroll(inter_oic)
-    s[IntermediateStage].vectorize(inter_iic)
-    # reorder_tuning
-    cfg.define_reorder("inter_reorder", [ry, rx, inter_oic, inter_iic], "all")
-    cfg["inter_reorder"].apply(s, IntermediateStage, [ry, rx, inter_oic, inter_iic])
+    s[IntermediateStage].reorder(n, h, ry, rx, w, c)
+    s[IntermediateStage].vectorize(c)
 
-    if bn_relu1 is not None:
-        s[ScaleL_1].compute_at(s[IntermediateStage], inter_oic) # GPU: inter_ic
-        s[ShiftL_1].compute_at(s[IntermediateStage], inter_oic)
+    # reorder and unroll and vectorization
+    cfg.define_reorder("inter_reorder", [ry, rx, w], policy="all")
+    cfg["inter_reorder"].apply(s, IntermediateStage, [ry, rx, w])
+    cfg.define_annotate('inter_unroll', [ry, rx, w], policy='try_unroll')
+    cfg['inter_unroll'].apply(s, IntermediateStage, [ry, rx, w])
 
     return s
