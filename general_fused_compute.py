@@ -1,5 +1,6 @@
 from __future__ import absolute_import as _abs
 import tvm
+from tvm import te, autotvm
 
 from topi.nn.dilate import dilate
 from topi.nn.pad import pad
@@ -74,15 +75,15 @@ def fused_convs(input_data, filters, is_block=False, device="cuda"):
 			Input = PaddedInput
 			batch, in_height, in_width, in_channel = Input.shape
 			# Reduce axis
-			ry = tvm.reduce_axis((0, kernel_h), name='ry')
-			rx = tvm.reduce_axis((0, kernel_w), name='rx')
+			ry = te.reduce_axis((0, kernel_h), name='ry')
+			rx = te.reduce_axis((0, kernel_w), name='rx')
 			
 		if not depthwise: # Normal convolution
-			rc = tvm.reduce_axis((0, in_channel), name='rc')
+			rc = te.reduce_axis((0, in_channel), name='rc')
 			if kernel > 1:
-				Output = tvm.compute(
+				Output = te.compute(
 				(batch, out_height, out_width, out_channel),
-				lambda nn, yy, xx, ff: tvm.sum(
+				lambda nn, yy, xx, ff: te.sum(
 											Input[nn, yy * stride_h + ry * dilation_h,
 														xx * stride_w + rx * dilation_w, rc].astype(out_dtype) *
 											Filter[ry, rx, rc, ff].astype(out_dtype), axis=[ry, rx, rc]),
@@ -90,24 +91,24 @@ def fused_convs(input_data, filters, is_block=False, device="cuda"):
 										tag="conv2d_nhwc")
 			else: # 1x1: only reduce rc axis
 				if device == "cuda":
-					Output = tvm.compute(
+					Output = te.compute(
 						(batch, out_height, out_width, out_channel),
-						lambda nn, yy, xx, ff: tvm.sum(
+						lambda nn, yy, xx, ff: te.sum(
 													Input[nn, yy * stride_h, xx * stride_w, rc].astype(out_dtype) *
 													Filter[0, 0, rc, ff].astype(out_dtype), axis=[rc]),
 												name="Conv2dOutput_{}".format(conv_count), 
 												tag="conv2d_nhwc")
-				else: # CPU: array packing
+				else: # CPU: array packing, mandatory!
 					packed_factor = 8
-					PackedFilter = tvm.compute(
-						(1, 1, tvm.indexdiv(num_filter, packed_factor), kernel_channel, packed_factor),
+					PackedFilter = te.compute(
+						(1, 1, te.indexdiv(num_filter, packed_factor), kernel_channel, packed_factor),
 						lambda v, w, x, y, z: Filter[0, 0, y, x * packed_factor + z],
-						name="PackedFilter_{}".format(idx)
+						name="PackedFilter_Conv2d_{}".format(idx)
 					)
 					stages.append([PackedFilter])
-					Output = tvm.compute(
+					Output = te.compute(
 						(batch, out_height, out_width, out_channel),
-						lambda nn, yy, xx, ff: tvm.sum(
+						lambda nn, yy, xx, ff: te.sum(
 													Input[nn, yy * stride_h, xx * stride_w, rc].astype(out_dtype) *
 													PackedFilter[0, 0, ff // packed_factor, rc, ff % packed_factor].astype(out_dtype), axis=[rc]),
 												name="Conv2dOutput_{}".format(conv_count),
@@ -132,13 +133,13 @@ def fused_convs(input_data, filters, is_block=False, device="cuda"):
 			_, _, _, out_channel = Output.shape
 			tensor_name = Output.name
 			number = tensor_name.split('_')[-1]
-			Scale = tvm.placeholder((out_channel),
+			Scale = te.placeholder((out_channel),
 								name='Scale_{}_{}'.format(
 									'DepthwiseConv2d' if depthwise else 'Conv2d', number))
-			Shift = tvm.placeholder((out_channel),
+			Shift = te.placeholder((out_channel),
 								name='Shift_{}_{}'.format(
 									'DepthwiseConv2d' if depthwise else 'Conv2d', number))
-			ScaleShift =  tvm.compute(Output.shape, lambda b, i, j, c: Output[b, i, j, c] * Scale[c] + Shift[c],
+			ScaleShift =  te.compute(Output.shape, lambda b, i, j, c: Output[b, i, j, c] * Scale[c] + Shift[c],
 								name='ScaleShift_{}_{}'.format(
 									'DepthwiseConv2d' if depthwise else 'Conv2d', number),
 								tag='scaleshift_nhwc')
@@ -152,7 +153,7 @@ def fused_convs(input_data, filters, is_block=False, device="cuda"):
 			First = stages[0][0]
 			Last = tmp_stages[-1] # Output if bn_relu is None, ScaleShift if it's not None
 			assert sorted(get_const_tuple(First.shape)) == sorted(get_const_tuple(Last.shape)), "{} is not the same as {}".format(First.shape, Last.shape)
-			Output = tvm.compute(
+			Output = te.compute(
 				(batch, out_height, out_width, out_channel),
 				lambda b, i, j, c: (First[b, i, j, c] + (Last[b, i, j, c])),
 				name='ElementwiseAddOutput_{}'.format(depthwise_count), tag="elem_nhwc").astype(out_dtype)
@@ -161,14 +162,14 @@ def fused_convs(input_data, filters, is_block=False, device="cuda"):
 		if bn_relu is not None:
 			Last = tmp_stages[-1] # ScaleShift if it's not a block, Output is it's a block
 			if bn_relu == 'relu':
-				ReLU = tvm.compute(Last.shape, lambda *i: tvm.max(Last(*i), tvm.const(0, Last.dtype)),
+				ReLU = te.compute(Last.shape, lambda *i: te.max(Last(*i), tvm.runtime.const(0, Last.dtype)),
 								name='ReLU_{}_{}'.format(
 									'DepthwiseConv2d' if depthwise else 'Conv2d', number),
 								tag='relu_nhwc')
 			else: # 'relu6'
-				ReLU = tvm.compute(Last.shape, lambda *i: tvm.min(
-									tvm.max(Last(*i), tvm.const(0, Last.dtype)),
-									tvm.const(6, Last.dtype)),
+				ReLU = te.compute(Last.shape, lambda *i: te.min(
+									te.max(Last(*i), te.const(0, Last.dtype)),
+									tvm.runtime.const(6, Last.dtype)),
 								name='ReLU6_{}_{}'.format(
 									'DepthwiseConv2d' if depthwise else 'Conv2d', number),
 								tag='relu')
@@ -181,14 +182,14 @@ def fused_convs(input_data, filters, is_block=False, device="cuda"):
 	return stages, params
 
 if __name__ == "__main__":
-	Input = tvm.placeholder((1, 56, 56, 128), name='Input')
+	Input = te.placeholder((1, 56, 56, 128), name='Input')
 
 	Filters = []
 	Filters.append(FilterParams(
-					tvm.placeholder((3, 3, 128, 1), name='DepthwiseFilter_0'),
+					te.placeholder((3, 3, 128, 1), name='DepthwiseFilter_0'),
 					depthwise=True, bn_relu="relu", kernel=3, stride=1, dilation=1))
 	Filters.append(FilterParams(
-					tvm.placeholder((1, 1, 128, 128), name='Conv2dFilter_0'),
+					te.placeholder((1, 1, 128, 128), name='Conv2dFilter_0'),
 					depthwise=False, bn_relu="relu", kernel=1, stride=1, dilation=1))
 
 	stages, data = fused_convs(Input, Filters, device="cpu")

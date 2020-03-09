@@ -152,4 +152,9 @@ void benchmark_generated_cpu(std::string workload_name,
             count++;
     }
     printf("Output wrong count: %d\n", count);
+
+    TVMArrayFree(input);
+    TVMArrayFree(filter_1);
+    TVMArrayFree(filter_2);
+    TVMArrayFree(output);
 }

@@ -1,9 +1,8 @@
-import tvm
-from tvm import autotvm
+from tvm import autotvm, te
 
 def schedule_depth_conv_fused_nhwc_auto(outs, stages, params, bn_relu1=None, bn_relu2=None):
-    outs = [outs] if isinstance(outs, tvm.tensor.Tensor) else outs
-    s = tvm.create_schedule([x.op for x in outs])
+    outs = [outs] if isinstance(outs, te.tensor.Tensor) else outs
+    s = te.create_schedule([x.op for x in outs])
 
     ######## Get stages
     PaddedInput = stages[1][0]
@@ -51,13 +50,13 @@ def schedule_depth_conv_fused_nhwc_auto(outs, stages, params, bn_relu1=None, bn_
         OL = s.cache_write(OutputStage, "local")
 
     ######## Blocks, threads and vthreads
-    block_x = tvm.thread_axis("blockIdx.x")
-    thread_x = tvm.thread_axis("threadIdx.x")
-    thread_y = tvm.thread_axis("threadIdx.y")
-    thread_z = tvm.thread_axis("threadIdx.z")
-    vthread_x = tvm.thread_axis("vthread", name="vthread_x")
-    vthread_y = tvm.thread_axis("vthread", name="vthread_y")
-    vthread_z = tvm.thread_axis("vthread", name="vthread_z")
+    block_x = te.thread_axis("blockIdx.x")
+    thread_x = te.thread_axis("threadIdx.x")
+    thread_y = te.thread_axis("threadIdx.y")
+    thread_z = te.thread_axis("threadIdx.z")
+    vthread_x = te.thread_axis("vthread", name="vthread_x")
+    vthread_y = te.thread_axis("vthread", name="vthread_y")
+    vthread_z = te.thread_axis("vthread", name="vthread_z")
 
     ################################################################
 

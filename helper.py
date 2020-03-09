@@ -1,7 +1,7 @@
 import numpy as np
 import topi, topi.testing
 from general_fused_compute import *
-from tvm import autotvm
+from tvm import autotvm, te
 import os
 
 class FilterParams:
@@ -178,7 +178,7 @@ def export_kernel_launch_config(workload_name, output_shape, best_config):
     recompute = output_shape[3]
 
     # print("n: {}, ho: {}, wo: {}, recompute: {}".format(n, ho, wo, recompute))
-    for e in config_dict['e']:
+    for e in config_dict['entity']:
         if e[0] == "split_h":
             thz = e[2][1]
             thy = e[2][2]
@@ -285,9 +285,9 @@ def get_input_and_filters(p):
 
     # placeholder (NHWC)
     # Input: NHWC, Kernel: HWIO for both depthwise and conv2d
-    Input = tvm.placeholder(input_shape, name='Input')
-    Filter_1 = tvm.placeholder(filter_1_shape, name='Filter_1')
-    Filter_2 = tvm.placeholder(filter_2_shape, name='Filter_2')
+    Input = te.placeholder(input_shape, name='Input')
+    Filter_1 = te.placeholder(filter_1_shape, name='Filter_1')
+    Filter_2 = te.placeholder(filter_2_shape, name='Filter_2')
 
     # For getting ref data
     placeholders = []
@@ -310,7 +310,7 @@ def get_input_and_filters(p):
 
     return Input, Filters
 
-@autotvm.template
+@autotvm.register_customized_task("fused")
 def get_schedule(parameters, auto_tvm=False, device="cuda", name='depth_conv'):
 
     p = Parameters(parameters)
@@ -320,7 +320,7 @@ def get_schedule(parameters, auto_tvm=False, device="cuda", name='depth_conv'):
     # Get the graph
     # stages: all output stages in the graph
     # params: inputs & outputs of the graph, including filters, BNs, etc
-    stages, params = fused_convs(Input, Filters, is_block=is_block)
+    stages, params = fused_convs(Input, Filters, is_block=is_block, device=device)
     output_stage = stages[-1][-1]
 
     if device == "cuda":

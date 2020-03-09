@@ -53,8 +53,6 @@ def verify_fused(workload_name,
                     name='depth_conv'):
     assert layout in ["NHWC", "NCHW", "NCHWc16", "NCHWc4"]
 
-    ref_data = get_ref_data(workload_name, parameters, dtype=dtype, layout=layout, save_data=save_data, name=name)
-
     def check_target(target):
         if not tvm.runtime.enabled(target):
             print("Skip because %s is not enabled" % target)
@@ -77,7 +75,7 @@ def verify_fused(workload_name,
 
             # fused schedule auto
             sargs = autotvm.task.topi_integration.serialize_args([parameters, auto_tvm, target, name])
-            task = autotvm.task.create(get_schedule, args=sargs, target=target)
+            task = autotvm.task.create("fused", args=sargs, target=target)
             print(task.config_space)
             print(task.target)
             print(task.workload)
@@ -146,6 +144,14 @@ def verify_fused(workload_name,
                 # func_sys.save("benchmark/cpu/kernel_sys.o")
 
         # Prepare data
+        ref_data = get_ref_data(workload_name, parameters, dtype=dtype, layout=layout, save_data=save_data, name=name)
+
+        # export kernel launch config ONLY FOR GPUS, e.g. thxyz, blxy
+        output_shape = ref_data[-1].shape
+        if target == "cuda":
+            assert (best_config is not None)
+            export_kernel_launch_config(workload_name, output_shape, best_config)
+
         nd_arrays = []
         for idx, array in enumerate(ref_data):
             if idx != len(ref_data) - 1: # Append data to nd_arrays
