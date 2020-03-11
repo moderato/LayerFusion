@@ -1,6 +1,6 @@
 from tvm import te
 
-def schedule_depth_conv_fused_nhwc(outs, stages, params, bn_relu1=None, bn_relu2=None):
+def schedule_depth_conv_fused_nhwc(cfg, outs, stages, params, bn_relu1=None, bn_relu2=None):
     outs = [outs] if isinstance(outs, te.tensor.Tensor) else outs
     s = te.create_schedule([x.op for x in outs])
 
@@ -27,16 +27,15 @@ def schedule_depth_conv_fused_nhwc(outs, stages, params, bn_relu1=None, bn_relu2
     # --------------------
     output_step_tile_size_h = 2
     output_step_tile_size_w = 2
-    step_num_h = 2
-    step_num_w = 2
-    reduce_split = 4
+    step_num_h = 4
+    step_num_w = 4
+    reduce_split = 16
     intermediate_reuse = 4 # How many 32x32 blocks of 1x1 filter reuse the intermediate data
     num_thread_x = 32
     # --------------------
     output_tile_size_h = output_step_tile_size_h * step_num_h
     output_tile_size_w = output_step_tile_size_w * step_num_w
-    num_thread_y = output_step_tile_size_w
-    num_thread_z = output_step_tile_size_h
+    num_thread_y = output_step_tile_size_w * output_step_tile_size_h
     num_vthread_z = step_num_h * step_num_w
     num_vthread_y = 1
     num_vthread_x = 32
@@ -70,7 +69,6 @@ def schedule_depth_conv_fused_nhwc(outs, stages, params, bn_relu1=None, bn_relu2
     block_x = te.thread_axis("blockIdx.x")
     thread_x = te.thread_axis((0, num_thread_x), "threadIdx.x")
     thread_y = te.thread_axis((0, num_thread_y), "threadIdx.y")
-    thread_z = te.thread_axis((0, num_thread_z), "threadIdx.z")
 
     # ######## Vthreads
     vthread_x = te.thread_axis((0, num_vthread_x), "vthread", name="vthread_x")
@@ -82,12 +80,10 @@ def schedule_depth_conv_fused_nhwc(outs, stages, params, bn_relu1=None, bn_relu2
     c_outer, thx = s[OutputStage].split(c, factor=num_thread_x)
     recompute, reuse = s[OutputStage].split(c_outer, factor=intermediate_reuse)
     ho, wo, h_tile, w_tile = s[OutputStage].tile(h, w, x_factor=output_tile_size_h, y_factor=output_tile_size_w)
-    thz, h_tile = s[OutputStage].split(h_tile, nparts=num_thread_z)
     thy, h_tile = s[OutputStage].split(h_tile, nparts=num_thread_y)
     vthy, w_tile = s[OutputStage].split(w_tile, nparts=num_vthread_y)
-    s[OutputStage].reorder(n, ho, wo, recompute, reuse, vthy, thz, thy, thx, h_tile, w_tile)
+    s[OutputStage].reorder(n, ho, wo, recompute, reuse, vthy, thy, thx, h_tile, w_tile)
     fused_blx = s[OutputStage].fuse(n, ho, wo, recompute)
-    s[OutputStage].bind(thz, thread_z)
     s[OutputStage].bind(fused_blx, block_x)
     s[OutputStage].bind(vthy, vthread_y)
     s[OutputStage].bind(reuse, vthread_x)
@@ -110,11 +106,9 @@ def schedule_depth_conv_fused_nhwc(outs, stages, params, bn_relu1=None, bn_relu2
     h1, w1, i1, o1 = s[FS_2].op.axis
     io = s[FS_2].fuse(i1, o1)
     io, iox = s[FS_2].split(io, factor=num_thread_x * 4)
-    ioz, io = s[FS_2].split(io, nparts=num_thread_z)
     ioy, io = s[FS_2].split(io, nparts=num_thread_y)
     iox, io4 = s[FS_2].split(iox, factor=4)
-    s[FS_2].reorder(h1, w1, io, ioz, ioy, iox, io4)
-    s[FS_2].bind(ioz, thread_z)
+    s[FS_2].reorder(h1, w1, io, ioy, iox, io4)
     s[FS_2].bind(iox, thread_x)
     s[FS_2].bind(ioy, thread_y)
     s[FS_2].vectorize(io4)
@@ -127,8 +121,8 @@ def schedule_depth_conv_fused_nhwc(outs, stages, params, bn_relu1=None, bn_relu2
     h_step, w_step, h_step_tile, w_step_tile = s[IntermediateStage].tile(h_tile, w_tile, x_factor=output_step_tile_size_h, y_factor=output_step_tile_size_w)
     s[IntermediateStage].reorder(n, ho, wo, inter_co, h_step, w_step, h_step_tile, w_step_tile, inter_ci)
     vthz = s[IntermediateStage].fuse(h_step, w_step)
-    s[IntermediateStage].bind(h_step_tile, thread_z)
-    s[IntermediateStage].bind(w_step_tile, thread_y)
+    thy = s[IntermediateStage].fuse(h_step_tile, w_step_tile)
+    s[IntermediateStage].bind(thy, thread_y)
     s[IntermediateStage].bind(inter_ci, thread_x)
     s[IntermediateStage].bind(vthz, vthread_z)
 
@@ -144,6 +138,9 @@ def schedule_depth_conv_fused_nhwc(outs, stages, params, bn_relu1=None, bn_relu2
 
     # ######## Depthwise filter
     s[FL_1].compute_at(s[IntermediateStage], inter_co)
+    h, w, i, o = s[FL_1].op.axis
+    io = s[FL_1].fuse(i, o)
+    s[FL_1].bind(io, thread_x)
 
     # ######## Shared Input
     s[PaddedSharedInput].compute_at(s[IntermediateStage], inter_co)
@@ -151,8 +148,8 @@ def schedule_depth_conv_fused_nhwc(outs, stages, params, bn_relu1=None, bn_relu2
     co, ci = s[PaddedSharedInput].split(c, factor=num_thread_x)
     ho, wo, h_tile, w_tile = s[PaddedSharedInput].tile(h, w, x_factor=output_step_tile_size_h, y_factor=output_step_tile_size_w)
     s[PaddedSharedInput].reorder(co, n, ho, wo, h_tile, w_tile, ci)
-    s[PaddedSharedInput].bind(h_tile, thread_z)
-    s[PaddedSharedInput].bind(w_tile, thread_y)
+    thy = s[PaddedSharedInput].fuse(h_tile, w_tile)
+    s[PaddedSharedInput].bind(thy, thread_y)
     s[PaddedSharedInput].bind(ci, thread_x)
 
     return s

@@ -6,6 +6,7 @@ from scipy import signal
 from topi.util import get_const_tuple
 from tvm.contrib.pickle_memoize import memoize
 from tvm import autotvm
+from general_fused_compute import get_schedule
 
 from helper import *
 
@@ -62,7 +63,7 @@ def verify_fused(workload_name,
             ctx = tvm.cpu()
             device = "cpu"
         else: # cuda
-            ctx = tvm.context(target, 0)
+            ctx = tvm.gpu()
             device = "gpu"
 
         if auto_tvm:
@@ -108,13 +109,8 @@ def verify_fused(workload_name,
             print("\nBest config:")
             print(best_config)
 
-            # export kernel launch config ONLY FOR GPUS, e.g. thxyz, blxy
-            output_shape = ref_data[-1].shape
-            if target == "cuda":
-                export_kernel_launch_config(workload_name, output_shape, best_config)
-
             # apply history best from log file
-            with autotvm.apply_history_best(log_name):
+            with dispatch_context:
                 with tvm.target.create(target):
                     s, flatten_params = get_schedule(parameters, auto_tvm, target, name)
         else:
@@ -148,7 +144,7 @@ def verify_fused(workload_name,
 
         # export kernel launch config ONLY FOR GPUS, e.g. thxyz, blxy
         output_shape = ref_data[-1].shape
-        if target == "cuda":
+        if target == "cuda" and auto_tvm:
             assert (best_config is not None)
             export_kernel_launch_config(workload_name, output_shape, best_config)
 

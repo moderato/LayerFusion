@@ -1,6 +1,6 @@
 from tvm import autotvm, te
 
-def schedule_depth_conv_fused_nhwc_auto(outs, stages, params, bn_relu1=None, bn_relu2=None):
+def schedule_depth_conv_fused_nhwc_auto(cfg, outs, stages, params, bn_relu1=None, bn_relu2=None):
     outs = [outs] if isinstance(outs, te.tensor.Tensor) else outs
     s = te.create_schedule([x.op for x in outs])
 
@@ -60,17 +60,11 @@ def schedule_depth_conv_fused_nhwc_auto(outs, stages, params, bn_relu1=None, bn_
 
     ################################################################
 
-    ######## AutoTVM config
-    cfg = autotvm.get_config()
-
     ######## Global output
     n, h, w, c = s[OutputStage].op.axis
-    cfg.define_split("split_h", h, num_outputs=4)
-    cfg.define_split("split_w", w, num_outputs=3)
-    cfg.define_split("split_c", c, num_outputs=3, filter=lambda x: x.size[-1] in [8, 16, 32, 64, 128]) # _, intermediate_reuse, num_thread_x
-    ho, thz, thy, h = cfg["split_h"].apply(s, OutputStage, h)
-    wo, vthy, w = cfg["split_w"].apply(s, OutputStage, w)
-    recompute, reuse, thx = cfg["split_c"].apply(s, OutputStage, c) # reuse > 1 ??
+    ho, thz, thy, h = cfg["split_output_h"].apply(s, OutputStage, h)
+    wo, vthy, w = cfg["split_output_w"].apply(s, OutputStage, w)
+    recompute, reuse, thx = cfg["split_output_c"].apply(s, OutputStage, c) # reuse > 1 ??
     s[OutputStage].reorder(n, ho, wo, recompute, reuse, vthy, thz, thy, thx, h, w)
     fused_blx = s[OutputStage].fuse(n, ho, wo, recompute)
     s[OutputStage].bind(fused_blx, block_x)
@@ -79,11 +73,11 @@ def schedule_depth_conv_fused_nhwc_auto(outs, stages, params, bn_relu1=None, bn_
     s[OutputStage].bind(thz, thread_z)
     s[OutputStage].bind(thy, thread_y)
     s[OutputStage].bind(thx, thread_x)
-    num_thread_z = output_step_tile_size_h = cfg["split_h"].size[1]
-    num_thread_y = output_step_tile_size_w = cfg["split_h"].size[2]
-    num_thread_x = cfg["split_c"].size[2]
-    output_tile_size_h = cfg["split_h"].size[1] * cfg["split_h"].size[2] * cfg["split_h"].size[3]
-    output_tile_size_w = cfg["split_w"].size[1] * cfg["split_w"].size[2]
+    num_thread_z = output_step_tile_size_h = cfg["split_output_h"].size[1]
+    num_thread_y = output_step_tile_size_w = cfg["split_output_h"].size[2]
+    num_thread_x = cfg["split_output_c"].size[2]
+    output_tile_size_h = cfg["split_output_h"].size[1] * cfg["split_output_h"].size[2] * cfg["split_output_h"].size[3]
+    output_tile_size_w = cfg["split_output_w"].size[1] * cfg["split_output_w"].size[2]
     
     ######## Local output
     s[OL].compute_at(s[OutputStage], thx)
@@ -136,6 +130,9 @@ def schedule_depth_conv_fused_nhwc_auto(outs, stages, params, bn_relu1=None, bn_
 
     ######## Depthwise filter
     s[FL_1].compute_at(s[IntermediateStage], inter_co)
+    h, w, i, o = s[FL_1].op.axis
+    io = s[FL_1].fuse(i, o)
+    s[FL_1].bind(io, thread_x)
 
     ######## Shared Input
     s[PaddedSharedInput].compute_at(s[IntermediateStage], inter_co)

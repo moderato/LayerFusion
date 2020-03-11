@@ -1,20 +1,22 @@
 import numpy as np
 import topi, topi.testing
-from general_fused_compute import *
+from topi.util import get_const_tuple
 from tvm import autotvm, te
 import os
 
+def vec_length(device="cuda"):
+	return [8, 16, 32, 64, 128] if device == "cuda" else [8]
+
 class FilterParams:
-	def __init__(self, placeholder, layout="NHWC", depthwise=False, bn_relu=None, kernel=3, stride=1, padding="SAME", dilation=1):
-		assert bn_relu in [None, "relu", "relu6"]
-		self.placeholder = placeholder
-		self.layout = layout
-		self.depthwise = depthwise
-		self.bn_relu = bn_relu
-		self.kernel = kernel
-		self.stride = stride
-		self.padding = padding
-		self.dilation = dilation
+    def __init__(self, placeholder, layout="NHWC", depthwise=False, bn_relu=None, stride=1, padding="SAME", dilation=1):
+        assert bn_relu in [None, "relu", "relu6"]
+        self.placeholder = placeholder
+        self.layout = layout
+        self.depthwise = depthwise
+        self.bn_relu = bn_relu
+        self.stride = stride
+        self.padding = padding
+        self.dilation = dilation
 
 class Parameters:
     def __init__(self, p):
@@ -91,7 +93,7 @@ class Parameters:
         print("Is a block: {}".format(self.is_block))
 
 def flatten_list(lst):
-	return sum(([x] if not isinstance(x, list) else flatten_list(x) for x in lst), [])
+    return sum(([x] if not isinstance(x, list) else flatten_list(x) for x in lst), [])
 
 def write_code(code, fname):
     with open(fname, "w") as f:
@@ -179,17 +181,17 @@ def export_kernel_launch_config(workload_name, output_shape, best_config):
 
     # print("n: {}, ho: {}, wo: {}, recompute: {}".format(n, ho, wo, recompute))
     for e in config_dict['entity']:
-        if e[0] == "split_h":
+        if e[0] == "split_output_h":
             thz = e[2][1]
             thy = e[2][2]
             for ee in e[2][1:]:
                 ho = (ho + ee - 1) // ee
                 # print("ho: {}", ho)
-        elif e[0] == "split_w":
+        elif e[0] == "split_output_w":
             for ee in e[2][1:]:
                 wo = (wo + ee - 1) // ee
                 # print("wo: {}", wo)
-        elif e[0] == "split_c":
+        elif e[0] == "split_output_c":
             reuse = e[2][1]
             thx = e[2][2]
             for ee in e[2][1:]:
@@ -286,8 +288,8 @@ def get_input_and_filters(p):
     # placeholder (NHWC)
     # Input: NHWC, Kernel: HWIO for both depthwise and conv2d
     Input = te.placeholder(input_shape, name='Input')
-    Filter_1 = te.placeholder(filter_1_shape, name='Filter_1')
-    Filter_2 = te.placeholder(filter_2_shape, name='Filter_2')
+    Filter_1 = te.placeholder(filter_1_shape, name='Layer_0_Filter')
+    Filter_2 = te.placeholder(filter_2_shape, name='Layer_1_Filter')
 
     # For getting ref data
     placeholders = []
@@ -301,45 +303,11 @@ def get_input_and_filters(p):
                     Filter_1,
                     depthwise=p.is_f1_depthwise(),
                     bn_relu=p.get_f1_bn_relu(),
-                    kernel=p.get_f1_K(), stride=p.get_f1_stride(), dilation=1))
+                    stride=p.get_f1_stride(), dilation=1))
     Filters.append(FilterParams(
                     Filter_2,
                     depthwise=p.is_f2_depthwise(),
                     bn_relu=p.get_f2_bn_relu(),
-                    kernel=p.get_f2_K(), stride=p.get_f2_stride(), dilation=1))
+                    stride=p.get_f2_stride(), dilation=1))
 
     return Input, Filters
-
-@autotvm.register_customized_task("fused")
-def get_schedule(parameters, auto_tvm=False, device="cuda", name='depth_conv'):
-
-    p = Parameters(parameters)
-    Input, Filters = get_input_and_filters(p)
-    is_block = p.get_is_block()
-
-    # Get the graph
-    # stages: all output stages in the graph
-    # params: inputs & outputs of the graph, including filters, BNs, etc
-    stages, params = fused_convs(Input, Filters, is_block=is_block, device=device)
-    output_stage = stages[-1][-1]
-
-    if device == "cuda":
-        from schedules.schedules import gpu_schedules as sch
-    else:
-        from schedules.schedules import cpu_schedules as sch
-
-    f = sch(name, auto_tvm)
-    s = f(output_stage, stages, params,
-            bn_relu1=p.get_f1_bn_relu(), bn_relu2=p.get_f2_bn_relu())
-    return s, flatten_list(params)
-
-if __name__ == "__main__":
-    parameters = (1, 56, 56, 128, 3, 1, 1, True, None, 1, 128, 1, False, None, False)
-    auto_tvm = False
-    device = "cuda"
-    name = 'depth_conv'
-    import tvm
-    from tvm import autotvm
-    with tvm.target.create(device):
-        s, flatten_params = get_schedule(parameters, auto_tvm, device, name)
-    print(tvm.lower(s, flatten_params, simple_mode=True))
