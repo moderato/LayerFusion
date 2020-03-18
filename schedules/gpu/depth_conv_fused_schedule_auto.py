@@ -83,8 +83,7 @@ def schedule_depth_conv_fused_nhwc_auto(cfg, outs, stages, params, bn_relu1=None
     s[OL].compute_at(s[OutputStage], thx)
     n, h, w, c = s[OL].op.axis
     rc, = s[OL].op.reduce_axis
-    cfg.define_split("split_rc", rc, num_outputs=3) # _, _, reduce_split
-    xocc, xoicc, xiicc = cfg["split_rc"].apply(s, OL, rc)
+    xocc, xoicc, xiicc = cfg["split_output_rc"].apply(s, OL, rc)
     s[OL].reorder(n, xocc, xoicc, h, w, c, xiicc)
 
     if bn_relu2 is not None:
@@ -130,9 +129,9 @@ def schedule_depth_conv_fused_nhwc_auto(cfg, outs, stages, params, bn_relu1=None
 
     ######## Depthwise filter
     s[FL_1].compute_at(s[IntermediateStage], inter_co)
-    h, w, i, o = s[FL_1].op.axis
-    io = s[FL_1].fuse(i, o)
-    s[FL_1].bind(io, thread_x)
+    # h, w, i, o = s[FL_1].op.axis
+    # io = s[FL_1].fuse(i, o)
+    # s[FL_1].bind(io, thread_x)
 
     ######## Shared Input
     s[PaddedSharedInput].compute_at(s[IntermediateStage], inter_co)
