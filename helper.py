@@ -5,7 +5,13 @@ from tvm import autotvm, te
 import os
 
 def vec_length(device="cuda"):
-	return [8, 16, 32, 64, 128] if device == "cuda" else [8]
+    if device == "cuda":
+        return [8, 16, 32, 64, 128]
+    if device == "llvm -mcpu=core-avx2":
+        return [8]
+    if device == "llvm -mcpu=skylake-avx512":
+        return [16]
+    return [4]
 
 class FilterParams:
     def __init__(self, placeholder, layout="NHWC", depthwise=False, bn_relu=None, stride=1, padding="SAME", dilation=1):

@@ -2,11 +2,12 @@ from topi.nn.dilate import dilate
 from topi.nn.pad import pad
 from topi.nn.util import get_pad_tuple
 from topi.util import simplify, get_const_tuple
+import tvm
 from tvm import autotvm, te
 from helper import vec_length
 
 class LayerConfig:
-    def __init__(self, cfg, Input, filter_params, idx, device):
+    def __init__(self, Input, filter_params, idx, device="cuda", is_final_stage=False):
         f = filter_params
         Filter = f.placeholder
         self.layout = f.layout
@@ -46,6 +47,7 @@ class LayerConfig:
         self._output_dtype = Input.dtype
         self._layer_num = idx
         self._device = device
+        self._is_final_stage = is_final_stage
         self._stages = []
         self._params = []
 
@@ -84,32 +86,32 @@ class LayerConfig:
         ry = te.reduce_axis((0, kernel_h), name='ry')
         rx = te.reduce_axis((0, kernel_w), name='rx')
 
-        if not array_packing:
-            Output = te.compute(self._output_shape,
-                                lambda b, i, j, c: te.sum(
-                                                        (self._input[b, i*self.stride_h + ry*self.dilation_h, j*self.stride_w + rx*self.dilation_w,
-                                                                    te.indexdiv(c, channel_multiplier)].astype(self._output_dtype) *
-                                                        self._filter[ry, rx, te.indexdiv(c, channel_multiplier), te.indexmod(c, channel_multiplier)].astype(self._output_dtype)), axis=[ry, rx]),
-                                                    name='Layer_{}_DepthwiseConv2dOutput'.format(self._layer_num), tag="depthwise_nhwc")
-        else:
-            assert channel_multiplier.value == 1 # Currently only support group = 1
-            if cfg is not None:
-                    cfg.define_knob["layer_{}_filter_packed_factor".format(self._layer_num), [4, 8, 16, 32]]
-                    packed_factor = cfg["layer_{}_filter_packed_factor".format(self._layer_num)].val
-            else:
-                packed_factor = 32
+        # if not array_packing:
+        Output = te.compute(self._output_shape,
+                            lambda b, i, j, c: te.sum(
+                                                    (self._input[b, i*self.stride_h + ry*self.dilation_h, j*self.stride_w + rx*self.dilation_w,
+                                                                te.indexdiv(c, channel_multiplier)].astype(self._output_dtype) *
+                                                    self._filter[ry, rx, te.indexdiv(c, channel_multiplier), te.indexmod(c, channel_multiplier)].astype(self._output_dtype)), axis=[ry, rx]),
+                                                name='Layer_{}_DepthwiseConv2dOutput'.format(self._layer_num), tag="depthwise_nhwc")
+        # else:
+        #     assert channel_multiplier.value == 1 # Currently only support group = 1
+        #     if cfg is not None:
+        #         cfg.define_knob("layer_{}_filter_packed_factor".format(self._layer_num), [4, 8, 16, 32])
+        #         packed_factor = cfg["layer_{}_filter_packed_factor".format(self._layer_num)].val
+        #     else:
+        #         packed_factor = 32
 
-            PackedFilter = te.compute(
-                (te.indexdiv(kernel_channel, packed_factor), kernel_h, kernel_w, packed_factor, channel_multiplier),
-                lambda v, x, y, w, z: self._filter[x, y, v * packed_factor + w, z],
-                name="Layer_{}_PackedFilter".format(self._layer_num)
-            )
-            self._stages.append([PackedFilter])
-            Output = te.compute(self._output_shape,
-                                lambda b, i, j, c: te.sum(
-                                                        (self._input[b, i*self.stride_h + ry*self.dilation_h, j*self.stride_w + rx*self.dilation_w, c].astype(self._out_dtype) *
-                                                        PackedFilter[c // packed_factor, ry, rx, c % packed_factor, 0].astype(self._out_dtype)), axis=[ry, rx]),
-                                                    name='Layer_{}_DepthwiseConv2dOutput'.format(self._layer_num), tag="depthwise_nhwc")
+        #     PackedFilter = te.compute(
+        #         (te.indexdiv(kernel_channel, packed_factor), kernel_h, kernel_w, packed_factor, channel_multiplier),
+        #         lambda v, x, y, w, z: self._filter[x, y, v * packed_factor + w, z],
+        #         name="Layer_{}_PackedFilter".format(self._layer_num)
+        #     )
+        #     self._stages.append([PackedFilter])
+        #     Output = te.compute(self._output_shape,
+        #                         lambda b, i, j, c: te.sum(
+        #                                                 (self._input[b, i*self.stride_h + ry*self.dilation_h, j*self.stride_w + rx*self.dilation_w, c].astype(self._output_dtype) *
+        #                                                 PackedFilter[c // packed_factor, ry, rx, c % packed_factor, 0].astype(self._output_dtype)), axis=[ry, rx]),
+        #                                             name='Layer_{}_DepthwiseConv2dOutput'.format(self._layer_num), tag="depthwise_nhwc")
         self._output = Output
 
     def make_conv_output(self, cfg, array_packing=False):
@@ -133,11 +135,12 @@ class LayerConfig:
                                                         name="Layer_{}_Conv2dOutput".format(self._layer_num), 
                                                         tag="conv2d_nhwc")
         else: # 1x1: only reduce rc axis
-            if cfg is not None:
+            if self._is_final_stage: # Only split the last stage
                 cfg.define_split("split_output_h", out_height.value, num_outputs=(4 if self._device == "cuda" else 3), policy="verbose")
                 cfg.define_split("split_output_w", out_width.value, num_outputs=3, policy="verbose")
                 cfg.define_split("split_output_c", out_channel.value, num_outputs=(3 if self._device == "cuda" else 4), 
                                     policy="power2", filter=lambda x: x.size[-1] in vec_length(self._device))
+                cfg.define_split("split_output_rc", in_channel.value, num_outputs=3)
 
             if not array_packing:
                 Output = te.compute(self._output_shape,
@@ -148,7 +151,7 @@ class LayerConfig:
                                                             tag="conv2d_nhwc")
             else: # Array packing mandatory for CPU!
                 if cfg is not None:
-                    cfg.define_knob["layer_{}_filter_packed_factor".format(self._layer_num), [4, 8, 16, 32]]
+                    cfg.define_knob("layer_{}_filter_packed_factor".format(self._layer_num), [4, 8, 16, 32])
                     packed_factor = cfg["layer_{}_filter_packed_factor".format(self._layer_num)].val
                 else:
                     packed_factor = 8
@@ -211,9 +214,9 @@ class LayerConfig:
     def make_output(self, cfg, array_packing=False, block_input=None):
         if self._output is None:
             if self.depthwise: # Depthwise
-                self.make_depthwise_output(cfg)
+                self.make_depthwise_output(cfg, array_packing=array_packing)
             else: # Normal convolution
-                self.make_conv_output(cfg)
+                self.make_conv_output(cfg, array_packing=array_packing)
 
             self._stages.append([self._output])
             self._params.append([self._filter])

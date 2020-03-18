@@ -16,8 +16,8 @@ def fused_convs(cfg, input_data, filters, is_block=False, device="cuda", array_p
 		tmp_params = []
 
 		Input = stages[-1][-1]
-		sc = LayerConfig(cfg, Input, f_param, idx, device)
-		sc.make_output(cfg, array_packing=(device != "cuda"))
+		sc = LayerConfig(Input, f_param, idx, device=device, is_final_stage=(idx==len(filters)-1))
+		sc.make_output(cfg, array_packing=(device!="cuda"))
 
 		stages.extend(sc.get_stages())
 		params.extend(sc.get_params())
@@ -32,13 +32,12 @@ def get_schedule(parameters, auto_tvm=False, device="cuda", name='depth_conv'):
     p = Parameters(parameters)
     Input, Filters = get_input_and_filters(p)
     is_block = p.get_is_block()
-
     cfg = autotvm.get_config()
 
     # Get the graph
     # stages: all output stages in the graph
     # params: inputs & outputs of the graph, including filters, BNs, etc
-    stages, params = fused_convs(cfg, Input, Filters, is_block=is_block, device=device)
+    stages, params = fused_convs(cfg, Input, Filters, is_block=is_block, device=device, array_packing=(device != "cuda"))
     output_stage = stages[-1][-1]
 
     if device == "cuda":
@@ -71,7 +70,8 @@ def test_fused_convs():
 					te.placeholder((1, 1, 128, 128), name='Layer_{}_Conv2dFilter'.format(len(Filters))),
 					depthwise=False, bn_relu="relu", stride=1, dilation=1))
 
-	stages, data = fused_convs(None, Input, Filters, device="cpu", is_block=True)
+	cfg = autotvm.get_config()
+	stages, data = fused_convs(cfg, Input, Filters, device="cpu", is_block=False)
 	for s in stages:
 		print(s)
 	print("******")
