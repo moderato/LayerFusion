@@ -16,7 +16,8 @@ def fused_convs(cfg, input_data, filters, is_block=False, device="cuda", array_p
 		tmp_params = []
 
 		Input = stages[-1][-1]
-		sc = LayerConfig(Input, f_param, idx, device=device, is_final_stage=(idx==len(filters)-1))
+		sc = LayerConfig(Input, f_param, idx, device=device,
+						is_first_stage=(idx==0), is_final_stage=(idx==len(filters)-1))
 		sc.make_output(cfg, array_packing=(device!="cuda"))
 
 		stages.extend(sc.get_stages())
@@ -32,7 +33,7 @@ def get_schedule(parameters, auto_tvm=False, device="cuda", name='depth_conv'):
     p = Parameters(parameters)
     Input, Filters = get_input_and_filters(p)
     is_block = p.get_is_block()
-    cfg = autotvm.get_config()
+    cfg = autotvm.get_config() if auto_tvm else None
 
     # Get the graph
     # stages: all output stages in the graph
@@ -46,8 +47,8 @@ def get_schedule(parameters, auto_tvm=False, device="cuda", name='depth_conv'):
         from schedules.schedules import cpu_schedules as sch
 
     f = sch(name, auto_tvm)
-    s = f(cfg, output_stage, stages, params,
-            bn_relu1=p.get_f1_bn_relu(), bn_relu2=p.get_f2_bn_relu())
+    s = f(cfg, output_stage, stages, params, layer_num=len(Filters),
+            bn_relu=[p.get_f1_bn_relu(), p.get_f2_bn_relu()])
     return s, flatten_list(params)
 
 def test_get_schedule():
