@@ -177,6 +177,8 @@ class LayerConfig:
             #                                                 (self._input[n, c // packing_factor, h*self.stride_h + ry*self.dilation_h, w*self.stride_w + rx*self.dilation_w, c % packing_factor].astype(self._output_dtype) *
             #                                                 PackedFilter[c // packing_factor, ry, rx, c % packing_factor, 0].astype(self._output_dtype)), axis=[ry, rx]),
             #                                             name='Layer_{}_DepthwiseConv2dOutput'.format(self._layer_num), tag="depthwise_nhwc")
+
+            self._output_shape = (batch, out_channel // packing_factor, out_height, out_width, packing_factor)
             Output = te.compute(self._output_shape,
                                     lambda n, c_chunk, h, w, c_vec: te.sum(
                                                             (self._input[n, c_chunk, h*self.stride_h + ry*self.dilation_h, w*self.stride_w + rx*self.dilation_w, c_vec].astype(self._output_dtype) *
@@ -186,7 +188,11 @@ class LayerConfig:
         self._output = Output
 
     def make_conv_output(self, cfg, array_packing=False):
-        _, _, _, in_channel = self.get_input_shape()
+        if len(self._input.shape) == 4:
+            _, _, _, in_channel = self.get_input_shape()
+        else:
+            _, in_channel_chunk, _, _, in_channel_vec = self.get_input_shape()
+            in_channel = in_channel_chunk * in_channel_vec
         kernel_h, kernel_w, kernel_channel, num_filter = self.get_filter_shape()
         batch, out_height, out_width, out_channel = self.get_output_shape()
 
@@ -229,7 +235,7 @@ class LayerConfig:
                                                             name="Layer_{}_Conv2dOutput".format(self._layer_num), 
                                                             tag="conv2d_nhwc")
             else: # Array packing mandatory for CPU!
-                packing_factor = self.get_packing_factor()
+                packing_factor = self.get_packing_factor(cfg)
                 PackedFilter = te.compute(
                     (1, 1, te.indexdiv(num_filter, packing_factor), kernel_channel, packing_factor),
                     lambda h, w, oc_chunk, ic, oc_vec: self._filter[0, 0, ic, oc_chunk * packing_factor + oc_vec],
