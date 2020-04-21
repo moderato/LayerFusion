@@ -28,12 +28,24 @@ targets = {
     "llvm -mcpu=core-avx2": {
         "key": "i7_7700K",
         "config_params": {
-            "number": 200,
+            "number": 50,
             "repeat": 3,
             "min_repeat_ms": 0,
             "timeout": {
                 "depth_conv": 500,
                 "conv_conv": 10000
+            }
+        }
+    },
+    "llvm -mcpu=corei7-avx": {
+        "key": "xeon_E5",
+        "config_params": {
+            "number": 50,
+            "repeat": 3,
+            "min_repeat_ms": 0,
+            "timeout": {
+                "depth_conv": 1000,
+                "conv_conv": 15000
             }
         }
     }

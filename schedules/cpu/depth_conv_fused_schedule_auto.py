@@ -3,6 +3,7 @@ from tvm import autotvm, te
 import math
 from helper import vec_length
 
+########## gepm_var1 ##########
 def schedule_depth_conv_fused_nhwc_auto(cfg, outs, stages, params, layer_num=2, device="llvm -mcpu=core-avx2", bn_relu=[]):
     outs = [outs] if isinstance(outs, te.tensor.Tensor) else outs
     s = te.create_schedule([x.op for x in outs])
@@ -40,86 +41,73 @@ def schedule_depth_conv_fused_nhwc_auto(cfg, outs, stages, params, layer_num=2, 
     OL = s.cache_write(layer_output_dict['Layer_1'], "global")
 
     ################################################################
-    avx2_vec_reg_count = 16
-
     # ######## Global output
     n, h, w, c = s[layer_output_dict['Layer_1']].op.axis
-    # ---
-    # vec_length = 8
-    # cfg.define_split("split_output_h", h, num_outputs=3, policy="candidate", candidate=[[2, 7, 4]])
-    # cfg.define_split("split_output_w", w, num_outputs=3, policy="candidate", candidate=[[2, 7, 4]])
-    # cfg.define_split("split_output_c", c, num_outputs=4, policy="candidate", candidate=[[1, 4, 4, 8]])
-    # cfg.define_split("split_ol_rc", rc, num_outputs=3, filter=lambda x: x.size[-1] == 4 and x.size[-2] == 8)
-    # cfg.define_split("split_ol_c", c, num_outputs=3, filter=lambda x: (x.size[-1] == vec_length) and (x.size[-2] == 2))
-    # ---
     ht, ho, h = cfg["split_layer_1_h"].apply(s, layer_output_dict['Layer_1'], h)
     wt, wo, w = cfg["split_layer_1_w"].apply(s, layer_output_dict['Layer_1'], w)
-    recompute, reuse, othx, ithx = cfg["split_layer_1_c"].apply(s, layer_output_dict['Layer_1'], c)
-    s[layer_output_dict['Layer_1']].reorder(n, ht, wt, recompute, ho, wo, h, w, reuse, othx, ithx)
-    s[layer_output_dict['Layer_1']].unroll(othx)
-    s[layer_output_dict['Layer_1']].vectorize(ithx)
-    fused_blx = s[layer_output_dict['Layer_1']].fuse(n, ht, wt, recompute)
+    ct, co, ci, c = cfg["split_layer_1_c"].apply(s, layer_output_dict['Layer_1'], c)
+    s[layer_output_dict['Layer_1']].reorder(n, ht, wt, ct, ho, wo, h, w, co, ci, c)
+    # s[layer_output_dict['Layer_1']].unroll(ci)
+    co = s[layer_output_dict['Layer_1']].fuse(co, ci)
+    s[layer_output_dict['Layer_1']].unroll(co)
+    s[layer_output_dict['Layer_1']].vectorize(c)
+    fused_blx = s[layer_output_dict['Layer_1']].fuse(n, ht, wt, ct)
     s[layer_output_dict['Layer_1']].parallel(fused_blx)
 
     ######## Local output
     s[OL].compute_at(s[layer_output_dict['Layer_1']], wo)
     n, h, w, c = s[OL].op.axis
     rc, = s[OL].op.reduce_axis
-    xocc, xoicc, xiicc = cfg["split_layer_0_c"].apply(s, OL, rc)
-    cfg.define_split("split_ol_1_c", c, num_outputs=3, filter=lambda x: (x.size[-1] in vec_length(device)) and (x.size[-2] in range(1, avx2_vec_reg_count+1))) # Limiting L1 block size. TODO: Try to get rid of it
-    ooc, ioc, ic = cfg["split_ol_1_c"].apply(s, OL, c)
-    s[OL].reorder(n,    xocc,    ooc, h,    xoicc,    w, xiicc, ioc, ic)
+    # The split of c CAN follow the global c split, while the split of rc CANNOT follow the global rc split
+    oc, ic = s[OL].split(c, cfg["split_layer_1_c"].size[-1])
+    ooc, ioc = s[OL].split(oc, cfg["split_layer_1_c"].size[-2])
+    cfg.define_split("split_ol_rc", rc, 
+                        num_outputs=3, 
+                        policy="verbose", 
+                        filter=lambda x: (x.size[-1] * x.size[-2] >= cfg["split_layer_0_c"].size[-1])) # Limiting L1 block size. Split 3 or 2? Probably 2
+    orc, irc, rc = cfg["split_ol_rc"].apply(s, OL, rc)
+    s[OL].reorder(n,    orc,    ooc, h, irc,    w, rc, ioc, ic)
     s[OL].vectorize(ic)
 
-    # # reorder and unroll
-    # cfg.define_reorder("output_local_reorder", [h, xoicc, w, xiicc, ioc], policy="all")
-    # cfg["output_local_reorder"].apply(s, OL, [h, xoicc, w, xiicc, ioc])
-    # # cfg.define_reorder("output_local_reorder", [h, xoicc, w, xiicc],
-    # #                     policy="interleave", spatial=[[h, w]], reduce=[[xoicc, xiicc]])
-    # # cfg["output_local_reorder"].apply(s, OL, [h, xoicc, w, xiicc])
-    cfg.define_annotate('output_local_unroll', [w, xiicc, ioc], policy='try_unroll')
-    cfg['output_local_unroll'].apply(s, OL, [w, xiicc, ioc])
+    cfg.define_reorder("output_local_reorder", [h, irc, w, rc, ioc], policy="all")
+    cfg["output_local_reorder"].apply(s, OL, [h, irc, w, rc, ioc])
+    cfg.define_annotate('output_local_unroll', [w, ioc], policy='try_unroll')
+    cfg['output_local_unroll'].apply(s, OL, [w, ioc])
 
     # ####### Packed filter 1
-    # ---
-    s[stage_dict['PackedFilter_1']].compute_root()
-    # ---
-    # s[stage_dict['PackedFilter_1']].compute_at(s[OL], ooc)
-    # ---
     _, _, ooc, ic, ioc = s[stage_dict['PackedFilter_1']].op.axis
+    # s[stage_dict['PackedFilter_1']].compute_at(s[OL], orc)
+    s[stage_dict['PackedFilter_1']].compute_root()
     s[stage_dict['PackedFilter_1']].vectorize(ioc)
-    s[stage_dict['PackedFilter_1']].parallel(ooc)
     cfg.define_split("packed_unroll", ic, num_outputs=2, filter=lambda x: x.size[-1] in [2, 4, 8, 16])
     oic, iic = cfg["packed_unroll"].apply(s, stage_dict['PackedFilter_1'], ic)
     s[stage_dict['PackedFilter_1']].unroll(iic)
 
     ######## Intermediate output
-    s[layer_output_dict['Layer_0']].compute_at(s[OL], xocc)
-    n, c_chunk, h, w, c_vec = s[layer_output_dict['Layer_0']].op.axis
+    s[layer_output_dict['Layer_0']].compute_at(s[OL], orc)
     ry, rx = s[layer_output_dict['Layer_0']].op.reduce_axis
-    s[layer_output_dict['Layer_0']].reorder(n, c_chunk, h, ry, rx, w, c_vec)
+    n, c_chunk, h, w, c_vec = s[layer_output_dict['Layer_0']].op.axis
+    # ho, h = cfg["split_layer_0_h"].apply(s, layer_output_dict['Layer_0'], h)
+    # wo, w = cfg["split_layer_0_w"].apply(s, layer_output_dict['Layer_0'], w)
+    # co, ci = s[layer_output_dict['Layer_0']].split(c_chunk, factor=cfg["split_layer_0_c"].size[-2])
+    # s[layer_output_dict['Layer_0']].reorder(n, co, ho, wo, h, ry, rx, w, ci, c_vec)
+    # s[layer_output_dict['Layer_0']].unroll(ci)
+    s[layer_output_dict['Layer_0']].reorder(n, h, ry, rx, w, c_vec)
     s[layer_output_dict['Layer_0']].vectorize(c_vec)
-    s[layer_output_dict['Layer_0']].unroll(w)
 
     # ####### Packed filter 0
+    _, h, w, c_vec, _ = s[stage_dict['PackedFilter_0']].op.axis
     # ---
     s[stage_dict['PackedFilter_0']].compute_root()
     # ---
     # s[stage_dict['PackedFilter_0']].compute_at(s[layer_output_dict['Layer_0']], c_chunk)
     # ---
-    c_chunk, h, w, c_vec, _ = s[stage_dict['PackedFilter_0']].op.axis
     s[stage_dict['PackedFilter_0']].vectorize(c_vec)
     hw = s[stage_dict['PackedFilter_0']].fuse(h, w)
     s[stage_dict['PackedFilter_0']].unroll(hw)
 
-    # reorder and unroll and vectorization
-    cfg.define_reorder("inter_reorder", [ry, rx, w], policy="all")
-    cfg["inter_reorder"].apply(s, layer_output_dict['Layer_0'], [ry, rx, w])
-    cfg.define_annotate('inter_unroll', [ry, rx, w], policy='try_unroll')
-    cfg['inter_unroll'].apply(s, layer_output_dict['Layer_0'], [ry, rx, w])
-
     # Packed input
-    s[stage_dict['PackedInput']].compute_at(s[OL], xocc)
+    s[stage_dict['PackedInput']].compute_at(s[OL], orc)
     n, oc, h, w, ic = s[stage_dict['PackedInput']].op.axis
     s[stage_dict['PackedInput']].vectorize(ic)
 

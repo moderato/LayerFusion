@@ -13,6 +13,15 @@ def vec_length(device="cuda"):
         return [16]
     return [4]
 
+def register_count(device=None):
+    if device == "llvm -mcpu=corei7-avx":
+        return 16
+    if device == "llvm -mcpu=core-avx2":
+        return 16
+    if device == "llvm -mcpu=skylake-avx512":
+        return 32
+    return 0
+
 class FilterParams:
     def __init__(self, placeholder, layout="NHWC", depthwise=False, bn_relu=None, stride=1, padding="SAME", dilation=1):
         assert bn_relu in [None, "relu", "relu6"]
@@ -187,17 +196,17 @@ def export_kernel_launch_config(workload_name, output_shape, best_config):
 
     # print("n: {}, ho: {}, wo: {}, recompute: {}".format(n, ho, wo, recompute))
     for e in config_dict['entity']:
-        if e[0] == "split_output_h":
+        if e[0] == "split_layer_1_h": # TODO: Fix it layer with a layer num
             thz = e[2][1]
             thy = e[2][2]
             for ee in e[2][1:]:
                 ho = (ho + ee - 1) // ee
                 # print("ho: {}", ho)
-        elif e[0] == "split_output_w":
+        elif e[0] == "split_layer_1_w":
             for ee in e[2][1:]:
                 wo = (wo + ee - 1) // ee
                 # print("wo: {}", wo)
-        elif e[0] == "split_output_c":
+        elif e[0] == "split_layer_1_c":
             reuse = e[2][1]
             thx = e[2][2]
             for ee in e[2][1:]:

@@ -1,10 +1,11 @@
+import tvm
 from topi.nn.dilate import dilate
 from topi.nn.pad import pad
 from topi.nn.util import get_pad_tuple
 from topi.util import simplify, get_const_tuple
-import tvm
 from tvm import autotvm, te
-from helper import vec_length
+from helper import vec_length, register_count
+import math
 
 class LayerConfig:
     def __init__(self, Input, filter_params, idx, device="cuda", is_first_stage=False, is_final_stage=False):
@@ -136,12 +137,15 @@ class LayerConfig:
         ry = te.reduce_axis((0, kernel_h), name='ry')
         rx = te.reduce_axis((0, kernel_w), name='rx')
 
-        # # Let's just assume depthwise layer won't be the final layer
-        # # This is also the reduce axis of the next layer
         if cfg is not None:
-            # cfg.define_split("split_layer_{}_c".format(self._layer_num), out_channel.value, num_outputs=(3 if (self._device == "cuda" or not self._is_final_stage) else 4),
-            #                         policy="power2", filter=lambda x: x.size[-1] in vec_length(self._device))
-            cfg.define_split("split_layer_{}_c".format(self._layer_num), out_channel.value, num_outputs=3, policy="verbose")
+            # Assuming not final layer:
+            if self._device != "cuda": # Workaround: don't split HW here for CUDA; assume this won't be the last layer. TODO: Get rid of this.
+                # cfg.define_split("split_layer_{}_h".format(self._layer_num), out_height.value, num_outputs=2, policy="verbose")
+                # cfg.define_split("split_layer_{}_w".format(self._layer_num), out_width.value, num_outputs=2, policy="verbose")
+                cfg.define_split("split_layer_{}_c".format(self._layer_num), out_channel.value, num_outputs=3, policy="verbose", filter=lambda x: x.size[-1] in vec_length(self._device))
+            else:
+                cfg.define_split("split_layer_{}_c".format(self._layer_num), out_channel.value, num_outputs=(3 if (self._device == "cuda" or not self._is_final_stage) else 4),
+                                policy="verbose", filter=lambda x: x.size[-1] in vec_length(self._device))
 
         # Pad if necessary
         self.padding(cfg, array_packing)
@@ -204,21 +208,28 @@ class LayerConfig:
         if kernel_w.value > 1:
             rx = te.reduce_axis((0, kernel_w), name='rx')
 
-        if cfg is not None:
-            if self._is_final_stage: # Only split the last stage
-                cfg.define_split("split_layer_{}_h".format(self._layer_num), out_height.value, num_outputs=(4 if self._device == "cuda" else 3), policy="verbose")
-                cfg.define_split("split_layer_{}_w".format(self._layer_num), out_width.value, num_outputs=3, policy="verbose")
-
-            # cfg.define_split("split_layer_{}_c".format(self._layer_num), out_channel.value, num_outputs=(3 if (self._device == "cuda" or not self._is_final_stage) else 4),
-            #                     policy="power2", filter=lambda x: x.size[-1] in vec_length(self._device))
-            cfg.define_split("split_layer_{}_c".format(self._layer_num), out_channel.value, num_outputs=3, policy="verbose")
-
         # Pad if necessary
         self.padding(cfg, array_packing)
         if len(self._input.shape) == 4:
             batch, in_height, in_width, in_channel = self.get_input_shape()
         else: # Packed input
             batch, in_channel_chunk, in_height, in_width, in_channel_vec = self.get_input_shape()
+
+        # Assuming 2-layer and final layer
+        if cfg is not None:
+            cfg.define_split("split_layer_{}_h".format(self._layer_num), out_height.value,
+                                num_outputs=(4 if self._device == "cuda" else 3),
+                                policy="verbose",
+                                filter=lambda x: x.size[-1] > 1)
+            cfg.define_split("split_layer_{}_w".format(self._layer_num), out_width.value,
+                                num_outputs=3,
+                                policy="verbose",
+                                filter=lambda x: x.size[-1] > 1)
+            cfg.define_split("split_layer_{}_c".format(self._layer_num), out_channel.value,
+                                num_outputs=(3 if (self._device == "cuda" or not self._is_final_stage) else 4),
+                                policy="verbose",
+                                filter=lambda x: (x.size[-1] in vec_length(self._device) and
+                                                    range(1, math.floor(math.sqrt(register_count(self._device)))+1)))
 
         if kernel_h.value > 1 and kernel_w.value > 1: # Normal convolution. TODO: Deal with it!
             Output = te.compute(self._output_shape,
