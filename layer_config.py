@@ -228,8 +228,7 @@ class LayerConfig:
             cfg.define_split("split_layer_{}_c".format(self._layer_num), out_channel.value,
                                 num_outputs=(3 if (self._device == "cuda" or not self._is_final_stage) else 4),
                                 policy="verbose",
-                                filter=lambda x: (x.size[-1] in vec_length(self._device) and
-                                                    range(1, math.floor(math.sqrt(register_count(self._device)))+1)))
+                                filter=lambda x: (x.size[-1] in vec_length(self._device)))
 
         if kernel_h.value > 1 and kernel_w.value > 1: # Normal convolution. TODO: Deal with it!
             Output = te.compute(self._output_shape,

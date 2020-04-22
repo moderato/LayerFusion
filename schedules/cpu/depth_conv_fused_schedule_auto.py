@@ -1,7 +1,7 @@
 import tvm
 from tvm import autotvm, te
 import math
-from helper import vec_length
+from helper import vec_length, register_count
 
 ########## gepm_var1 ##########
 def schedule_depth_conv_fused_nhwc_auto(cfg, outs, stages, params, layer_num=2, device="llvm -mcpu=core-avx2", bn_relu=[]):
@@ -47,9 +47,7 @@ def schedule_depth_conv_fused_nhwc_auto(cfg, outs, stages, params, layer_num=2, 
     wt, wo, w = cfg["split_layer_1_w"].apply(s, layer_output_dict['Layer_1'], w)
     ct, co, ci, c = cfg["split_layer_1_c"].apply(s, layer_output_dict['Layer_1'], c)
     s[layer_output_dict['Layer_1']].reorder(n, ht, wt, ct, ho, wo, h, w, co, ci, c)
-    # s[layer_output_dict['Layer_1']].unroll(ci)
-    co = s[layer_output_dict['Layer_1']].fuse(co, ci)
-    s[layer_output_dict['Layer_1']].unroll(co)
+    s[layer_output_dict['Layer_1']].unroll(ci)
     s[layer_output_dict['Layer_1']].vectorize(c)
     fused_blx = s[layer_output_dict['Layer_1']].fuse(n, ht, wt, ct)
     s[layer_output_dict['Layer_1']].parallel(fused_blx)
@@ -59,8 +57,12 @@ def schedule_depth_conv_fused_nhwc_auto(cfg, outs, stages, params, layer_num=2, 
     n, h, w, c = s[OL].op.axis
     rc, = s[OL].op.reduce_axis
     # The split of c CAN follow the global c split, while the split of rc CANNOT follow the global rc split
-    oc, ic = s[OL].split(c, cfg["split_layer_1_c"].size[-1])
-    ooc, ioc = s[OL].split(oc, cfg["split_layer_1_c"].size[-2])
+    cfg.define_split("split_ol_c", c,
+                        num_outputs=3, 
+                        policy="verbose", 
+                        filter=lambda x: (x.size[-1] == cfg["split_layer_1_c"].size[-1] and
+                            x.size[-2] in range(1, math.floor(math.sqrt(register_count(device)))+1)))
+    ooc, ioc, ic = cfg["split_ol_c"].apply(s, OL, c)
     cfg.define_split("split_ol_rc", rc, 
                         num_outputs=3, 
                         policy="verbose", 
