@@ -67,9 +67,9 @@ def convert_input(a_np, batch, in_channel, input_height, input_width, pad_height
           for l in range(input_width + 2*pad_width):
               for m in range(vlen):
                 if k < pad_height or k >= input_height + pad_height or l < pad_width or l >= input_width+ pad_width or j*vlen + m >= in_channel:
-                      to_return[i,j,k,l,m] = float(0)
+                      to_return[i, j, k, l, m] = float(0)
                 else:
-                      to_return[i,j,k,l,m] = a_np[i,j*vlen + m,k-pad_height,l-pad_width]
+                      to_return[i, j, k, l, m] = a_np[i, j*vlen + m, k-pad_height, l-pad_width]
 
     return to_return
 
@@ -128,68 +128,90 @@ def intrin_libxsmm_hxw(
                         ifh,
                         r,
                         s, 
-                        ifh_stride, 
-                        ifw_stride,
-                        ofh, 
-                        stride_height, 
-                        out_channel,
+                        ifh_stride,     # ofh
+                        ifw_stride,     # ofw
+                        ofh,            # cfg["tile_h"].size[2],  # HI
+                        stride_height,  # 1
+                        out_channel,    # out_channel
                         output_height, 
                         output_width, 
                         in_channel):
-
+    # IH, IW
     last_input_width_index = (ofw-1) * stride_width + s-1
     last_input_height_index = (ofh-1) * stride_height + r-1
 
     ry = te.reduce_axis((0, r), name='ry')
     rx = te.reduce_axis((0, s), name='rx')
-    A = te.placeholder((rco, r, s, ifmblock, ofmblock), name='w')
+    A = te.placeholder((rco, r, s, ifmblock, ofmblock), name='w') # Weight 5D
+
+    # (rco, r, last_input_width_index + 1, ifmblock) for the other case
     B = te.placeholder((rco, last_input_height_index + 1, last_input_width_index + 1, ifmblock), name='b')
+
     k = te.reduce_axis((0, ifmblock), name='k')
     k_outer = te.reduce_axis((0, rco), name='k_outer')
+
+    # C(m, n), B[k_outer, ry, rx + m * stride_width, k] in the other case
     C = te.compute(
-          (ofh,ofw,ofmblock),
-           lambda z,m,n: te.sum(A[k_outer,ry,rx,k,n] * B[k_outer,ry + z*stride_height,rx + m*stride_width,k], axis=[k_outer,ry,rx,k]),
-           name='out')
+            (ofh, ofw, ofmblock),
+            lambda z, m, n: te.sum(A[k_outer, ry, rx, k, n] * B[k_outer, 
+                                                                ry + z * stride_height, 
+                                                                rx + m * stride_width, 
+                                                                k], 
+                                    axis=[k_outer, ry, rx, k]),
+            name='out')
 
     s1 = tvm.create_schedule(C.op)
-
-    ifw1,ofw1,ofmblock1  = s1[C].op.axis
-
-    rco_outer,ry,rx,rci = s1[C].op.reduce_axis
-    s1[C].reorder(ifw1,rco_outer,ry,rx,ofw1,ofmblock1,rci)
+    ifw1, ofw1, ofmblock1 = s1[C].op.axis3
+    rco_outer, ry, rx, rci = s1[C].op.reduce_axis
+    s1[C].reorder(ifw1, rco_outer, ry, rx, ofw1, ofmblock1, rci)
 
     xx_ptr = tvm.tir.decl_buffer(A.shape, A.dtype,
-                        name="W",offset_factor = 1,
+                        name="W", offset_factor=1,
                         data_alignment=64)
 
+    # s3 = last_input_height_index + 1, s2 = last_input_width_index + 1
     yy_ptr = tvm.tir.decl_buffer(B.shape, B.dtype,
-                        name="X",offset_factor=1,\
-                        strides=[te.var("s3"),te.var("s2"), ifmblock, 1],#offset_factor=16
+                        name="X", offset_factor=1,
+                        strides=[te.var("s3"), te.var("s2"), ifmblock, 1], #offset_factor=16
                         data_alignment=64)
 
     zz_ptr = tvm.tir.decl_buffer(C.shape, C.dtype,
-                        name="OUT",offset_factor=1,#offset_factor=1,
-                        strides=[output_width*ofmblock, ofmblock, 1],
+                        name="OUT",offset_factor=1, 
+                        strides=[output_width * ofmblock, ofmblock, 1],
                         data_alignment=64)
 
     def intrin_func(ins, outs):
          # tvm call extern is used to interface to libxsmm bacth reduce kernel gemm implementation
          # rco*r*s is the number of batches
-         init_and_compute = tvm.tir.call_extern ("int32","batch_reduce_kernel_init_update", ins[0].access_ptr("r"),ins[1].access_ptr("r"),outs[0].access_ptr("w"),\
-                                                rco*r*s,ofmblock,ifmblock,r,s,ifh_stride,ifw_stride, ofw*ofh, stride_width)
-         reset = tvm.tir.call_extern ("int32","batch_reduce_kernel_init", outs[0].access_ptr("w"),ofmblock, ofw*ofh)
+         init_and_compute = tvm.tir.call_extern("int32", "batch_reduce_kernel_init_update", 
+                                                ins[0].access_ptr("r"), ins[1].access_ptr("r"), outs[0].access_ptr("w"),
+                                                rco*r*s, 
+                                                ofmblock, ifmblock, 
+                                                r, 
+                                                s, 
+                                                ifh_stride, ifw_stride, 
+                                                ofw * ofh, 
+                                                stride_width)
+         reset = tvm.tir.call_extern("int32", "batch_reduce_kernel_init", 
+                                    outs[0].access_ptr("w"), ofmblock, ofw*ofh)
          body = tvm.tir.call_extern ("int32","batch_reduce_kernel_update", ins[0].access_ptr("r"),ins[1].access_ptr("r"),outs[0].access_ptr("w"), rco*r*s,ofmblock,\
-                                        ifmblock,ofw*ofh, stride_width,r,s, ifh_stride,ifw_stride)
+                                        ifmblock, 
+                                        ofw*ofh, 
+                                        stride_width, 
+                                        r, 
+                                        s, 
+                                        ifh_stride, 
+                                        ifw_stride)
          if math.ceil(in_channel/ifmblock) == rco:
             return init_and_compute, None, init_and_compute
          else:
-            return init_and_compute,reset,body
+            return init_and_compute, reset, body
 
     with tvm.target.build_config(data_alignment=64):
-        return te.decl_tensor_intrin(C.op, intrin_func,   name="GEMM",
-                                  binds= {A: xx_ptr,
-                                         B: yy_ptr,
-                                         C: zz_ptr})
+        return te.decl_tensor_intrin(C.op, intrin_func, name="GEMM",
+                                  binds= {  A: xx_ptr,
+                                            B: yy_ptr,
+                                            C: zz_ptr})
 
 # regular case of batch reduce gemm with ofw corresponding to batch reduce brgemm dimension(M)
 def intrin_libxsmm_tuned(
@@ -216,9 +238,9 @@ def intrin_libxsmm_tuned(
     ry = te.reduce_axis((0, r), name='ry')
     rx = te.reduce_axis((0, s), name='rx')
     C = te.compute(
-          (ofw, ofmblock),
-           lambda m,n: te.sum(A[k_outer, ry, rx, k, n] * B[k_outer, ry, rx + m * stride_width, k], axis=[k_outer, ry, rx, k]),
-           name='out')
+            (ofw, ofmblock),
+            lambda m,n: te.sum(A[k_outer, ry, rx, k, n] * B[k_outer, ry, rx + m * stride_width, k], axis=[k_outer, ry, rx, k]),
+            name='out')
 
     s1 = te.create_schedule(C.op)
     w, ofm = s1[C].op.axis

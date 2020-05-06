@@ -234,8 +234,8 @@ class LayerConfig:
             Output = te.compute(self._output_shape,
                                 lambda n, h, w, c: te.sum(
                                                             self._input[n, h * self.stride_h + ry * self.dilation_h,
-                                                                        w * self.stride_w + rx * self.dilation_w, rc].astype(self.output_dtype) *
-                                                            self._filter[ry, rx, rc, c].astype(self.output_dtype), axis=[ry, rx, rc]),
+                                                                        w * self.stride_w + rx * self.dilation_w, rc].astype(self._output_dtype) *
+                                                            self._filter[ry, rx, rc, c].astype(self._output_dtype), axis=[ry, rx, rc]),
                                                         name="Layer_{}_Conv2dOutput".format(self._layer_num), 
                                                         tag="conv2d_nhwc")
         else: # 1x1: only reduce rc axis
