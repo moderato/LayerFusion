@@ -2,6 +2,7 @@ __pycache__/*
 *.log
 .pkl_memoize_py3/*
 generated_kernels/*
+libxsmm_wrapper/*.so
 logs/*
 npy/*
 benchmark/gpu/gpu_bench

@@ -2,6 +2,7 @@
 export LF_HOME=`pwd`
 export DMLC_CORE=${TVM_HOME}/3rdparty/dmlc-core
 export VTUNE_HOME=${HOME}/intel/vtune_profiler
+export LIBXSMM_HOME=${HOME}/Documents/experimental/libxsmm
 
 # For VTune benchmark
 sudo sh -c 'echo 0 >/proc/sys/kernel/perf_event_paranoid' 
@@ -20,3 +21,9 @@ for i in 1 2 3 4
 do
   echo performance | sudo tee /sys/devices/system/cpu/cpu$i/cpufreq/scaling_governor &> /dev/null
 done
+
+# For Libxsmm wrapper
+cd libxsmm_wrapper
+make
+export LD_PRELOAD="${LD_PRELOAD}:`pwd`/libxsmm_wrapper.so"
+cd ..
