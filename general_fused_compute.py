@@ -4,24 +4,22 @@ from tvm import te, autotvm
 from helper import *
 from layer_config import LayerConfig
 
-def fused_convs(cfg, input_data, filters, is_block=False, device="cuda", array_packing=False):
-	Input = None
-	stages = [[input_data]]
-	params = [[input_data]]
+def fused_convs(cfg, fusion_cfg, device="cuda", array_packing=False):
+	is_block = fusion_cfg.is_block
+	stages = []
+	params = []
 	conv_count = 0
 	depthwise_count = 0
+	next_input = None # Output tensor of the previous stage
 
-	for idx, f_param in enumerate(filters):
-		tmp_stages = []
-		tmp_params = []
-
-		Input = stages[-1][-1]
-		sc = LayerConfig(Input, f_param, idx, device=device,
-						is_first_stage=(idx==0), is_final_stage=(idx==len(filters)-1))
-		sc.make_output(cfg, array_packing=(device!="cuda"))
+	for idx in range(fusion_cfg.layer_num):
+		sc = LayerConfig(cfg, fusion_cfg, idx, next_input, device=device, pack=(device!="cuda"),
+						is_first_stage=(idx==0), is_final_stage=(idx==fusion_cfg.layer_num-1))
+		sc.make_output(cfg)
 
 		stages.extend(sc.get_stages())
 		params.extend(sc.get_params())
+		next_input = stages[-1][-1]
 
 	params.append([stages[-1][-1]]) # Final output
 
@@ -29,16 +27,13 @@ def fused_convs(cfg, input_data, filters, is_block=False, device="cuda", array_p
 
 @autotvm.template("fused")
 def get_schedule(parameters, auto_tvm=False, device="cuda", name='depth_conv'):
-
-    p = Parameters(parameters)
-    Input, Filters = get_input_and_filters(p)
-    is_block = p.get_is_block()
+    fusion_cfg = FusionConfig(parameters)
     cfg = autotvm.get_config() if auto_tvm else None
 
     # Get the graph
     # stages: all output stages in the graph
     # params: inputs & outputs of the graph, including filters, BNs, etc
-    stages, params = fused_convs(cfg, Input, Filters, is_block=is_block, device=device, array_packing=(device != "cuda"))
+    stages, params = fused_convs(cfg, fusion_cfg, device=device, array_packing=(device != "cuda"))
     output_stage = stages[-1][-1]
 
     if device == "cuda":
@@ -47,32 +42,32 @@ def get_schedule(parameters, auto_tvm=False, device="cuda", name='depth_conv'):
         from schedules.schedules import cpu_schedules as sch
 
     f = sch(name, auto_tvm)
-    s = f(cfg, output_stage, stages, params, layer_num=len(Filters),
-            bn_relu=[p.get_f1_bn_relu(), p.get_f2_bn_relu()])
+    s = f(cfg, output_stage, stages, params, layer_num=fusion_cfg.layer_num, bn_relu=fusion_cfg.get_bnlu())
     return s, flatten_list(params)
 
 def test_get_schedule():
 	parameters = (1, 56, 56, 128, 3, 1, 1, True, None, 1, 128, 1, False, None, False)
 	auto_tvm = False
-	device = "cuda"
+	device = "llvm"
 	name = 'depth_conv'
 	with tvm.target.create(device):
 		s, flatten_params = get_schedule(parameters, auto_tvm, device, name)
 	print(tvm.lower(s, flatten_params, simple_mode=True))
 
 def test_fused_convs():
-	Input = te.placeholder((1, 56, 56, 128), name='Input')
+	# Input = te.placeholder((1, 56, 56, 128), name='Input')
 
-	Filters = []
-	Filters.append(FilterParams(
-					te.placeholder((3, 3, 128, 1), name='Layer_{}_DepthwiseFilter'.format(len(Filters))),
-					depthwise=True, bn_relu="relu", stride=1, dilation=1))
-	Filters.append(FilterParams(
-					te.placeholder((1, 1, 128, 128), name='Layer_{}_Conv2dFilter'.format(len(Filters))),
-					depthwise=False, bn_relu="relu", stride=1, dilation=1))
+	# Filters = []
+	# Filters.append(FilterParams(
+	# 				te.placeholder((3, 3, 128, 1), name='Layer_{}_DepthwiseFilter'.format(len(Filters))),
+	# 				depthwise=True, bn_relu="relu", stride=1, dilation=1))
+	# Filters.append(FilterParams(
+	# 				te.placeholder((1, 1, 128, 128), name='Layer_{}_Conv2dFilter'.format(len(Filters))),
+	# 				depthwise=False, bn_relu="relu", stride=1, dilation=1))
 
+	param = (1, 56, 56, 128, 3, 1, 1, True, None, 1, 128, 1, False, None, False)
 	cfg = autotvm.get_config()
-	stages, data = fused_convs(cfg, Input, Filters, device="cpu", is_block=False)
+	stages, data = fused_convs(cfg, FusionConfig(param), device="cpu")
 	for s in stages:
 		print(s)
 	print("******")

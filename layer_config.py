@@ -8,53 +8,47 @@ from helper import vec_length, register_count
 import math
 
 class LayerConfig:
-    def __init__(self, Input, filter_params, idx, device="cuda", is_first_stage=False, is_final_stage=False):
-        ########
-        # The filter is always 4D. The input is either 4D or 5D.
-        ########
+    def __init__(self, cfg, fusion_cfg, idx, Input=None, device="cuda", pack=False, is_first_stage=False, is_final_stage=False, dtype="float32"):
+        self._input_cfg, self._filter_cfg = fusion_cfg.layers[idx]
+        self._output_cfg, _ = fusion_cfg.layers[idx]
 
-        f = filter_params
-        Filter = f.placeholder
-        self.layout = f.layout
-        self.depthwise = f.depthwise
-        self.bn_relu = f.bn_relu
-        if isinstance(f.stride, int):
-            self.stride_h = self.stride_w = f.stride
-        else:
-            self.stride_h, self.stride_w = f.stride
-        if isinstance(f.dilation, int):
-            self.dilation_h = self.dilation_w = f.dilation
-        else:
-            self.dilation_h, self.dilation_w = f.dilation
+        # Input shape
+        # Only accept either 4D input & 4D filter, or 5D input & 6D filter
+        assert((Input is None) or
+                ((not pack) and len(Input.shape) == 4) or
+                (pack and len(Input.shape) == 5))
 
-        if len(Input.shape) == 4:
-            batch, in_height, in_width, in_channel = Input.shape
+        N, IH, IW, IC = self._input_cfg.get_shape()
+        FH, FW, _, tmp = self._filter_cfg.get_shape()
+        _, OH, OW, OC = self._output_cfg.get_shape()
+
+        if not pack: # "NHWC": 4D input 4D filter
+            if Input is None:
+                Input = te.placeholder((N, IH, IW, IC), name='Input')
+            Filter = te.placeholder((FH, FW, IC, tmp), 
+                                    name='Layer_{}_{}Filter'.format(idx,
+                                                                    "Depthwise" if self._filter_cfg.depthwise else "Conv2d"))
             self._layout = "NHWC"
-        else:
-            batch, in_channel_chunk, in_height, in_width, in_channel_vec = Input.shape
-            in_channel = in_channel_chunk * in_channel_vec
+            self._output_shape = (N, OH, OW, OC)
+        else: # "NCHWc": 5D input 6D filter
+            # Vector length
+            if cfg is not None:
+                cfg.define_knob("vlen", [8, 16, 32, 64])
+            vlen = 16 if cfg is None else cfg["vlen"].val
+            tmp_chunk = math.ceil(tmp / vlen) if not self._filter_cfg.depthwise else math.ceil(tmp * IC / vlen)
+            IC_chunk = math.ceil(IC / vlen)
+            if Input is None:
+                Input = te.placeholder((N, tmp_chunk, IH, IW, vlen), name='Input')
+            Filter = te.placeholder((tmp_chunk, IC_chunk, FH, FW, vlen, vlen), 
+                                    name='Layer_{}_{}Filter'.format(idx,
+                                                                    "Depthwise" if self._filter_cfg.depthwise else "Conv2d"))
             self._layout = "NCHWc"
-        kernel_h, kernel_w, kernel_channel, tmp = Filter.shape
-        if self.depthwise:
-            channel_multiplier = tmp
-        else:
-            num_filter = tmp
-
-        # Compute the output shape with the original input size, i.e. WITHOUT INPUT PACKING
-        self.dilated_kernel_h = (kernel_h - 1) * self.dilation_h + 1
-        self.dilated_kernel_w = (kernel_w - 1) * self.dilation_w + 1
-        self.pad_top, self.pad_left, self.pad_down, self.pad_right = get_pad_tuple(
-            f.padding, (self.dilated_kernel_h, self.dilated_kernel_w))
-
-        out_height = simplify((in_height - self.dilated_kernel_h + self.pad_top + self.pad_down) // self.stride_h + 1)
-        out_width = simplify((in_width - self.dilated_kernel_w + self.pad_left + self.pad_right) // self.stride_w + 1)
-        out_channel = simplify(in_channel * channel_multiplier) if self.depthwise else num_filter
+            self._output_shape = (N, tmp_chunk, OH, OW, vlen)
 
         self._input = Input
         self._raw_input = Input # Backup for ResNet blocks etc
         self._filter = Filter
         self._output = None
-        self._output_shape = (batch, out_height, out_width, out_channel) # Temporarily assume output shape is 4D, as there's no info about the packing factor now
         self._output_dtype = Input.dtype
         self._layer_num = idx
         self._device = device
@@ -62,6 +56,9 @@ class LayerConfig:
         self._is_final_stage = is_final_stage
         self._stages = []
         self._params = []
+        if is_first_stage:
+            self._stages.append([Input])
+            self._params.append([Input])
 
     def get_raw_input(self):
         return self._raw_input
@@ -78,9 +75,9 @@ class LayerConfig:
         if len(self._filter.shape) == 4:
             h, w, ic, tmp = self._filter.shape # tmp represents either oc (normal conv) or channel multiplier (depthwise)
             return h, w, ic, tmp
-        else: # Packed
-            ic_chunk, h, w, ic_vec, tmp = self._filter.shape
-            return ic_chunk, h, w, ic_vec, tmp
+        else: # Packed, 6D
+            tmp_chunk, ic_chunk, h, w, ic_vec, tmp = self._filter.shape
+            return tmp_chunk, ic_chunk, h, w, ic_vec, tmp
 
     def get_output_shape(self):
         if len(self._output_shape) == 4:
@@ -94,32 +91,25 @@ class LayerConfig:
         return 8 if cfg is None else cfg['split_layer_{}_c'.format(self._layer_num)].size[-1]
 
     def padding(self, cfg, array_packing=False):
-        kernel_h, kernel_w, _, _ = self.get_filter_shape()
+        if self._layout == "NHWC":
+            FH, FW, _, _ = self.get_filter_shape()
+        else: # "NCHWc"
+            _, _, FH, FW, _, _ = self.get_filter_shape()
+
         # Only pad when it's not 1x1
-        if kernel_h.value > 1 and kernel_w.value > 1:
+        if FH.value > 1 and FW.value > 1:
             # print("Padding is needed!")
             tmp = []
+            pad_top, pad_left, pad_down, pad_right = self._filter_cfg.get_padding_shape()
 
-            # Layout transformation only happens
-            if self._is_first_stage and array_packing:
-                batch, in_height, in_width, in_channel = self.get_input_shape()
-                packing_factor = self.get_packing_factor(cfg)
-                PackedInput = te.compute(
-                    (batch, te.indexdiv(in_channel, packing_factor), in_height, in_width, packing_factor),
-                    lambda n, c_chunk, h, w, c_vec: self._input[n, h, w, c_chunk * packing_factor + c_vec],
-                    name="Layer_{}_PackedInput".format(self._layer_num)
-                )
-                self._input = PackedInput # Temporarily update self._input
-                tmp.append(PackedInput)
-                
-            if array_packing and tmp: # Array packing makes the input of every layer a 5D tensor
-                # 5D PackedInput (NCHW[x]c)
-                pad_before = [0, 0, self.pad_top, self.pad_left, 0]
-                pad_after = [0, 0, self.pad_down, self.pad_right, 0]
-            else:
+            if self._layout == "NHWC":
                 # 4D Input (NHWC)
-                pad_before = [0, self.pad_top, self.pad_left, 0]
-                pad_after = [0, self.pad_down, self.pad_right, 0]
+                pad_before = [0, pad_top, pad_left, 0]
+                pad_after = [0, pad_down, pad_right, 0]
+            else: # "NCHWc"
+                # 5D PackedInput (NCHWc)
+                pad_before = [0, 0, pad_top, pad_left, 0]
+                pad_after = [0, 0, pad_down, pad_right, 0]
 
             PaddedInput = pad(self._input, pad_before, pad_after, name="Layer_{}_PaddedInput".format(self._layer_num))
             tmp.append(PaddedInput)
@@ -129,175 +119,146 @@ class LayerConfig:
             self._input = PaddedInput
 
     def make_depthwise_output(self, cfg, array_packing=False):
-        kernel_h, kernel_w, kernel_channel, channel_multiplier = self.get_filter_shape()
-        batch, out_height, out_width, out_channel = self.get_output_shape()
+        # Pad if necessary
+        self.padding(cfg, array_packing)
+        if self._layout == "NHWC":
+            N, IH, IW, IC = self.get_input_shape()
+            FH, FW, _, CM = self.get_filter_shape()
+            N, OH, OW, OC = self.get_output_shape()
+        else: # Packed input
+            N, IC_chunk, IH, IW, IC_vec = self.get_input_shape()
+            CM_chunk, _, FH, FW, _, CM_vec = self.get_filter_shape()
+            CM = CM_chunk * CM_vec
+            N, OC_chunk, OH, OW, OC_vec = self.get_output_shape()
 
-        assert not (self.depthwise and kernel_h == 1 and kernel_w == 1) # Don't consider 1by1 depthwise
+        # Don't consider 1by1 depthwise
+        assert not (self._filter_cfg.depthwise and FH == 1 and FW == 1) 
 
-        ry = te.reduce_axis((0, kernel_h), name='ry')
-        rx = te.reduce_axis((0, kernel_w), name='rx')
+        stride_h, stride_w = self._filter_cfg.get_stride()
+        dilation_h, dilation_w = self._filter_cfg.get_dilation()
+
+        ry = te.reduce_axis((0, FH), name='ry')
+        rx = te.reduce_axis((0, FW), name='rx')
 
         if cfg is not None:
             # Assuming not final layer:
             if self._device != "cuda": # Workaround: don't split HW here for CUDA; assume this won't be the last layer. TODO: Get rid of this.
-                # cfg.define_split("split_layer_{}_h".format(self._layer_num), out_height.value, num_outputs=2, policy="verbose")
-                # cfg.define_split("split_layer_{}_w".format(self._layer_num), out_width.value, num_outputs=2, policy="verbose")
-                cfg.define_split("split_layer_{}_c".format(self._layer_num), out_channel.value, num_outputs=3, policy="verbose", filter=lambda x: x.size[-1] in vec_length(self._device))
+                # cfg.define_split("split_layer_{}_h".format(self._layer_num), OH.value, num_outputs=2, policy="verbose")
+                # cfg.define_split("split_layer_{}_w".format(self._layer_num), OW.value, num_outputs=2, policy="verbose")
+                cfg.define_split("split_layer_{}_c".format(self._layer_num), OC_chunk.value, num_outputs=2, policy="verbose")
             else:
-                cfg.define_split("split_layer_{}_c".format(self._layer_num), out_channel.value, num_outputs=(3 if (self._device == "cuda" or not self._is_final_stage) else 4),
-                                policy="verbose", filter=lambda x: x.size[-1] in vec_length(self._device))
+                cfg.define_split("split_layer_{}_c".format(self._layer_num), OC_chunk.value, num_outputs=(2 if (self._device == "cuda" or not self._is_final_stage) else 3), policy="verbose")
 
-        # Pad if necessary
-        self.padding(cfg, array_packing)
-        if len(self._input.shape) == 4:
-            batch, in_height, in_width, in_channel = self.get_input_shape()
-        else: # Packed input
-            batch, in_channel_chunk, in_height, in_width, in_channel_vec = self.get_input_shape()
-
-        if not array_packing:
+        if self._layout == "NHWC":
             Output = te.compute(self._output_shape,
                         lambda n, h, w, c: te.sum(
-                                                (self._input[n, h*self.stride_h + ry*self.dilation_h, w*self.stride_w + rx*self.dilation_w,
-                                                            te.indexdiv(c, channel_multiplier)].astype(self._output_dtype) *
-                                                self._filter[ry, rx, te.indexdiv(c, channel_multiplier), te.indexmod(c, channel_multiplier)].astype(self._output_dtype)), axis=[ry, rx]),
+                                                (self._input[n, 
+                                                                h * stride_h + ry * dilation_h, 
+                                                                w * stride_w + rx * dilation_w,
+                                                                te.indexdiv(c, CM)].astype(self._output_dtype) *
+                                                self._filter[ry, rx, te.indexdiv(c, CM), te.indexmod(c, CM)].astype(self._output_dtype)), axis=[ry, rx]),
                                             name='Layer_{}_DepthwiseConv2dOutput'.format(self._layer_num), tag="depthwise_nhwc")
         else:
-            assert channel_multiplier.value == 1 # Currently only support group = 1; TODO: support all
-            packing_factor = self.get_packing_factor(cfg)
-            PackedFilter = te.compute(
-                (te.indexdiv(kernel_channel, packing_factor), kernel_h, kernel_w, packing_factor, channel_multiplier),
-                lambda ic_chunk, h, w, ic_vec, o: self._filter[h, w, ic_chunk * packing_factor + ic_vec, o],
-                name="Layer_{}_PackedFilter".format(self._layer_num)
-            )
-            self._stages.append([PackedFilter])
-            # if len(self._input.shape) == 4:
-            #     Output = te.compute(self._output_shape,
-            #                         lambda n, h, w, c: te.sum(
-            #                                                 (self._input[n, h*self.stride_h + ry*self.dilation_h, w*self.stride_w + rx*self.dilation_w, c].astype(self._output_dtype) *
-            #                                                 PackedFilter[c // packing_factor, ry, rx, c % packing_factor, 0].astype(self._output_dtype)), axis=[ry, rx]),
-            #                                             name='Layer_{}_DepthwiseConv2dOutput'.format(self._layer_num), tag="depthwise_nhwc")
-            # else:
-            #     Output = te.compute(self._output_shape,
-            #                         lambda n, h, w, c: te.sum(
-            #                                                 (self._input[n, c // packing_factor, h*self.stride_h + ry*self.dilation_h, w*self.stride_w + rx*self.dilation_w, c % packing_factor].astype(self._output_dtype) *
-            #                                                 PackedFilter[c // packing_factor, ry, rx, c % packing_factor, 0].astype(self._output_dtype)), axis=[ry, rx]),
-            #                                             name='Layer_{}_DepthwiseConv2dOutput'.format(self._layer_num), tag="depthwise_nhwc")
-
-            self._output_shape = (batch, out_channel // packing_factor, out_height, out_width, packing_factor)
             Output = te.compute(self._output_shape,
-                                    lambda n, c_chunk, h, w, c_vec: te.sum(
-                                                            (self._input[n, c_chunk, h*self.stride_h + ry*self.dilation_h, w*self.stride_w + rx*self.dilation_w, c_vec].astype(self._output_dtype) *
-                                                            PackedFilter[c_chunk, ry, rx, c_vec, 0].astype(self._output_dtype)), axis=[ry, rx]),
-                                                        name='Layer_{}_DepthwiseConv2dOutput'.format(self._layer_num), tag="depthwise_nchw{}c".format(packing_factor))
-
+                        lambda n, c_chunk, h, w, c_vec: te.sum(
+                                                (self._input[n, c_chunk, 
+                                                                h * stride_h + ry * dilation_h, 
+                                                                w * stride_w + rx * dilation_w, 
+                                                                c_vec].astype(self._output_dtype) *
+                                                self._filter[0, c_chunk, ry, rx, c_vec, 0].astype(self._output_dtype)), axis=[ry, rx]),
+                                            name='Layer_{}_DepthwiseConv2dOutput'.format(self._layer_num), tag="depthwise_nchw{}c".format(OC_vec))
         self._output = Output
 
     def make_conv_output(self, cfg, array_packing=False):
-        if len(self._input.shape) == 4:
-            _, _, _, in_channel = self.get_input_shape()
-        else:
-            _, in_channel_chunk, _, _, in_channel_vec = self.get_input_shape()
-            in_channel = in_channel_chunk * in_channel_vec
-        kernel_h, kernel_w, kernel_channel, num_filter = self.get_filter_shape()
-        batch, out_height, out_width, out_channel = self.get_output_shape()
-
-        # Reduce axis
-        rc = te.reduce_axis((0, in_channel), name='rc')
-        if kernel_h.value > 1:
-            ry = te.reduce_axis((0, kernel_h), name='ry')
-        if kernel_w.value > 1:
-            rx = te.reduce_axis((0, kernel_w), name='rx')
-
         # Pad if necessary
         self.padding(cfg, array_packing)
-        if len(self._input.shape) == 4:
-            batch, in_height, in_width, in_channel = self.get_input_shape()
+        if self._layout == "NHWC":
+            N, IH, IW, IC = self.get_input_shape()
+            FH, FW, _, CM = self.get_filter_shape()
+            N, OH, OW, OC = self.get_output_shape()
         else: # Packed input
-            batch, in_channel_chunk, in_height, in_width, in_channel_vec = self.get_input_shape()
+            N, IC_chunk, IH, IW, IC_vec = self.get_input_shape()
+            IC = IC_chunk * IC_vec
+            _, IC_chunk, FH, FW, IC_vec, _ = self.get_filter_shape()
+            N, OC_chunk, OH, OW, OC_vec = self.get_output_shape()
+            OC = OC_chunk * OC_vec
 
-        # Assuming 2-layer and final layer
+        stride_h, stride_w = self._filter_cfg.get_stride()
+        dilation_h, dilation_w = self._filter_cfg.get_dilation()
+
+        # Reduce axis
+        rc = te.reduce_axis((0, IC), name='rc')
+        # TODO: Consider removing this later
+        if FH.value > 1:
+            ry = te.reduce_axis((0, FH), name='ry')
+        if FW.value > 1:
+            rx = te.reduce_axis((0, FW), name='rx')
+
         if cfg is not None:
-            cfg.define_split("split_layer_{}_h".format(self._layer_num), out_height.value,
+            cfg.define_split("split_layer_{}_h".format(self._layer_num), OH.value,
                                 num_outputs=(4 if self._device == "cuda" else 3),
-                                policy="verbose",
-                                filter=lambda x: x.size[-1] > 1)
-            cfg.define_split("split_layer_{}_w".format(self._layer_num), out_width.value,
+                                policy="verbose")
+            cfg.define_split("split_layer_{}_w".format(self._layer_num), OW.value,
                                 num_outputs=3,
-                                policy="verbose",
-                                filter=lambda x: x.size[-1] > 1)
-            cfg.define_split("split_layer_{}_c".format(self._layer_num), out_channel.value,
-                                num_outputs=(3 if (self._device == "cuda" or not self._is_final_stage) else 4),
-                                policy="verbose",
-                                filter=lambda x: (x.size[-1] in vec_length(self._device)))
+                                policy="verbose")
+            cfg.define_split("split_layer_{}_c".format(self._layer_num), OC_chunk.value,
+                                num_outputs=(2 if (self._device == "cuda" or not self._is_final_stage) else 3),
+                                policy="verbose")
 
-        if kernel_h.value > 1 and kernel_w.value > 1: # Normal convolution. TODO: Deal with it!
-            Output = te.compute(self._output_shape,
-                                lambda n, h, w, c: te.sum(
-                                                            self._input[n, h * self.stride_h + ry * self.dilation_h,
-                                                                        w * self.stride_w + rx * self.dilation_w, rc].astype(self._output_dtype) *
-                                                            self._filter[ry, rx, rc, c].astype(self._output_dtype), axis=[ry, rx, rc]),
-                                                        name="Layer_{}_Conv2dOutput".format(self._layer_num), 
-                                                        tag="conv2d_nhwc")
-        else: # 1x1: only reduce rc axis
-            if not array_packing:
+        if FH.value > 1 and FW.value > 1:
+            if self._layout == "NHWC":
                 Output = te.compute(self._output_shape,
-                                    lambda n, h, w, c: te.sum(
-                                                                self._input[n, h * self.stride_h, w * self.stride_w, rc].astype(self._output_dtype) *
-                                                                self._filter[0, 0, rc, c].astype(self._output_dtype), axis=[rc]),
-                                                            name="Layer_{}_Conv2dOutput".format(self._layer_num), 
-                                                            tag="conv2d_nhwc")
-            else: # Array packing mandatory for CPU!
-                packing_factor = self.get_packing_factor(cfg)
-                PackedFilter = te.compute(
-                    (1, 1, te.indexdiv(num_filter, packing_factor), kernel_channel, packing_factor),
-                    lambda h, w, oc_chunk, ic, oc_vec: self._filter[0, 0, ic, oc_chunk * packing_factor + oc_vec],
-                    name="Layer_{}_PackedFilter".format(self._layer_num)
-                )
-                self._stages.append([PackedFilter])
-                # if len(self._input.shape) == 4:
-                #     Output = te.compute(self._output_shape,
-                #                         lambda n, h, w, c: te.sum(
-                #                                                     self._input[n, h * self.stride_h, w * self.stride_w, rc].astype(self._output_dtype) *
-                #                                                     PackedFilter[0, 0, c // packing_factor, rc, c % packing_factor].astype(self._output_dtype), axis=[rc]),
-                #                                                 name="Layer_{}_Conv2dOutput".format(self._layer_num),
-                #                                                 tag="conv2d_nhwc")
-
-                input_packing_factor = in_channel_vec
-                if self._is_final_stage: # Temporary solution: directly output as 4D if it's the final stage and packed
-                    Output = te.compute(self._output_shape,
-                                        lambda n, h, w, c: te.sum(
-                                                                    self._input[n, rc // input_packing_factor, h * self.stride_h, w * self.stride_w, rc % input_packing_factor].astype(self._output_dtype) *
-                                                                    PackedFilter[0, 0, c // packing_factor, rc, c % packing_factor].astype(self._output_dtype), axis=[rc]),
+                            lambda n, h, w, c: te.sum(
+                                                        self._input[n, 
+                                                                    h * stride_h + ry * dilation_h,
+                                                                    w * stride_w + rx * dilation_w, 
+                                                                    rc].astype(self._output_dtype) *
+                                                        self._filter[ry, rx, rc, c].astype(self._output_dtype), axis=[ry, rx, rc]),
+                                                    name="Layer_{}_Conv2dOutput".format(self._layer_num), 
+                                                    tag="conv2d_nhwc")
+            else: # "NCHWc"
+                Output = te.compute(self._output_shape,
+                            lambda n, c_chunk, h, w, c_vec: te.sum(
+                                                                    self._input[n, rc // IC_vec, h * stride_h, w * stride_w, rc % IC_vec].astype(self._output_dtype) *
+                                                                    self._filter[c_chunk, rc // IC_vec, ry, rx, rc % IC_vec, c_vec].astype(self._output_dtype), axis=[ry, rx, rc]),
                                                                 name="Layer_{}_Conv2dOutput".format(self._layer_num),
-                                                                tag="conv2d_nhwc")
-                else:
-                    Output = te.compute(self._output_shape,
-                                        lambda n, c_chunk, h, w, c_vec: te.sum(
-                                                                                self._input[n, rc // packing_factor, h * self.stride_h, w * self.stride_w, rc % packing_factor].astype(self._output_dtype) *
-                                                                                PackedFilter[0, 0, c_chunk, rc, c_vec].astype(self._output_dtype), axis=[rc]),
-                                                                            name="Layer_{}_Conv2dOutput".format(self._layer_num),
-                                                                            tag="conv2d_nchw{}c".format(packing_factor))
+                                                                tag="conv2d_nchw{}c".format(OC_vec))
+        else: # 1x1: only reduce rc axis
+            if self._layout == "NHWC":
+                Output = te.compute(self._output_shape,
+                            lambda n, h, w, c: te.sum(
+                                                        self._input[n, 
+                                                                    h * stride_h, 
+                                                                    w * stride_w, 
+                                                                    rc].astype(self._output_dtype) *
+                                                        self._filter[0, 0, rc, c].astype(self._output_dtype), axis=[rc]),
+                                                    name="Layer_{}_Conv2dOutput".format(self._layer_num), 
+                                                    tag="conv2d_nhwc")
+            else: # "NCHWc"
+                Output = te.compute(self._output_shape,
+                            lambda n, c_chunk, h, w, c_vec: te.sum(
+                                                                    self._input[n, rc // IC_vec, h * stride_h, w * stride_w, rc % IC_vec].astype(self._output_dtype) *
+                                                                    self._filter[c_chunk, rc // IC_vec, 0, 0, rc % IC_vec, c_vec].astype(self._output_dtype), axis=[rc]),
+                                                                name="Layer_{}_Conv2dOutput".format(self._layer_num),
+                                                                tag="conv2d_nchw{}c".format(OC_vec))
         self._output = Output
 
     def process_relu(self, block_input):
         if len(self._output_shape) == 4:
-            _, _, _, out_channel = self._output_shape
+            _, _, _, OC = self._output_shape
         else: # Packed
-            _, out_channel_chunk, _, _, out_channel_vec = self._output_shape
-            out_channel = out_channel_chunk * out_channel_vec
-        Scale = te.placeholder((out_channel),
-                            name='Layer_{}_Scale_{}'.format(
-                                self._layer_num, 'DepthwiseConv2d' if self.depthwise else 'Conv2d'))
-        Shift = te.placeholder((out_channel),
-                            name='Layer_{}_Shift_{}'.format(
-                                self._layer_num, 'DepthwiseConv2d' if self.depthwise else 'Conv2d'))
+            _, OC_chunk, _, _, OC_vec = self._output_shape
+            OC = OC_chunk * OC_vec
+        Scale = te.placeholder((OC),
+                                name='Layer_{}_Scale_{}'.format(self._layer_num, 'DepthwiseConv2d' if self.depthwise else 'Conv2d'))
+        Shift = te.placeholder((OC),
+                                name='Layer_{}_Shift_{}'.format(self._layer_num, 'DepthwiseConv2d' if self.depthwise else 'Conv2d'))
         if len(self._output_shape) == 4:
             ScaleShift =  te.compute(self._output_shape, lambda n, h, w, c: self._output[n, h, w, c] * Scale[c] + Shift[c],
-                                name='Layer_{}_ScaleShift_{}'.format(
-                                    self._layer_num, 'DepthwiseConv2d' if self.depthwise else 'Conv2d'),
+                                name='Layer_{}_ScaleShift_{}'.format(self._layer_num, 'DepthwiseConv2d' if self.depthwise else 'Conv2d'),
                                 tag='scaleshift_nhwc')
         else: # Packed
-            ScaleShift =  te.compute(self._output_shape, lambda n, c_chunk, h, w, c_vec: self._output[n, c_chunk, h, w, c_vec] * Scale[c_chunk * out_channel_vec + c_vec] + Shift[c_chunk * out_channel_vec + c_vec],
+            ScaleShift =  te.compute(self._output_shape, lambda n, c_chunk, h, w, c_vec: self._output[n, c_chunk, h, w, c_vec] * Scale[c_chunk * OC_vec + c_vec] + Shift[c_chunk * OC_vec + c_vec],
                                 name='Layer_{}_ScaleShift_{}'.format(
                                     self._layer_num, 'DepthwiseConv2d' if self.depthwise else 'Conv2d'),
                                 tag='scaleshift_nchw{}c'.format())
@@ -364,7 +325,7 @@ class LayerConfig:
             #       Packing: 5D conv 5D = 5D -> 4D transformed to 4D
             #       No packing: 4D conv 4D = 4D
 
-            if self.depthwise: # Depthwise
+            if self._filter_cfg.depthwise: # Depthwise
                 self.make_depthwise_output(cfg, array_packing=array_packing)
             else: # Normal convolution
                 self.make_conv_output(cfg, array_packing=array_packing)
@@ -372,7 +333,7 @@ class LayerConfig:
             self._stages.append([self._output])
             self._params.append([self._filter])
 
-            if self.bn_relu:
+            if self._filter_cfg.bn_relu:
                 self.process_relu(block_input)
 
             if array_packing and self._is_final_stage:

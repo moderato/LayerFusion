@@ -1,6 +1,7 @@
 import numpy as np
 import topi, topi.testing
-from topi.util import get_const_tuple
+from topi.util import simplify, get_const_tuple
+from topi.nn.util import get_pad_tuple
 from tvm import autotvm, te
 import os
 
@@ -22,90 +23,89 @@ def register_count(device=None):
         return 32
     return 0
 
-class FilterParams:
-    def __init__(self, placeholder, layout="NHWC", depthwise=False, bn_relu=None, stride=1, padding="SAME", dilation=1):
-        assert bn_relu in [None, "relu", "relu6"]
-        self.placeholder = placeholder
-        self.layout = layout
-        self.depthwise = depthwise
-        self.bn_relu = bn_relu
-        self.stride = stride
-        self.padding = padding
-        self.dilation = dilation
+class FusionConfig:
+    class InputConfig:
+        def __init__(self, N, H, W, C):
+            self.N = N
+            self.H = H
+            self.W = W
+            self.C = C
+        def get_shape(self):
+            return self.N, self.H, self.W, self.C
 
-class Parameters:
+    class FilterConfig:
+        def __init__(self, HW, I, O, stride, depthwise, bn_relu, dilation=1, padding="SAME"):
+            assert bn_relu in [None, 'relu', 'relu6']
+            self.H = HW
+            self.W = HW
+            self.I = I
+            self.O = O
+            self.stride_h = stride
+            self.stride_w = stride
+            self.depthwise = depthwise
+            self.bn_relu = bn_relu
+            self.dilation_h = dilation
+            self.dilation_w = dilation
+            self.padding = padding
+            self.padding_shape = None
+        def get_shape(self):
+            return self.H, self.W, self.I, self.O
+        def get_padding_shape(self):
+            assert(self.padding_shape is not None)
+            return self.padding_shape[0], self.padding_shape[1], self.padding_shape[2], self.padding_shape[3]
+        def get_stride(self):
+            return self.stride_h, self.stride_w
+        def get_dilation(self):
+            return self.dilation_h, self.dilation_w
+
     def __init__(self, p):
-        assert len(p) == 15
-        self.p = p
-        self.N, self.H, self.W, self.IC, \
-            self.f1_K, self.f1_OC, self.f1_stride, self.f1_depthwise, self.f1_bn_relu, \
-                self.f2_K, self.f2_OC, self.f2_stride, self.f2_depthwise, self.f2_bn_relu, \
-                    self.is_block = p
-        assert self.f2_depthwise == False # Currently not supported
-        assert self.f1_bn_relu in [None, 'relu', 'relu6']
-        assert self.f2_bn_relu in [None, 'relu', 'relu6']
+        self.is_block = False
+        self.layers = []
+        idx = 0
+        OUTPUT = None
+        while 1:
+            if idx + 5 > len(p): # Skip is_block for now
+                break
 
-    def get_params(self):
-        return self.p
-    
-    def get_f1_K(self):
-        return self.f1_K
+            if not OUTPUT:
+                DATA = self.InputConfig(*p[idx:(idx+4)])
+                KERNEL = self.FilterConfig(p[idx+4], DATA.C, *p[(idx+5):(idx+9)])
+                idx += 9
+            else:
+                DATA = OUTPUT
+                KERNEL = self.FilterConfig(p[idx], DATA.C, *p[(idx+1):(idx+5)])
+                idx += 5
 
-    def get_f2_K(self):
-        return self.f2_K
+            self.layers.append((DATA, KERNEL))
 
-    def get_f1_stride(self):
-        return self.f1_stride
+            # Compute the output shape with the original input size, i.e. WITHOUT INPUT PACKING
+            dilated_kernel_h = (KERNEL.H - 1) * KERNEL.dilation_h + 1
+            dilated_kernel_w = (KERNEL.W - 1) * KERNEL.dilation_w + 1
+            pad_top, pad_left, pad_down, pad_right = get_pad_tuple(
+                KERNEL.padding, (dilated_kernel_h, dilated_kernel_w))
+            if KERNEL.padding_shape is None:
+                KERNEL.padding_shape = (pad_top, pad_left, pad_down, pad_right)
 
-    def get_f2_stride(self):
-        return self.f2_stride
+            ON = DATA.N
+            OH = simplify((DATA.H - dilated_kernel_h + pad_top + pad_down) // KERNEL.stride_h + 1)
+            OW = simplify((DATA.W - dilated_kernel_w + pad_left + pad_right) // KERNEL.stride_w + 1)
+            OC = KERNEL.I * KERNEL.O if KERNEL.depthwise else KERNEL.O
+            OUTPUT = self.InputConfig(ON, OH, OW, OC)
 
-    def is_f1_depthwise(self):
-        return self.f1_depthwise
+        self.layers.append((OUTPUT,))
+        self.layer_num = len(self.layers) - 1
 
-    def is_f2_depthwise(self):
-        return self.f2_depthwise
-
-    def get_f1_bn_relu(self):
-        return self.f1_bn_relu
-
-    def get_f2_bn_relu(self):
-        return self.f2_bn_relu
-
-    def get_is_block(self):
-        return self.is_block
-
-    def get_shape(self, tensor="input", layout="NHWC"):
-        assert layout in ["NHWC", "NCHW"]
-        assert tensor in ["input", "f1", "f2"]
-
-        if tensor=="input":
-            if layout == "NHWC":
-                return (self.N, self.H, self.W, self.IC) # NHWC
-            if layout == "NCHW":
-                return (self.N, self.IC, self.H, self.W) # NCHW
-        elif tensor=="f1":
-            if layout == "NHWC":
-                return (self.f1_K, self.f1_K, self.IC, self.f1_OC) # HWIO
-            if layout == "NCHW":
-                return (self.f1_OC, self.IC, self.f1_K, self.f1_K) # OIHW
-        else: # f2
-            if self.f1_depthwise:
-                if layout == "NHWC":
-                    return (self.f2_K, self.f2_K, self.IC * self.f1_OC, self.f2_OC) # HWIO
-                if layout == "NCHW":
-                    return (self.f2_OC, self.IC * self.f1_OC, self.f2_K, self.f2_K) # OIHW
-            else: # f1 not depthwise
-                if layout == "NHWC":
-                    return (self.f2_K, self.f2_K, self.f1_OC, self.f2_OC) # HWIO
-                if layout == "NCHW":
-                    return (self.f2_OC, self.f1_OC, self.f2_K, self.f2_K) # OIHW
+    def get_bnlu(self):
+        return [l[1].bn_relu for l in self.layers[:self.layer_num]]
 
     def print_info(self):
-        print("Input size: {}".format(self.get_shape(tensor="input")))
-        print("Filter 1 size: {}, depthwise: {}, bn_relu: {}".format(self.get_shape(tensor="f1"), self.f1_depthwise, self.f1_bn_relu))
-        print("Filter 2 size: {}, depthwise: {}, bn_relu: {}".format(self.get_shape(tensor="f2"), self.f2_depthwise, self.f2_bn_relu))
-        print("Is a block: {}".format(self.is_block))
+        for i in range(self.layer_num):
+            DATA, KERNEL = self.layers[i]
+            print("Input_{} size: {}".format(i, DATA.get_shape()))
+            print("Filter_{} size: {}, depthwise: {}, bn_relu: {}".format(i, KERNEL.get_shape(), KERNEL.bn_relu))
+            print("Is a block: {}".format(self.is_block))
+        OUTPUT = self.layers[-1][0]
+        print("Output size: {}".format(DATA.get_shape()))
 
 def flatten_list(lst):
     return sum(([x] if not isinstance(x, list) else flatten_list(x) for x in lst), [])
@@ -148,21 +148,21 @@ def get_workloads():
     # VGG
     # conv_conv_workloads['vgg_3_4'] = (1, 112, 112, 128, 3, 128, 1, False, None, 3, 128, 1, False, None, False) # / 2049.59 us
     # conv_conv_workloads['vgg_5_6'] = (1, 56, 56, 256, 3, 256, 1, False, None, 3, 256, 1, False, None, False) # / 2519.97 us
-    # conv_conv_workloads['vgg_8_9'] = (1, 28, 28, 512, 3, 128, 1, False, None, 3, 512, 1, False, None, False) # / 877.67 us
-    # conv_conv_workloads['vgg_11_12'] = (1, 14, 14, 512, 3, 128, 1, False, None, 3, 512, 1, False, None, False) # / 359.19 us
+    # conv_conv_workloads['vgg_8_9'] = (1, 28, 28, 512, 3, 512, 1, False, None, 3, 512, 1, False, None, False) # / 877.67 us
+    # conv_conv_workloads['vgg_11_12'] = (1, 14, 14, 512, 3, 512, 1, False, None, 3, 512, 1, False, None, False) # / 359.19 us
     ################################################################
 
     ##################### Depth conv workloads #####################
     # # MobileNet-v1
-    depth_conv_workloads['mv1_1'] = (1, 112, 112, 32, 3, 1, 1, True, None, 1, 64, 1, False, None, False) # 67.28 us / 183.70us
-    depth_conv_workloads['mv1_2'] = (1, 112, 112, 64, 3, 1, 2, True, None, 1, 128, 1, False, None, False) # 91.97 us / 124.78 us
+    # depth_conv_workloads['mv1_1'] = (1, 112, 112, 32, 3, 1, 1, True, None, 1, 64, 1, False, None, False) # 67.28 us / 183.70us
+    # depth_conv_workloads['mv1_2'] = (1, 112, 112, 64, 3, 1, 2, True, None, 1, 128, 1, False, None, False) # 91.97 us / 124.78 us
     depth_conv_workloads['mv1_3'] = (1, 56, 56, 128, 3, 1, 1, True, None, 1, 128, 1, False, None, False) # 74.98 us / 134.67 us / 108.12 us (4, 4, 16, 4)
-    depth_conv_workloads['mv1_4'] = (1, 56, 56, 128, 3, 1, 2, True, None, 1, 256, 1, False, None, False) # 69.34 us / 75.01 us
-    depth_conv_workloads['mv1_5'] = (1, 28, 28, 256, 3, 1, 1, True, None, 1, 256, 1, False, None, False) # 79.91 us / 110.06 us / 117.21 us (2, 2, 8, 8)
-    depth_conv_workloads['mv1_6'] = (1, 28, 28, 256, 3, 1, 2, True, None, 1, 512, 1, False, None, False) # 70.35 us / 64.22 us
-    depth_conv_workloads['mv1_7-11'] = (1, 14, 14, 512, 3, 1, 1, True, None, 1, 512, 1, False, None, False) # 97.83 us / 112.37 us
-    depth_conv_workloads['mv1_12'] = (1, 14, 14, 512, 3, 1, 2, True, None, 1, 1024, 1, False, None, False) # 97.71 us / 164.36 us
-    depth_conv_workloads['mv1_13'] = (1, 7, 7, 1024, 3, 1, 1, True, None, 1, 1024, 1, False, None, False) # 129.61 us / 220.23 us
+    # depth_conv_workloads['mv1_4'] = (1, 56, 56, 128, 3, 1, 2, True, None, 1, 256, 1, False, None, False) # 69.34 us / 75.01 us
+    # depth_conv_workloads['mv1_5'] = (1, 28, 28, 256, 3, 1, 1, True, None, 1, 256, 1, False, None, False) # 79.91 us / 110.06 us / 117.21 us (2, 2, 8, 8)
+    # depth_conv_workloads['mv1_6'] = (1, 28, 28, 256, 3, 1, 2, True, None, 1, 512, 1, False, None, False) # 70.35 us / 64.22 us
+    # depth_conv_workloads['mv1_7-11'] = (1, 14, 14, 512, 3, 1, 1, True, None, 1, 512, 1, False, None, False) # 97.83 us / 112.37 us
+    # depth_conv_workloads['mv1_12'] = (1, 14, 14, 512, 3, 1, 2, True, None, 1, 1024, 1, False, None, False) # 97.71 us / 164.36 us
+    # depth_conv_workloads['mv1_13'] = (1, 7, 7, 1024, 3, 1, 1, True, None, 1, 1024, 1, False, None, False) # 129.61 us / 220.23 us
 
     # # MobileNet-v2
     # depth_conv_workloads['mv2_1'] = (1, 112, 112, 32, 3, 1, 1, True, None, 1, 16, 1, False, None, False) # 38.19 us / 123.81 us
@@ -295,34 +295,34 @@ def get_ref_data(workload_name,
 
     return ref_data
 
-def get_input_and_filters(p):
-    input_shape = p.get_shape("input")
-    filter_1_shape = p.get_shape("f1")
-    filter_2_shape = p.get_shape("f2")
+# def get_input_and_filters(p):
+#     input_shape = p.get_shape("input")
+#     filter_1_shape = p.get_shape("f1")
+#     filter_2_shape = p.get_shape("f2")
 
-    # placeholder (NHWC)
-    # Input: NHWC, Kernel: HWIO for both depthwise and conv2d
-    Input = te.placeholder(input_shape, name='Input')
-    Filter_1 = te.placeholder(filter_1_shape, name='Layer_0_Filter')
-    Filter_2 = te.placeholder(filter_2_shape, name='Layer_1_Filter')
+#     # placeholder (NHWC)
+#     # Input: NHWC, Kernel: HWIO for both depthwise and conv2d
+#     Input = te.placeholder(input_shape, name='Input')
+#     Filter_1 = te.placeholder(filter_1_shape, name='Layer_0_Filter')
+#     Filter_2 = te.placeholder(filter_2_shape, name='Layer_1_Filter')
 
-    # For getting ref data
-    placeholders = []
-    placeholders.append(Input)
-    placeholders.append(Filter_1)
-    placeholders.append(Filter_2)
+#     # For getting ref data
+#     placeholders = []
+#     placeholders.append(Input)
+#     placeholders.append(Filter_1)
+#     placeholders.append(Filter_2)
 
-    # For getting schedule
-    Filters = []
-    Filters.append(FilterParams(
-                    Filter_1,
-                    depthwise=p.is_f1_depthwise(),
-                    bn_relu=p.get_f1_bn_relu(),
-                    stride=p.get_f1_stride(), dilation=1))
-    Filters.append(FilterParams(
-                    Filter_2,
-                    depthwise=p.is_f2_depthwise(),
-                    bn_relu=p.get_f2_bn_relu(),
-                    stride=p.get_f2_stride(), dilation=1))
+#     # For getting schedule
+#     Filters = []
+#     Filters.append(FilterParams(
+#                     Filter_1,
+#                     depthwise=p.is_f1_depthwise(),
+#                     bn_relu=p.get_f1_bn_relu(),
+#                     stride=p.get_f1_stride(), dilation=1))
+#     Filters.append(FilterParams(
+#                     Filter_2,
+#                     depthwise=p.is_f2_depthwise(),
+#                     bn_relu=p.get_f2_bn_relu(),
+#                     stride=p.get_f2_stride(), dilation=1))
 
-    return Input, Filters
+#     return Input, Filters
