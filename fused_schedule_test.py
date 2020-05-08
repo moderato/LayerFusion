@@ -53,8 +53,7 @@ targets = {
 
 def verify_fused(workload_name,
                     parameters,
-                    dtype="float32", 
-                    layout="NHWC", 
+                    dtype="float32",
                     no_print_ir=False, 
                     print_src=False, 
                     dry_run=False,
@@ -64,8 +63,6 @@ def verify_fused(workload_name,
                     auto_tvm_skip_training=False, 
                     auto_tvm_trials=20, 
                     name='depth_conv'):
-    assert layout in ["NHWC", "NCHW", "NCHWc16", "NCHWc4"]
-
     def check_target(target):
         if not tvm.runtime.enabled(target):
             print("Skip because %s is not enabled" % target)
@@ -128,6 +125,7 @@ def verify_fused(workload_name,
         else:
             with tvm.target.create(target):
                 s, flatten_params = get_schedule(parameters, auto_tvm, target, name)
+                best_config = None
 
         if not no_print_ir:
             print(tvm.lower(s, flatten_params, simple_mode=True))
@@ -152,7 +150,7 @@ def verify_fused(workload_name,
                 # func_sys.save("benchmark/cpu/kernel_sys.o")
 
         # Prepare data
-        ref_data = get_ref_data(workload_name, parameters, dtype=dtype, layout=layout, save_data=save_data, name=name)
+        ref_data = get_ref_data(workload_name, parameters, target, best_config, dtype=dtype, save_data=save_data, name=name)
 
         # export kernel launch config ONLY FOR GPUS, e.g. thxyz, blxy
         output_shape = ref_data[-1].shape
@@ -183,7 +181,7 @@ def verify_fused(workload_name,
             print(ref_data[-1][d])
             print(np.where(d))
         # print("Error rate: {:.2f}%".format((len(d) / len(ref_data[-1]) * 100)))
-        print("{}_fused of {} ({}): average running time is {:.2f} us.".format(name, workload_name, layout, tcost_d * 1e6))
+        print("{}_fused of {} ({}): average running time is {:.2f} us.".format(name, workload_name, "NHWC" if target == "cuda" else "NCHWc", tcost_d * 1e6))
         FLOP = autotvm.task.task.compute_flop(s)
         print("FLOP: {}, GFLOPS: {:.2f}.".format(FLOP, FLOP / tcost_d / 1e9))
 

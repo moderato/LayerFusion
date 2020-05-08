@@ -92,7 +92,7 @@ class LayerConfig:
     def get_packing_factor(self, cfg):
         return 8 if cfg is None else cfg['split_layer_{}_c'.format(self._layer_num)].size[-1]
 
-    def padding(self, cfg, array_packing=False):
+    def padding(self, cfg):
         if self._layout == "NHWC":
             FH, FW, _, _ = self.get_filter_shape()
         else: # "NCHWc"
@@ -120,17 +120,16 @@ class LayerConfig:
             # Update Input
             self._input = PaddedInput
 
-    def make_depthwise_output(self, cfg, array_packing=False):
+    def make_depthwise_output(self, cfg):
         # Pad if necessary
-        self.padding(cfg, array_packing)
+        self.padding(cfg)
         if self._layout == "NHWC":
             N, IH, IW, IC = self.get_input_shape()
-            FH, FW, _, CM = self.get_filter_shape()
+            FH, FW, _, _ = self.get_filter_shape()
             N, OH, OW, OC = self.get_output_shape()
         else: # Packed input
             N, IC_chunk, IH, IW, IC_vec = self.get_input_shape()
-            CM_chunk, _, FH, FW, _, CM_vec = self.get_filter_shape()
-            CM = CM_chunk * CM_vec
+            _, _, FH, FW, _, _ = self.get_filter_shape()
             N, OC_chunk, OH, OW, OC_vec = self.get_output_shape()
 
         # Don't consider 1by1 depthwise
@@ -157,8 +156,8 @@ class LayerConfig:
                                                 (self._input[n, 
                                                                 h * stride_h + ry * dilation_h, 
                                                                 w * stride_w + rx * dilation_w,
-                                                                te.indexdiv(c, CM)].astype(self._output_dtype) *
-                                                self._filter[ry, rx, te.indexdiv(c, CM), te.indexmod(c, CM)].astype(self._output_dtype)), axis=[ry, rx]),
+                                                                c].astype(self._output_dtype) *
+                                                self._filter[ry, rx, c, 0].astype(self._output_dtype)), axis=[ry, rx]),
                                             name='Layer_{}_DepthwiseConv2dOutput'.format(self._layer_num), tag="depthwise_nhwc")
         else:
             Output = te.compute(self._output_shape,
@@ -171,9 +170,9 @@ class LayerConfig:
                                             name='Layer_{}_DepthwiseConv2dOutput'.format(self._layer_num), tag="depthwise_nchw{}c".format(OC_vec))
         self._output = Output
 
-    def make_conv_output(self, cfg, array_packing=False):
+    def make_conv_output(self, cfg):
         # Pad if necessary
-        self.padding(cfg, array_packing)
+        self.padding(cfg)
         if self._layout == "NHWC":
             N, IH, IW, IC = self.get_input_shape()
             FH, FW, _, CM = self.get_filter_shape()
@@ -294,18 +293,7 @@ class LayerConfig:
                             tag='relu6_nhwc')
         self._stages[-1].append(ReLU)
 
-    def post_transformation(self, cfg):
-        # batch, out_channel_chunk, out_height, out_width, out_channel_vec = self.get_output_shape()
-        # packing_factor = self.get_packing_factor(cfg)
-
-        # PackedInput = te.compute(
-        #                     (batch, out_height, out_width, out_channel_chunk * out_channel_vec),
-        #                     lambda w, x, y, z: self._input[w, z // packing_factor, x, y, z % packing_factor],
-        #                     name="UnpackedOutput"
-        #                 )
-        pass
-
-    def make_output(self, cfg, array_packing=False, block_input=None):
+    def make_output(self, cfg, block_input=None):
         # Only make output once!
         if self._output is None:
 
@@ -313,18 +301,15 @@ class LayerConfig:
             # With array packing, e.g. CPU: input shape 5D, filter shape 6D, output shape 5D
 
             if self._filter_cfg.depthwise: # Depthwise
-                self.make_depthwise_output(cfg, array_packing=array_packing)
+                self.make_depthwise_output(cfg)
             else: # Normal convolution
-                self.make_conv_output(cfg, array_packing=array_packing)
+                self.make_conv_output(cfg)
 
             self._stages.append([self._output])
             self._params.append([self._filter])
 
             if self._filter_cfg.bn_relu:
                 self.process_relu(block_input)
-
-            if array_packing and self._is_final_stage:
-                self.post_transformation(cfg)
 
     def get_stages(self):
         return self._stages
