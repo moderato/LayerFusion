@@ -60,16 +60,15 @@ Convert input from NCHW format to NCHW16C format where the innermost data dimens
 '''
 def convert_input(a_np, batch, in_channel, input_height, input_width, pad_height, pad_width, vlen, A):
     to_return = np.zeros((batch, math.ceil(in_channel/vlen),input_height + 2*pad_height, input_width+ 2*pad_width,vlen),dtype = A.dtype)
-
     for i in range(batch):
-      for j in range(math.ceil(in_channel/vlen)):
-        for k in range(input_height + 2*pad_height):
-          for l in range(input_width + 2*pad_width):
-              for m in range(vlen):
-                if k < pad_height or k >= input_height + pad_height or l < pad_width or l >= input_width+ pad_width or j*vlen + m >= in_channel:
-                      to_return[i, j, k, l, m] = float(0)
-                else:
-                      to_return[i, j, k, l, m] = a_np[i, j*vlen + m, k-pad_height, l-pad_width]
+        for j in range(math.ceil(in_channel/vlen)):
+            for k in range(input_height + 2*pad_height):
+                for l in range(input_width + 2*pad_width):
+                    for m in range(vlen):
+                        if k < pad_height or k >= input_height + pad_height or l < pad_width or l >= input_width+ pad_width or j*vlen + m >= in_channel:
+                            to_return[i, j, k, l, m] = float(0)
+                        else:
+                            to_return[i, j, k, l, m] = a_np[i, j*vlen + m, k-pad_height, l-pad_width]
 
     return to_return
 
@@ -79,11 +78,11 @@ Convert output from NCHW16C format to NCHW format where the innermost data dimen
 def convert_output(a_np, batch, out_channel, output_height, output_width, vlen):
     to_return = np.zeros((batch, out_channel,output_height, output_width), dtype=float)
     for i in range(batch):
-      for j in range(math.ceil(out_channel/vlen)):
-        for k in range(output_height):
-          for l in range(output_width):
-              for m in range(vlen):
-                  to_return[i, j*vlen + m, k, l] = a_np[i, j, k, l, m]
+        for j in range(math.ceil(out_channel/vlen)):
+            for k in range(output_height):
+                for l in range(output_width):
+                    for m in range(vlen):
+                        to_return[i, j*vlen + m, k, l] = a_np[i, j, k, l, m]
     return to_return
 
 '''
@@ -91,17 +90,16 @@ Convert weights from KCRS format to KCRS16C16K format where the innermost data d
 '''
 def convert_weight(w_np, in_channel, out_channel, kernel_height, kernel_width, vlen, W):
     to_return = np.zeros((math.ceil(out_channel/vlen), math.ceil(in_channel/vlen),kernel_height, kernel_width,vlen,vlen), dtype = W.dtype)
-
     for i in range(math.ceil(out_channel/vlen)):
-      for j in range(math.ceil(in_channel/vlen)):
-        for k in range(kernel_height):
-          for l in range(kernel_width):
-            for m in range(vlen):
-              for n in range(vlen):
-                if i*vlen + n >= out_channel or j*vlen + m >= in_channel:
-                   to_return[i, j, k, l, m, n] =float(0)
-                else:
-                   to_return[i, j, k, l, m, n] = w_np[i*vlen + n, j*vlen + m, k, l]
+        for j in range(math.ceil(in_channel/vlen)):
+            for k in range(kernel_height):
+                for l in range(kernel_width):
+                    for m in range(vlen):
+                        for n in range(vlen):
+                            if i*vlen + n >= out_channel or j*vlen + m >= in_channel:
+                                to_return[i, j, k, l, m, n] =float(0)
+                            else:
+                                to_return[i, j, k, l, m, n] = w_np[i*vlen + n, j*vlen + m, k, l]
     return to_return
 
 # Get the reference output tensor for correctness check
@@ -350,7 +348,7 @@ def conv_auto_tuned(ofmblock,       # vec
             (batch, math.ceil(out_channel/ofmblock), ofh, ofw, ofmblock),
             lambda nn, ff, yy, xx, vlen1: te.sum(
                                                 W1[ff, rco1, ry1, rx1, rci1, vlen1] * A2[nn, rco1, ry1 + yy, rx1 + xx, rci1],
-                                                axis=[rco1,ry1, rx1, rci1]),
+                                                axis=[rco1, ry1, rx1, rci1]),
             name='output')
         pack = True
     else:
@@ -511,12 +509,12 @@ def driver():
                 a_np, w_np, b_np  = get_ref_data(batch,out_channel,in_channel,input_height,input_width,kernel_height, kernel_width,stride_height,pad_height)
                 
                 # AutoTVM template: 5D conv 6D = 5D
-                s, arg_bufs = conv_auto_tuned(vlen,output_width, vlen, stride_width,input_width + 2*pad_width, in_channel,\
+                s, arg_bufs = conv_auto_tuned(vlen, output_width, vlen, stride_width,input_width + 2*pad_width, in_channel,\
                                     input_height + 2*pad_height, kernel_height, kernel_width,output_height, stride_height, batch, out_channel)
 
                 # input 4D -> 5D, weight 4D -> 6D
-                a_np2 = convert_input(a_np, batch, in_channel,input_height,input_width,pad_height,pad_width,vlen, arg_bufs[1])
-                w_np2 = convert_weight(w_np, in_channel, out_channel, kernel_height, kernel_width,vlen,arg_bufs[0])
+                a_np2 = convert_input(a_np, batch, in_channel, input_height, input_width, pad_height, pad_width, vlen, arg_bufs[1])
+                w_np2 = convert_weight(w_np, in_channel, out_channel, kernel_height, kernel_width, vlen, arg_bufs[0])
                 
                 ctx = tvm.context('llvm -mcpu=core-avx2', 0)
                 b = tvm.nd.array(np.zeros((batch, math.ceil(out_channel/vlen), output_height, output_width, vlen), dtype=arg_bufs[2].dtype), ctx)
@@ -527,7 +525,7 @@ def driver():
                 func(w, a, b)
 
                 # output 5D -> 4D
-                b_np_A = convert_output(b.asnumpy(), 1,out_channel, output_height, output_width, vlen)
+                b_np_A = convert_output(b.asnumpy(), 1, out_channel, output_height, output_width, vlen)
                 np.testing.assert_allclose(b_np_A, b_np, rtol=1e-5)
                 evaluator1 = func.time_evaluator(func.entry_name, ctx, number=1000, repeat=1, min_repeat_ms=1)
 

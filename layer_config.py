@@ -39,7 +39,9 @@ class LayerConfig:
             IC_chunk = math.ceil(IC / vlen)
             if Input is None:
                 Input = te.placeholder((N, tmp_chunk, IH, IW, vlen), name='Input')
-            Filter = te.placeholder((tmp_chunk, IC_chunk, FH, FW, vlen, vlen), 
+            filter_shape = (tmp_chunk, IC_chunk, FH, FW, vlen, vlen) if not self._filter_cfg.depthwise else \
+                            (1, IC_chunk, FH, FW, vlen, 1)
+            Filter = te.placeholder(filter_shape, 
                                     name='Layer_{}_{}Filter'.format(idx,
                                                                     "Depthwise" if self._filter_cfg.depthwise else "Conv2d"))
             self._layout = "NCHWc"
@@ -308,22 +310,7 @@ class LayerConfig:
         if self._output is None:
 
             # Without array packing, e.g. GPU, input shape 4D, filter shape 4D, output shape 4D
-            # With array packing, e.g. CPU:
-            #   1st layer input shape 4D, transformed shape 5D
-            #   all other layers input shape 5D
-            #   all layer filter shape 4D, transformed shape 5D
-            #   last layer input shape 5D, transformed shape 4D
-            #   all other layers output shape 5D
-            # Therefore:
-            #   1st layer: 
-            #       Packing: 4D transformed to 5D -> 5D conv 5D = 5D
-            #       No packing: 4D conv 4D = 4D
-            #   last layer: 5D conv 5D = 5D -> 5D transformed to 4D
-            #       Packing: 5D conv 5D = 5D
-            #       No packing: 4D conv 4D = 4D
-            #   other layers: 
-            #       Packing: 5D conv 5D = 5D -> 4D transformed to 4D
-            #       No packing: 4D conv 4D = 4D
+            # With array packing, e.g. CPU: input shape 5D, filter shape 6D, output shape 5D
 
             if self._filter_cfg.depthwise: # Depthwise
                 self.make_depthwise_output(cfg, array_packing=array_packing)

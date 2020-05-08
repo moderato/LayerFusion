@@ -3,7 +3,7 @@ import topi, topi.testing
 from topi.util import simplify, get_const_tuple
 from topi.nn.util import get_pad_tuple
 from tvm import autotvm, te
-import os
+import os, math
 
 def vec_length(device="cuda"):
     if device == "cuda":
@@ -95,7 +95,10 @@ class FusionConfig:
         self.layers.append((OUTPUT,))
         self.layer_num = len(self.layers) - 1
 
-    def get_bnlu(self):
+    def get_filter(self, idx):
+        return self.layers[idx][1]
+
+    def get_bn_relu(self):
         return [l[1].bn_relu for l in self.layers[:self.layer_num]]
 
     def print_info(self):
@@ -219,32 +222,65 @@ def export_kernel_launch_config(workload_name, output_shape, best_config):
     with open("generated_kernels/gpu/kernel_launch_config/{}_config.csv".format(workload_name), "w") as f:
         f.write("{},{},{},{}".format(thx, thy, thz, blx))
 
+def NHWC_to_NCHWc_data(nhwc, vlen):
+    n, h, w, c = get_const_tuple(nhwc.shape)
+    print(n, h, w, c)
+    c_chunk = math.ceil(c / vlen)
+    nchwc = nhwc.reshape(n, h, w, c_chunk, vlen)
+    return np.array(nchwc.transpose(0, 3, 1, 2, 4), order='C')
+
+def NHWC_to_NCHWc_kernel(hwio, vlen, depthwise=False):
+    h, w, i, o = get_const_tuple(hwio.shape)
+    i_chunk = math.ceil(i / vlen)
+    print(h, w, i, o)
+    oihwio = hwio.reshape(h, w, i_chunk, vlen, math.ceil(o / vlen), vlen) if not depthwise else \
+                hwio.reshape(h, w, i_chunk, vlen, 1, 1)
+    return np.array(oihwio.transpose(4, 2, 0, 1, 3, 5), order='C')
+
+def tensor_transformation(data, pack, vlen, tensor_type="data", depthwise=False):
+    if tensor_type == "data":
+        return data if not pack else NHWC_to_NCHWc_data(data, vlen)
+    else: # kernel:
+        return data if not pack else NHWC_to_NCHWc_kernel(data, vlen, depthwise)
+
 def get_ref_data(workload_name,
-                    parameters, 
+                    parameters,
+                    target,
+                    best_config=None,
                     dtype="float32", 
-                    layout="NHWC", 
                     save_data=False, 
                     name='depth_conv'):
-    Input, Filters = get_input_and_filters(Parameters(parameters))
-    is_block = parameters[-1]
+    fusion_cfg = FusionConfig(parameters)
+    assert(target is not None)
+    pack = (target != "cuda")
+    if best_config is None:
+        vlen = 16
+    else:
+        config_dict = best_config.to_json_dict()
+        for e in config_dict['entity']:
+            if e[0] == "vlen":
+                vlen = e[1]
+    ref_data = []
 
     # Pretending the input_data is some output_data from stage -1
-    output_data = np.random.uniform(0.0, 0.1, size=get_const_tuple(Input.shape)).astype(dtype)
-    ref_data = [output_data]
+    output_data = np.random.uniform(0.0, 0.1, size=fusion_cfg.layers[0][0].get_shape()).astype(dtype)
+    ref_data.append(tensor_transformation(output_data, pack, vlen, "data"))
     # params names for saving data
     params_name = ["input"]
     
-    for idx, f in enumerate(Filters):
-        filter_data = np.random.uniform(0.0, 0.1, size=get_const_tuple(f.placeholder.shape)).astype(dtype)
-        ref_data.append(filter_data)
+    for idx in range(fusion_cfg.layer_num):
+        f = fusion_cfg.get_filter(idx)
+
+        filter_data = np.random.uniform(0.0, 0.1, size=get_const_tuple(f.get_shape())).astype(dtype)
+        ref_data.append(tensor_transformation(filter_data, pack, vlen, "filter", f.depthwise))
 
         input_data = np.copy(output_data)
 
         if f.depthwise:
-            output_data = topi.testing.depthwise_conv2d_python_nhwc(input_data, filter_data, stride=[f.stride, f.stride], padding=f.padding).astype(dtype)
+            output_data = topi.testing.depthwise_conv2d_python_nhwc(input_data, filter_data, stride=[f.stride_h, f.stride_w], padding=f.padding).astype(dtype)
             params_name.append("filter_{}_d".format(idx+1)) # Mark depthwise filter
         else: # Normal convolution
-            output_data = topi.testing.conv2d_nhwc_python(input_data, filter_data, f.stride, f.padding).astype(dtype)
+            output_data = topi.testing.conv2d_nhwc_python(input_data, filter_data, f.stride_h, f.padding).astype(dtype)
             params_name.append("filter_{}".format(idx+1))
 
         if f.bn_relu is not None:
@@ -260,7 +296,7 @@ def get_ref_data(workload_name,
                 scale_shift_scipy[:,:,:,c] = output_data[:,:,:,c] * scale_np[c] + shift_np[c]
 
                 # For ResNet / DenseNet blocks, etc
-                if is_block:
+                if fusion_cfg.is_block:
                     scale_shift_scipy[:,:,:,c] = scale_shift_scipy[:,:,:,c] + input_data[:,:,:,c]
 
                 relu_scipy[:,:,:,c] = np.maximum(scale_shift_scipy[:,:,:,c], 0)
@@ -269,8 +305,8 @@ def get_ref_data(workload_name,
             output_data = relu_scipy
             params_name.extend(['scale_{}'.format(idx+1), 'shift_{}'.format(idx+1)])
 
-        if idx == len(Filters) - 1: # At the last stage, append output_data as the final output for reference
-            ref_data.append(output_data)
+        if idx == fusion_cfg.layer_num - 1: # At the last stage, append output_data as the final output for reference
+            ref_data.append(tensor_transformation(output_data, pack, vlen, "data"))
     params_name.append('output')
     
     if save_data:
@@ -282,7 +318,7 @@ def get_ref_data(workload_name,
                 os.mkdir(filename)
             filename += params_name[i]
             # Transpose filter for cudnn: should be non-fortran order
-            if layout == "NHWC":
+            if target == "cuda":
                 np.save(filename, ref_data[i])
                 if "filter" in filename:
                     if "_d" in filename:
@@ -294,35 +330,3 @@ def get_ref_data(workload_name,
                         np.save(filename+"_NCHW", np.array(ref_data[i].transpose(0, 3, 1, 2), order='C'))
 
     return ref_data
-
-# def get_input_and_filters(p):
-#     input_shape = p.get_shape("input")
-#     filter_1_shape = p.get_shape("f1")
-#     filter_2_shape = p.get_shape("f2")
-
-#     # placeholder (NHWC)
-#     # Input: NHWC, Kernel: HWIO for both depthwise and conv2d
-#     Input = te.placeholder(input_shape, name='Input')
-#     Filter_1 = te.placeholder(filter_1_shape, name='Layer_0_Filter')
-#     Filter_2 = te.placeholder(filter_2_shape, name='Layer_1_Filter')
-
-#     # For getting ref data
-#     placeholders = []
-#     placeholders.append(Input)
-#     placeholders.append(Filter_1)
-#     placeholders.append(Filter_2)
-
-#     # For getting schedule
-#     Filters = []
-#     Filters.append(FilterParams(
-#                     Filter_1,
-#                     depthwise=p.is_f1_depthwise(),
-#                     bn_relu=p.get_f1_bn_relu(),
-#                     stride=p.get_f1_stride(), dilation=1))
-#     Filters.append(FilterParams(
-#                     Filter_2,
-#                     depthwise=p.is_f2_depthwise(),
-#                     bn_relu=p.get_f2_bn_relu(),
-#                     stride=p.get_f2_stride(), dilation=1))
-
-#     return Input, Filters

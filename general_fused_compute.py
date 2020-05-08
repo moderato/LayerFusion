@@ -42,7 +42,7 @@ def get_schedule(parameters, auto_tvm=False, device="cuda", name='depth_conv'):
         from schedules.schedules import cpu_schedules as sch
 
     f = sch(name, auto_tvm)
-    s = f(cfg, output_stage, stages, params, layer_num=fusion_cfg.layer_num, bn_relu=fusion_cfg.get_bnlu())
+    s = f(cfg, output_stage, stages, params, layer_num=fusion_cfg.layer_num, bn_relu=fusion_cfg.get_bn_relu())
     return s, flatten_list(params)
 
 def test_get_schedule():
