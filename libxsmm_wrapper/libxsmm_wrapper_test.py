@@ -111,155 +111,63 @@ def get_ref_data(batch, out_channel, in_channel, input_height, input_width, kern
     if batch == 1:
         return a_np, w_np, b_np
 
-#special case for small height and width (e.g. h = w = 7), where (h*w) becomes dimension of the brgemm (M)
-def intrin_libxsmm_hxw(
-                        ofmblock,
-                        ofw,
-                        ifmblock, 
-                        stride_width,
-                        ifw,
-                        rco, 
-                        ifh,
-                        r,
-                        s, 
-                        ofh,            # cfg["tile_h"].size[2],  # HI
-                        stride_height,  # 1
-                        out_channel,    # out_channel
-                        ifh_stride,     # ofh
-                        ifw_stride,     # ofw
-                        in_channel):
-    # IH, IW
-    last_input_width_index = (ofw-1) * stride_width + s-1
-    last_input_height_index = (ofh-1) * stride_height + r-1
-
-    ry = te.reduce_axis((0, r), name='ry')
-    rx = te.reduce_axis((0, s), name='rx')
-    A = te.placeholder((rco, r, s, ifmblock, ofmblock), name='w') # Weight 5D
-
-    # (rco, r, last_input_width_index + 1, ifmblock) for the other case
-    B = te.placeholder((rco, last_input_height_index + 1, last_input_width_index + 1, ifmblock), name='b')
-
-    k = te.reduce_axis((0, ifmblock), name='k')
-    k_outer = te.reduce_axis((0, rco), name='k_outer')
-
-    # C(m, n), B[k_outer, ry, rx + m * stride_width, k] in the other case
-    C = te.compute(
-            (ofh, ofw, ofmblock),
-            lambda z, m, n: te.sum(A[k_outer, ry, rx, k, n] * B[k_outer, 
-                                                                ry + z * stride_height, 
-                                                                rx + m * stride_width, 
-                                                                k], 
-                                    axis=[k_outer, ry, rx, k]),
-            name='out')
-
-    s1 = te.create_schedule(C.op)
-    ifw1, ofw1, ofmblock1 = s1[C].op.axis3
-    rco_outer, ry, rx, rci = s1[C].op.reduce_axis
-    s1[C].reorder(ifw1, rco_outer, ry, rx, ofw1, ofmblock1, rci)
-
-    xx_ptr = tvm.tir.decl_buffer(A.shape, A.dtype,
-                        name="W", offset_factor=1,
-                        data_alignment=64)
-
-    # s3 = last_input_height_index + 1, s2 = last_input_width_index + 1
-    yy_ptr = tvm.tir.decl_buffer(B.shape, B.dtype,
-                        name="X", offset_factor=1,
-                        strides=[te.var("s3"), te.var("s2"), ifmblock, 1], #offset_factor=16
-                        data_alignment=64)
-
-    zz_ptr = tvm.tir.decl_buffer(C.shape, C.dtype,
-                        name="OUT",offset_factor=1, 
-                        strides=[ifw_stride * ofmblock, ofmblock, 1],
-                        data_alignment=64)
-
-    def intrin_func(ins, outs):
-        # tvm call extern is used to interface to libxsmm bacth reduce kernel gemm implementation
-        # rco*r*s: the number of batches
-        # ofw: output (((block W)))
-        reset = tvm.tir.call_extern("int32", "batch_reduce_kernel_init", 
-                                outs[0].access_ptr("w"), 
-                                ofmblock, 
-                                ofw * ofh) # Clear the (ofw * ofh * ofmblock) output block
-        body = tvm.tir.call_extern ("int32","batch_reduce_kernel_update", 
-                                    ins[0].access_ptr("r"),ins[1].access_ptr("r"),outs[0].access_ptr("w"), 
-                                    rco * r * s, 
-                                    ofmblock, ifmblock, 
-                                    ofw * ofh, 
-                                    stride_width, 
-                                    r, 
-                                    s, 
-                                    ifh_stride, 
-                                    ifw_stride)
-        if math.ceil(in_channel / ifmblock) == rco: # rco = rco_i: if all the reduce axes are included
-            return body, None, body
-        else:
-            return body, reset, body
-
-    with tvm.target.build_config(data_alignment=64):
-        return te.decl_tensor_intrin(C.op, 
-                                        intrin_func, name="GEMM",
-                                        binds= {  
-                                            A: xx_ptr,
-                                            B: yy_ptr,
-                                            C: zz_ptr
-                                        })
-
-# regular case of batch reduce gemm with ofw corresponding to batch reduce brgemm dimension(M)
-def intrin_libxsmm_tuned(
-                            ofmblock,
-                            ofw, 
+def intrin_libxsmm_brgemm(
+                            ofmblock, 
                             ifmblock, 
-                            stride_width,
-                            ifw,            # WI
-                            rco,            # ICI, cfg
-                            ifh,            # HI, cfg
-                            r,              # FH
-                            s,              # FW
-                            ifh_stride, 
-                            ifw_stride, 
-                            in_channel):
-    # print( "ofmblock", ofmblock,
-    #        "ofw", ofw, 
-    #        "ifmblock", ifmblock, 
-    #        "stride_width", stride_width,
-    #        "ifw", ifw,            # WI
-    #        "rco", rco,            # ICI, cfg
-    #        "ifh", ifh,            # HI, cfg
-    #        "r", r,              # FH
-    #        "s", s,              # FW
-    #        "ifh_stride", ifh_stride, 
-    #        "ifw_stride", ifw_stride, 
-    #        "in_channel", in_channel)
+                            ofw, 
+                            s, 
+                            r, 
+                            rco, 
 
-    # IW
-    last_input_width_index = (ofw - 1) * stride_width + s - 1
+                            ofh,            # Either 1 (small hxw) or cfg["tile_h"].size[2]
+
+                            stride_height, 
+                            stride_width, 
+                            input_height, 
+                            input_width, 
+                            in_channel):
+
+    block_input_height = (ofh - 1) * stride_width + r
+    block_input_width = (ofw - 1) * stride_width + s
 
     # Weight and Input reversed
     A = te.placeholder((rco, r, s, ifmblock, ofmblock), name='w') # Weight 5D
-    B = te.placeholder((rco, r, last_input_width_index + 1, ifmblock), name='b') # Input 4D
+    B = te.placeholder((rco, block_input_height, block_input_width, ifmblock), name='b') # Input 4D
     k = te.reduce_axis((0, ifmblock), name='k')
     k_outer = te.reduce_axis((0, rco), name='k_outer')
     ry = te.reduce_axis((0, r), name='ry')
     rx = te.reduce_axis((0, s), name='rx')
     C = te.compute(
-            (ofw, ofmblock),
-            lambda m,n: te.sum(A[k_outer, ry, rx, k, n] * B[k_outer, ry, rx + m * stride_width, k], axis=[k_outer, ry, rx, k]),
+            (ofh, ofw, ofmblock),
+            lambda z, m, n: te.sum(A[k_outer, ry, rx, k, n] * B[k_outer, 
+                                                                ry + z * stride_height,
+                                                                rx + m * stride_width, 
+                                                                k], 
+                                axis=[k_outer, ry, rx, k]),
             name='out')
 
-    s1 = te.create_schedule(C.op)
-    w, ofm = s1[C].op.axis
-    kco, ky, kx, kci = s1[C].op.reduce_axis
-    s1[C].reorder(kco, ky, kx, w, ofm, kci)
+    s = te.create_schedule(C.op)
+    rco1, ry1, rx1, rci1 = s[C].op.reduce_axis
+    if len(s[C].op.axis) == 2:
+        w1, ofw1 = s[C].op.axis
+        s[C].reorder(rco1, ry1, rx1, w1, ofw1, rci1)
+    elif len(s[C].op.axis) == 3:
+        ifw1, ofw1, ofmblock1 = s[C].op.axis
+        s[C].reorder(ifw1, rco1, ry1, rx1, ofw1, ofmblock1, rci1)
+    else:
+        exit(1)
+
     xx_ptr = tvm.tir.decl_buffer(A.shape, A.dtype,
-                        name="W",offset_factor=1,
+                        name="W", offset_factor=1, 
                         data_alignment=64)
 
     yy_ptr = tvm.tir.decl_buffer(B.shape, B.dtype,
-                        name="some", offset_factor=1,strides=[te.var("s3"), te.var("s2"), ifmblock, 1],
+                        name="X", offset_factor=1, 
+                        strides=[te.var("s3"), te.var("s2"), ifmblock, 1],
                         data_alignment=64)
 
     zz_ptr = tvm.tir.decl_buffer(C.shape, C.dtype,
-                        name="OUT",offset_factor=1,
+                        name="OUT", offset_factor=1, 
                         data_alignment=64)
 
     def intrin_func(ins, outs):
@@ -269,17 +177,17 @@ def intrin_libxsmm_tuned(
         reset = tvm.tir.call_extern("int32", "batch_reduce_kernel_init", 
                                 outs[0].access_ptr("w"), 
                                 ofmblock, 
-                                ofw) # Clear the (ofw * ofmblock) output block
+                                ofh * ofw) # Clear the (ofh * ofw * ofmblock) output block
         body = tvm.tir.call_extern("int32", "batch_reduce_kernel_update", 
-                                ins[0].access_ptr("r"),ins[1].access_ptr("r"),outs[0].access_ptr("w"), 
+                                ins[0].access_ptr("r"), ins[1].access_ptr("r"), outs[0].access_ptr("w"), 
                                 rco * r * s,
                                 ofmblock, ifmblock, 
-                                ofw, 
+                                ofh * ofw, 
                                 stride_width, 
                                 r, 
                                 s, 
-                                ifh_stride, 
-                                ifw_stride)
+                                input_height, 
+                                input_width)
         if math.ceil(in_channel / ifmblock) == rco: # rco = rco_i: if all the reduce axes are included
             return body, None, body
         else:
@@ -381,61 +289,30 @@ def conv_auto_tuned(ofmblock,       # vec
     cfg.add_flop(np.prod(get_const_tuple(B1.shape)) * in_channel * filter_height * filter_width * 2)
 
     # 1x1 (stride = 1 or (pack & stride > 1))
-    if (filter_height == 1 and filter_width == 1 and stride_width == 1 and stride_height == 1)   or   pack:
-        # HM > 1 & WI = OW (small W)
-        if cfg["tile_h"].size[1] > 1 and w_factor_inner == ofw: # cfg["tile_w"].size[2] == ofw:
-            libxsmm_tensorize = intrin_libxsmm_hxw(
-                                                    ofmblock,               # n of brgemm
-                                                    w_factor_inner,         # m of brgemm
-                                                    ifmblock,               # k of brgemm
-                                                    stride_width,           # stride = 1
-                                                    w_factor_inner,         # WI
-                                                    cfg["tile_c"].size[1],  # rco_i
-                                                    cfg["tile_h"].size[2],  # HI
-                                                    filter_height,
-                                                    filter_width,
-
-                                                    cfg["tile_h"].size[2],  # HI
-                                                    1, 
-                                                    out_channel, 
-
-                                                    ofh,                    # OH
-                                                    ofw,                    # OW
-                                                    in_channel)
-            s[B1].tensorize(hi, libxsmm_tensorize)
-        else:
-            libxsmm_tensorize = intrin_libxsmm_tuned( 
-                                                    ofmblock,               # n of brgemm
-                                                    w_factor_inner,         # m of brgemm
-                                                    ifmblock,               # k of brgemm
-                                                    stride_width,           # stride = 1
-                                                    w_factor_inner,         # WI
-                                                    cfg["tile_c"].size[1],  # rco_i
-                                                    cfg["tile_h"].size[2],  # HI
-                                                    filter_height,
-                                                    filter_width,
-
-                                                    ofh,                    # OH
-                                                    ofw,                    # OW
-                                                    in_channel)
-            s[B1].tensorize(rco_i, libxsmm_tensorize)
-    # Others
+    if (((filter_height == 1 and filter_width == 1 and stride_width == 1 and stride_height == 1) or pack) and \
+        (cfg["tile_h"].size[1] > 1 and w_factor_inner == ofw)): # HM > 1 & WI = OW (small W)
+        tensorize_axis = hi
+        block_output_height = cfg["tile_h"].size[2]
     else:
-        libxsmm_tensorize = intrin_libxsmm_tuned(
-                                                    ofmblock,               # n of brgemm
-                                                    w_factor_inner,         # m of brgemm
-                                                    ifmblock,               # k of brgemm
-                                                    stride_width,           # stride > 1
-                                                    w_factor_inner,         # WI
-                                                    cfg["tile_c"].size[1],  # rco_i
-                                                    cfg["tile_h"].size[2],  # HI
-                                                    filter_height, 
-                                                    filter_width,
+        tensorize_axis = rco_i
+        block_output_height = 1
 
-                                                    input_height,           # IH
-                                                    input_width,            # IW
-                                                    in_channel)
-        s[B1].tensorize(rco_i, libxsmm_tensorize)
+    libxsmm_tensorize = intrin_libxsmm_brgemm(
+                                                ofmblock,               # n of brgemm   -> rci
+                                                ifmblock,               # k of brgemm   -> ki
+                                                w_factor_inner,         # m of brgemm   -> wi
+                                                filter_width,           #               -> rx
+                                                filter_height,          #               -> ry
+                                                cfg["tile_c"].size[1],  #               -> rco_i
+                                                block_output_height,    #               -> hi
+
+                                                stride_height, 
+                                                stride_width, 
+
+                                                input_height, 
+                                                input_width, 
+                                                in_channel)
+    s[B1].tensorize(tensorize_axis, libxsmm_tensorize)
 
     # output in parallel
     par = s[B1].fuse(n, ko_o, ho)
@@ -444,7 +321,7 @@ def conv_auto_tuned(ofmblock,       # vec
     # Parallel loading of packed input
     if pack:
         n1, c1, h1, w1, v1 = s[A2].op.axis
-        par2 = s[A2].fuse(n1,c1,h1)
+        par2 = s[A2].fuse(n1, c1, h1)
         s[A2].parallel(par)
         s[A2].vectorize(v1)
     s = s.normalize()
@@ -513,7 +390,7 @@ def driver():
 
         tuner = autotvm.tuner.RandomTuner(task)
         # Please limit n_trial to reduce tuning time
-        n_trial= 8
+        n_trial= 32
         log_file = layer + ".log"
 
         # comment out the following call to tuner to just run the best case from log file history

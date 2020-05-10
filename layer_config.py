@@ -177,23 +177,21 @@ class LayerConfig:
             N, IH, IW, IC = self.get_input_shape()
             FH, FW, _, CM = self.get_filter_shape()
             N, OH, OW, OC = self.get_output_shape()
+            rc = te.reduce_axis((0, IC), name='rc')
         else: # Packed input
             N, IC_chunk, IH, IW, IC_vec = self.get_input_shape()
             IC = IC_chunk * IC_vec
             _, IC_chunk, FH, FW, IC_vec, _ = self.get_filter_shape()
             N, OC_chunk, OH, OW, OC_vec = self.get_output_shape()
             OC = OC_chunk * OC_vec
+            rco = te.reduce_axis((0, IC_chunk), name='rco')
+            rci = te.reduce_axis((0, IC_vec), name='rci')
+
+        ry = te.reduce_axis((0, FH), name='ry')
+        rx = te.reduce_axis((0, FW), name='rx')
 
         stride_h, stride_w = self._filter_cfg.get_stride()
         dilation_h, dilation_w = self._filter_cfg.get_dilation()
-
-        # Reduce axis
-        rc = te.reduce_axis((0, IC), name='rc')
-        # TODO: Consider removing this later
-        if FH.value > 1:
-            ry = te.reduce_axis((0, FH), name='ry')
-        if FW.value > 1:
-            rx = te.reduce_axis((0, FW), name='rx')
 
         if cfg is not None:
             cfg.define_split("split_layer_{}_h".format(self._layer_num), OH.value,
@@ -206,42 +204,23 @@ class LayerConfig:
                                 num_outputs=(2 if (self._device == "cuda" or not self._is_final_stage) else 3),
                                 policy="verbose")
 
-        if FH.value > 1 and FW.value > 1:
-            if self._layout == "NHWC":
-                Output = te.compute(self._output_shape,
-                            lambda n, h, w, c: te.sum(
-                                                        self._input[n, 
-                                                                    h * stride_h + ry * dilation_h,
-                                                                    w * stride_w + rx * dilation_w, 
-                                                                    rc].astype(self._output_dtype) *
-                                                        self._filter[ry, rx, rc, c].astype(self._output_dtype), axis=[ry, rx, rc]),
-                                                    name="Layer_{}_Conv2dOutput".format(self._layer_num), 
-                                                    tag="conv2d_nhwc")
-            else: # "NCHWc"
-                Output = te.compute(self._output_shape,
-                            lambda n, c_chunk, h, w, c_vec: te.sum(
-                                                                    self._input[n, rc // IC_vec, h * stride_h, w * stride_w, rc % IC_vec].astype(self._output_dtype) *
-                                                                    self._filter[c_chunk, rc // IC_vec, ry, rx, rc % IC_vec, c_vec].astype(self._output_dtype), axis=[ry, rx, rc]),
-                                                                name="Layer_{}_Conv2dOutput".format(self._layer_num),
-                                                                tag="conv2d_nchw{}c".format(OC_vec))
-        else: # 1x1: only reduce rc axis
-            if self._layout == "NHWC":
-                Output = te.compute(self._output_shape,
-                            lambda n, h, w, c: te.sum(
-                                                        self._input[n, 
-                                                                    h * stride_h, 
-                                                                    w * stride_w, 
-                                                                    rc].astype(self._output_dtype) *
-                                                        self._filter[0, 0, rc, c].astype(self._output_dtype), axis=[rc]),
-                                                    name="Layer_{}_Conv2dOutput".format(self._layer_num), 
-                                                    tag="conv2d_nhwc")
-            else: # "NCHWc"
-                Output = te.compute(self._output_shape,
-                            lambda n, c_chunk, h, w, c_vec: te.sum(
-                                                                    self._input[n, rc // IC_vec, h * stride_h, w * stride_w, rc % IC_vec].astype(self._output_dtype) *
-                                                                    self._filter[c_chunk, rc // IC_vec, 0, 0, rc % IC_vec, c_vec].astype(self._output_dtype), axis=[rc]),
-                                                                name="Layer_{}_Conv2dOutput".format(self._layer_num),
-                                                                tag="conv2d_nchw{}c".format(OC_vec))
+        if self._layout == "NHWC":
+            Output = te.compute(self._output_shape,
+                        lambda n, h, w, c: te.sum(
+                                                    self._input[n, 
+                                                                h * stride_h + ry * dilation_h,
+                                                                w * stride_w + rx * dilation_w, 
+                                                                rc].astype(self._output_dtype) *
+                                                    self._filter[ry, rx, rc, c].astype(self._output_dtype), axis=[rc, ry, rx]),
+                                                name="Layer_{}_Conv2dOutput".format(self._layer_num), 
+                                                tag="conv2d_nhwc")
+        else: # "NCHWc"
+            Output = te.compute(self._output_shape,
+                        lambda n, c_chunk, h, w, c_vec: te.sum(
+                                                                self._input[n, rco, h * stride_h, w * stride_w, rci].astype(self._output_dtype) *
+                                                                self._filter[c_chunk, rco, ry, rx, rci, c_vec].astype(self._output_dtype), axis=[rco, rci, ry, rx]),
+                                                            name="Layer_{}_Conv2dOutput".format(self._layer_num),
+                                                            tag="conv2d_nchw{}c".format(OC_vec))
         self._output = Output
 
     def process_relu(self, block_input):
