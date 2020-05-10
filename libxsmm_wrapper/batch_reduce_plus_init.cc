@@ -13,34 +13,62 @@
 #include <libxsmm_macros.h>
 
 extern "C" int batch_reduce_kernel_update(
-                    const float *weight, 
-                    const float *input, 
-                    float *output, 
-                    int blocks,     /* rco*r*s */
-                    int ofmblock,   /* Ovec */
-                    int ifmblock,   /* Ivec */
-                    int ofw,        /* OW */
-                    int stride_w,   /* stride_w */
-                    int r,          /* FH */
-                    int s,          /* FW */
-                    int ifh,        /* IH */
-                    int ifw         /* IW */ ) {
-    int ld_b = stride_w*ifmblock;
-    libxsmm_smmfunction_reducebatch_addr batchreduce_kernela = libxsmm_smmdispatch_reducebatch_addr(ofmblock, ofw, ifmblock, NULL, &ld_b, NULL, NULL, NULL, NULL, NULL);
+                                const float *weight, 
+                                const float *input, 
+                                float *output, 
+                                int blocks,     /* rco*r*s (batch) */
+                                int ofmblock,   /* VLEN (n -> m) */
+                                int ifmblock,   /* VLEN (k) */
+                                int ofw,        /* block OW (m -> n) */
+
+                                int stride_w,   /* stride_w, to calculate ldb */
+
+                                int r,          /* FH */
+                                int s,          /* FW */
+                                int ifh,        /* original IH */
+                                int ifw         /* original IW */ ) {
+    int ldb = stride_w * ifmblock;
+    libxsmm_smmfunction_reducebatch_addr batchreduce_kernela = 
+            libxsmm_smmdispatch_reducebatch_addr(ofmblock,  /* n -> m */
+                                                ofw,        /* m -> n */
+                                                ifmblock,   /* k */
+                                                NULL,       /* lda */
+                                                &ldb,       /* ldb */
+                                                NULL,       /* ldc */
+                                                NULL,       /* alpha */
+                                                NULL,       /* beta */
+                                                NULL,       /* flags */
+                                                NULL);      /* prefetch */
+
+    /*******************
+     * Reverse M and N for row-major inputs
+     * A: weights: 5D   ([rco, FH, FW] (blocks),      [ifmblock, ofmblock])
+     * B: inputs:  4D   ([rco, FH],               [IW, ifmblock])
+     * C: outputs: 2D   (                         [OW,           ofmblock])
+    *******************/
+
     const unsigned long long cblocks = blocks;
-    const float * A[cblocks];
-    const float * B[cblocks];
-    int weight_stride = ofmblock * ifmblock * r * s;
-    int input_stride = ifw * ifh * ifmblock;
-    if(r == 1 && s == 1) {
+    const float * A[cblocks]; // Weight pointer list
+    const float * B[cblocks]; // Input pointer list
+    if(r == 1 && s == 1) { // blocks = rco
+        /*******************
+         * Reverse M and N for row-major inputs
+         * A: weights: 3D ([rco] (blocks),       [ifmblock, ofmblock])
+         * B: inputs:  3D ([rco],           [IW,  ifmblock])
+         * C: outputs: 2D (                 [OW,            ofmblock])
+        *******************/
+
+        int weight_stride = ofmblock * ifmblock;
+        int input_stride = ifw * ifh * ifmblock;
+
         for (int icb = 0; icb < cblocks; icb++) {
             A[icb] = &weight[icb * weight_stride];
             B[icb] = &input[icb * input_stride];
         }
     } else { /* Eg. if(r == 3 && s == 3) */
-        for(int k = 0 ; k < blocks/(r*s); k++) {
-            for(int i=0; i < r; i++) {
-                for(int j =0; j < s; j++) {
+        for(int k = 0 ; k < blocks / (r*s); k++) {
+            for(int i = 0; i < r; i++) {
+                for(int j = 0; j < s; j++) {
                     A[k*r*s + i*s + j] = &weight[k*r*s*ofmblock*ifmblock +  (i*s + j)*ofmblock*ifmblock];
                     B[k*r*s + i*s + j] = &input[k*ifw*ifh*ifmblock  +  i*ifw*ifmblock + j*ifmblock];
                 }
@@ -48,46 +76,13 @@ extern "C" int batch_reduce_kernel_update(
         }
     }
 
-    /* Reduce batch gemm call  */
-    batchreduce_kernela(A, B, output, &cblocks);
-    return 0;
-}
-
-extern "C" int batch_reduce_kernel_init_update(const float *weight, const float *input, float *output, int blocks, int ofmblock, int ifmblock,int r, int s, int ifh, int ifw,int ofw, int stride_w ){
-    float beta = 0.0;
-    int lda = ofmblock;
-    int ldx = ofmblock;
-    int ld_b = stride_w*ifmblock;
-    int l_flags = ( LIBXSMM_GEMM_FLAGS('N', 'N') );
-    libxsmm_smmfunction_reducebatch_addr batchreduce_kernela = libxsmm_smmdispatch_reducebatch_addr(ofmblock,ofw, ifmblock,&lda,&ld_b,&ldx,NULL,&beta, &l_flags, NULL);
-
-    const unsigned long long cblocks = blocks;
-    const float * A[cblocks];
-    const float * B[cblocks];
-    int weight_stride = ofmblock*ifmblock*r*s;
-    int input_stride = ifw*ifh*ifmblock;
-    if(r == 1 && s == 1){
-    for (int icb = 0; icb < cblocks; icb ++) {
-            A[icb] = &weight[icb*weight_stride];
-            B[icb] = &input[icb*input_stride];
-    }
-    } else { /* if(r == 3 && s == 3) */
-        for( int k = 0 ; k < blocks/(r*s); k++) {
-            for(int i=0; i < r; i++) {
-                for(int j =0; j < s; j++){
-                    A[k*r*s + i*s + j] = &weight[k*r*s*ofmblock*ifmblock +  (i*s + j)*ofmblock*ifmblock];
-                    B[k*r*s + i*s + j] = &input[k*ifw*ifh*ifmblock  +  i*ifw*ifmblock + j*ifmblock];
-                }
-            }
-        }
-    }
     /* Reduce batch gemm call  */
     batchreduce_kernela(A, B, output, &cblocks);
     return 0;
 }
 
 extern "C" int  batch_reduce_kernel_init(float *output, int ofmblock, int ofw){
-    int num_elements = ofw*ofmblock;
+    int num_elements = ofw * ofmblock;
     LIBXSMM_PRAGMA_SIMD
     for(int i=0; i < num_elements; i++)
         output[i] = 0.0;
