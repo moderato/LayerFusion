@@ -3,6 +3,7 @@ __pycache__/*
 .pkl_memoize_py3/*
 generated_kernels/*
 libxsmm_wrapper/*.so
+libxsmm_wrapper/*.xls
 logs/*
 npy/*
 tmp/*

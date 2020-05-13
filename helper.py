@@ -95,8 +95,17 @@ class FusionConfig:
         self.layers.append((OUTPUT,))
         self.layer_num = len(self.layers) - 1
 
+    def get_input(self, idx):
+        assert(idx >= 0 and idx < self.layer_num)
+        return self.layers[idx][0]
+
     def get_filter(self, idx):
+        assert(idx >= 0 and idx < self.layer_num)
         return self.layers[idx][1]
+
+    def get_output(self, idx):
+        assert(idx >= 0 and idx < self.layer_num)
+        return self.layers[idx+1][0]
 
     def get_bn_relu(self):
         return [l[1].bn_relu for l in self.layers[:self.layer_num]]
@@ -224,7 +233,6 @@ def export_kernel_launch_config(workload_name, output_shape, best_config):
 
 def NHWC_to_NCHWc_data(nhwc, vlen):
     n, h, w, c = get_const_tuple(nhwc.shape)
-    print(n, h, w, c)
     c_chunk = math.ceil(c / vlen)
     nchwc = nhwc.reshape(n, h, w, c_chunk, vlen)
     return np.array(nchwc.transpose(0, 3, 1, 2, 4), order='C')
@@ -232,7 +240,6 @@ def NHWC_to_NCHWc_data(nhwc, vlen):
 def NHWC_to_NCHWc_kernel(hwio, vlen, depthwise=False):
     h, w, i, o = get_const_tuple(hwio.shape)
     i_chunk = math.ceil(i / vlen)
-    print(h, w, i, o)
     oihwio = hwio.reshape(h, w, i_chunk, vlen, math.ceil(o / vlen), vlen) if not depthwise else \
                 hwio.reshape(h, w, i_chunk, vlen, 1, 1)
     return np.array(oihwio.transpose(4, 2, 0, 1, 3, 5), order='C')

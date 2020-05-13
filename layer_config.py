@@ -25,7 +25,7 @@ class LayerConfig:
         if not pack: # "NHWC": 4D input 4D filter
             if Input is None:
                 Input = te.placeholder((N, IH, IW, IC), name='Input')
-            Filter = te.placeholder((FH, FW, IC, tmp), 
+            Filter = te.placeholder((FH, FW, IC, tmp),
                                     name='Layer_{}_{}Filter'.format(idx,
                                                                     "Depthwise" if self._filter_cfg.depthwise else "Conv2d"))
             self._layout = "NHWC"
@@ -41,7 +41,7 @@ class LayerConfig:
                 Input = te.placeholder((N, tmp_chunk, IH, IW, vlen), name='Input')
             filter_shape = (tmp_chunk, IC_chunk, FH, FW, vlen, vlen) if not self._filter_cfg.depthwise else \
                             (1, IC_chunk, FH, FW, vlen, 1)
-            Filter = te.placeholder(filter_shape, 
+            Filter = te.placeholder(filter_shape,
                                     name='Layer_{}_{}Filter'.format(idx,
                                                                     "Depthwise" if self._filter_cfg.depthwise else "Conv2d"))
             self._layout = "NCHWc"
@@ -133,7 +133,7 @@ class LayerConfig:
             N, OC_chunk, OH, OW, OC_vec = self.get_output_shape()
 
         # Don't consider 1by1 depthwise
-        assert not (self._filter_cfg.depthwise and FH == 1 and FW == 1) 
+        assert not (self._filter_cfg.depthwise and FH == 1 and FW == 1)
 
         stride_h, stride_w = self._filter_cfg.get_stride()
         dilation_h, dilation_w = self._filter_cfg.get_dilation()
@@ -148,26 +148,33 @@ class LayerConfig:
                 # cfg.define_split("split_layer_{}_w".format(self._layer_num), OW.value, num_outputs=2, policy="verbose")
                 cfg.define_split("split_layer_{}_c".format(self._layer_num), OC_chunk.value, num_outputs=2, policy="verbose")
             else:
-                cfg.define_split("split_layer_{}_c".format(self._layer_num), OC_chunk.value, num_outputs=(2 if (self._device == "cuda" or not self._is_final_stage) else 3), policy="verbose")
+                # cfg.define_split("split_layer_{}_c".format(self._layer_num), OC_chunk.value, num_outputs=(2 if (self._device == "cuda" or not self._is_final_stage) else 3), policy="verbose")
+                cfg.define_split("split_layer_{}_c".format(self._layer_num), OC_chunk.value, num_outputs=2, policy="verbose")
 
         if self._layout == "NHWC":
             Output = te.compute(self._output_shape,
                         lambda n, h, w, c: te.sum(
-                                                (self._input[n, 
-                                                                h * stride_h + ry * dilation_h, 
-                                                                w * stride_w + rx * dilation_w,
-                                                                c].astype(self._output_dtype) *
-                                                self._filter[ry, rx, c, 0].astype(self._output_dtype)), axis=[ry, rx]),
-                                            name='Layer_{}_DepthwiseConv2dOutput'.format(self._layer_num), tag="depthwise_nhwc")
+                                                (self._filter[ry, rx, c, 0] * 
+                                                self._input[n,
+                                                            h * stride_h + ry * dilation_h,
+                                                            w * stride_w + rx * dilation_w,
+                                                            c])
+                                                .astype(self._output_dtype),
+                                                axis=[ry, rx]),
+                                            name='Layer_{}_DepthwiseConv2dOutput'.format(self._layer_num),
+                                            tag="depthwise_nhwc")
         else:
             Output = te.compute(self._output_shape,
-                        lambda n, c_chunk, h, w, c_vec: te.sum(
-                                                (self._input[n, c_chunk, 
-                                                                h * stride_h + ry * dilation_h, 
-                                                                w * stride_w + rx * dilation_w, 
-                                                                c_vec].astype(self._output_dtype) *
-                                                self._filter[0, c_chunk, ry, rx, c_vec, 0].astype(self._output_dtype)), axis=[ry, rx]),
-                                            name='Layer_{}_DepthwiseConv2dOutput'.format(self._layer_num), tag="depthwise_nchw{}c".format(OC_vec))
+            lambda n, c_chunk, h, w, c_vec: te.sum(
+                                                (self._filter[0, c_chunk, ry, rx, c_vec, 0] *
+                                                self._input[n, c_chunk,
+                                                                h * stride_h + ry * dilation_h,
+                                                                w * stride_w + rx * dilation_w,
+                                                                c_vec])
+                                                .astype(self._output_dtype),
+                                                axis=[ry, rx]),
+                                            name='Layer_{}_DepthwiseConv2dOutput'.format(self._layer_num),
+                                            tag="depthwise_nchw{}c".format(OC_vec))
         self._output = Output
 
     def make_conv_output(self, cfg):
@@ -200,27 +207,36 @@ class LayerConfig:
             cfg.define_split("split_layer_{}_w".format(self._layer_num), OW.value,
                                 num_outputs=3,
                                 policy="verbose")
+            # cfg.define_split("split_layer_{}_c".format(self._layer_num), OC_chunk.value,
+            #                     num_outputs=(2 if (self._device == "cuda" or not self._is_final_stage) else 3),
+            #                     policy="verbose")
             cfg.define_split("split_layer_{}_c".format(self._layer_num), OC_chunk.value,
-                                num_outputs=(2 if (self._device == "cuda" or not self._is_final_stage) else 3),
-                                policy="verbose")
+                                num_outputs=2, policy="verbose")
 
         if self._layout == "NHWC":
             Output = te.compute(self._output_shape,
                         lambda n, h, w, c: te.sum(
-                                                    self._input[n, 
+                                                    (self._filter[ry, rx, rc, c] *
+                                                    self._input[n,
                                                                 h * stride_h + ry * dilation_h,
-                                                                w * stride_w + rx * dilation_w, 
-                                                                rc].astype(self._output_dtype) *
-                                                    self._filter[ry, rx, rc, c].astype(self._output_dtype), axis=[rc, ry, rx]),
-                                                name="Layer_{}_Conv2dOutput".format(self._layer_num), 
+                                                                w * stride_w + rx * dilation_w,
+                                                                rc])
+                                                    .astype(self._output_dtype),
+                                                    axis=[rc, ry, rx]),
+                                                name="Layer_{}_Conv2dOutput".format(self._layer_num),
                                                 tag="conv2d_nhwc")
         else: # "NCHWc"
             Output = te.compute(self._output_shape,
-                        lambda n, c_chunk, h, w, c_vec: te.sum(
-                                                                self._input[n, rco, h * stride_h, w * stride_w, rci].astype(self._output_dtype) *
-                                                                self._filter[c_chunk, rco, ry, rx, rci, c_vec].astype(self._output_dtype), axis=[rco, rci, ry, rx]),
-                                                            name="Layer_{}_Conv2dOutput".format(self._layer_num),
-                                                            tag="conv2d_nchw{}c".format(OC_vec))
+            lambda n, c_chunk, h, w, c_vec: te.sum(
+                                                    (self._filter[c_chunk, rco, ry, rx, rci, c_vec] *
+                                                    self._input[n, rco,
+                                                                h * stride_h,
+                                                                w * stride_w,
+                                                                rci])
+                                                    .astype(self._output_dtype),
+                                                    axis=[rco, ry, rx, rci]),
+                                                name="Layer_{}_Conv2dOutput".format(self._layer_num),
+                                                tag="conv2d_nchw{}c".format(OC_vec))
         self._output = Output
 
     def process_relu(self, block_input):
@@ -259,13 +275,13 @@ class LayerConfig:
 
         Last = self._stages[-1][-1] # ScaleShift if it's not a block, Output if it's a block
         if self.bn_relu == 'relu':
-            ReLU = te.compute(Last.shape, 
+            ReLU = te.compute(Last.shape,
                             lambda *i: te.max(Last(*i), tvm.runtime.const(0, Last.dtype)),
                             name='Layer_{}_ReLU_{}'.format(
                                 self._layer_num, 'DepthwiseConv2d' if self.depthwise else 'Conv2d'),
                             tag='relu_nhwc')
         else: # 'relu6'
-            ReLU = te.compute(Last.shape, 
+            ReLU = te.compute(Last.shape,
                             lambda *i: te.min(te.max(Last(*i), te.const(0, Last.dtype)), tvm.runtime.const(6, Last.dtype)),
                             name='Layer_{}_ReLU6_{}'.format(
                                 self._layer_num, 'DepthwiseConv2d' if self.depthwise else 'Conv2d'),
