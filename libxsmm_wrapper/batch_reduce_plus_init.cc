@@ -16,32 +16,34 @@ extern "C" int batch_reduce_kernel_update(
                                 const float *weight, 
                                 const float *input, 
                                 float *output, 
-                                int blocks,     /* rco*r*s (batch) */
-                                int ofmblock,   /* VLEN (n -> m) */
-                                int ifmblock,   /* VLEN (k) */
-                                int ofh_x_ofw,  /* block OH * OW (m -> n) */
+                                int blocks,         /* rco*r*s (batch) */
+                                int ofmblock,       /* VLEN (n -> m) */
+                                int ifmblock,       /* VLEN (k) */
+                                int ofh_x_ofw,      /* block OH * OW (m -> n) */
 
-                                int stride_w,   /* stride_w, to calculate ldb */
+                                int stride_w,       /* stride_w, to calculate ldb */
 
-                                int r,          /* FH */
-                                int s,          /* FW */
-                                int ifh,        /* original IH */
-                                int ifw,        /* original IW */ 
-                                
-                                bool init,      /* init indicator */
-                                int input_stride/* input stride for 1x1*/) {
+                                int r,              /* FH */
+                                int s,              /* FW */
+                                int ifh,            /* original IH */
+                                int ifw,            /* original IW */
+
+                                bool init,          /* init indicator */
+                                int input_stride    /* input stride for 1x1*/) {
     // printf("Call a microkernel\n");
 
     float beta = init ? 0.0f : 1.0f;
     int l_flags = ( LIBXSMM_GEMM_FLAGS('N', 'N') );
+    int lda = ofmblock;
     int ldb = stride_w * ifmblock;
+    int ldc = ofmblock;
     libxsmm_smmfunction_reducebatch_addr batchreduce_kernela = 
             libxsmm_smmdispatch_reducebatch_addr(ofmblock,              /* n -> m */
                                                 ofh_x_ofw,              /* m -> n */
-                                                ifmblock,               /* k */
-                                                init ? &ofmblock : NULL,/* lda */
+                                                ofmblock,               /* k */
+                                                &lda,                   /* lda */
                                                 &ldb,                   /* ldb */
-                                                init ? &ofmblock : NULL,/* ldc */
+                                                &ldc,                   /* ldc */
                                                 NULL,                   /* alpha */
                                                 &beta,                  /* beta */
                                                 init ? &l_flags : NULL, /* flags */
@@ -101,8 +103,7 @@ extern "C" int batch_reduce_kernel_update(
     // for (int j = 0; j < output_stride; j++) {
     //     printf("%f, ", output[j]);
     // }
-    // printf("\n");
-    // printf("\n\n\n");
+    // printf("\n\n\n\n");
     return 0;
 }
 

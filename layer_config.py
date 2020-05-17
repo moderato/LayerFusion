@@ -146,10 +146,10 @@ class LayerConfig:
             if self._device != "cuda": # Workaround: don't split HW here for CUDA; assume this won't be the last layer. TODO: Get rid of this.
                 # cfg.define_split("split_layer_{}_h".format(self._layer_num), OH.value, num_outputs=2, policy="verbose")
                 # cfg.define_split("split_layer_{}_w".format(self._layer_num), OW.value, num_outputs=2, policy="verbose")
-                cfg.define_split("split_layer_{}_c".format(self._layer_num), OC_chunk.value, num_outputs=2, policy="verbose")
+                cfg.define_split("split_layer_{}_c".format(self._layer_num), OC_chunk.value, num_outputs=2, policy='factors')
             else:
                 # cfg.define_split("split_layer_{}_c".format(self._layer_num), OC_chunk.value, num_outputs=(2 if (self._device == "cuda" or not self._is_final_stage) else 3), policy="verbose")
-                cfg.define_split("split_layer_{}_c".format(self._layer_num), OC_chunk.value, num_outputs=2, policy="verbose")
+                cfg.define_split("split_layer_{}_c".format(self._layer_num), OC_chunk.value, num_outputs=2, policy='factors')
 
         if self._layout == "NHWC":
             Output = te.compute(self._output_shape,
@@ -203,15 +203,15 @@ class LayerConfig:
         if cfg is not None:
             cfg.define_split("split_layer_{}_h".format(self._layer_num), OH.value,
                                 num_outputs=(4 if self._device == "cuda" else 3),
-                                policy="verbose")
+                                policy='factors')
             cfg.define_split("split_layer_{}_w".format(self._layer_num), OW.value,
                                 num_outputs=3,
-                                policy="verbose")
+                                policy='factors', filter=lambda x: x.size[-1] >= 4)
             # cfg.define_split("split_layer_{}_c".format(self._layer_num), OC_chunk.value,
             #                     num_outputs=(2 if (self._device == "cuda" or not self._is_final_stage) else 3),
             #                     policy="verbose")
             cfg.define_split("split_layer_{}_c".format(self._layer_num), OC_chunk.value,
-                                num_outputs=2, policy="verbose")
+                                num_outputs=2, policy='factors')
 
         if self._layout == "NHWC":
             Output = te.compute(self._output_shape,

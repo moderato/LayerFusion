@@ -55,16 +55,17 @@ def intrin_libxsmm_brgemm(
 
     xx_ptr = tvm.tir.decl_buffer(A.shape, A.dtype,
                         name="W", offset_factor=1,
-                        data_alignment=alignment)
+                        data_alignment=alignment, buffer_type="auto_broadcast")
 
     yy_ptr = tvm.tir.decl_buffer(B.shape, B.dtype,
                         name="X", offset_factor=1,
-                        strides=[te.var("s3"), te.var("s2"), ifmblock, 1],
-                        data_alignment=alignment)
+                        strides=[te.var("s1"), te.var("s0"), ifmblock, 1],
+                        data_alignment=alignment, buffer_type="auto_broadcast")
 
     zz_ptr = tvm.tir.decl_buffer(C.shape, C.dtype,
                         name="OUT", offset_factor=1,
-                        data_alignment=alignment)
+                        strides=[te.var("s2"), ofmblock, 1],
+                        data_alignment=alignment, buffer_type="auto_broadcast")
 
     def intrin_func(ins, outs):
         # tvm call extern is used to interface to libxsmm batch reduce kernel gemm implementation

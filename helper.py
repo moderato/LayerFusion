@@ -175,6 +175,8 @@ def get_workloads():
     # depth_conv_workloads['mv1_7-11'] = (1, 14, 14, 512, 3, 1, 1, True, None, 1, 512, 1, False, None, False) # 97.83 us / 112.37 us
     # depth_conv_workloads['mv1_12'] = (1, 14, 14, 512, 3, 1, 2, True, None, 1, 1024, 1, False, None, False) # 97.71 us / 164.36 us
     # depth_conv_workloads['mv1_13'] = (1, 7, 7, 1024, 3, 1, 1, True, None, 1, 1024, 1, False, None, False) # 129.61 us / 220.23 us
+    # depth_conv_workloads['test_tiny'] = (1, 4, 4, 1, 3, 1, 1, True, None, 1, 1, 1, False, None, False)
+    # depth_conv_workloads['test_single'] = (1, 56, 56, 64, 1, 64, 1, False, None, False)
 
     # # MobileNet-v2
     # depth_conv_workloads['mv2_1'] = (1, 112, 112, 32, 3, 1, 1, True, None, 1, 16, 1, False, None, False) # 38.19 us / 123.81 us
@@ -266,7 +268,7 @@ def get_ref_data(workload_name,
         config_dict = best_config.to_json_dict()
         for e in config_dict['entity']:
             if e[0] == "vlen":
-                vlen = e[1]
+                vlen = int(e[2])
     ref_data = []
 
     # Pretending the input_data is some output_data from stage -1

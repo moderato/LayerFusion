@@ -36,6 +36,7 @@ layers = args.d
 
 # Resnet-50 layers (excluding first layer)
 _resnet_layers ={
+    'test':[1,4,4,4,4,1,1,0],
     'resnet2':[1,256,64,56,56,1,1,0],
     'resnet3':[1,64,64,56,56,1,1,0],
     'resnet4':[1,64,64,56,56,3,1,1],
@@ -129,6 +130,21 @@ def intrin_libxsmm_brgemm(
                             input_width,
                             in_channel):
 
+    print("ifmblock: ", ifmblock,
+            "ofmblock: ",                 ofmblock,
+            "ofw: ",                 ofw,
+            "s: ",                 s,
+            "r: ",                 r,
+            "rco: ",                 rco,
+
+            "ofh: ",                 ofh,            # Either 1 (small hxw) or cfg["tile_h"].size[2]
+
+            "stride_height: ",                 stride_height,
+            "stride_width: ",                 stride_width,
+            "input_height: ",                 input_height,
+            "input_width: ",                 input_width,
+            "in_channel: ",                 in_channel)
+
     block_input_height = (ofh - 1) * stride_width + r
     block_input_width = (ofw - 1) * stride_width + s
 
@@ -165,11 +181,12 @@ def intrin_libxsmm_brgemm(
 
     yy_ptr = tvm.tir.decl_buffer(B.shape, B.dtype,
                         name="X", offset_factor=1,
-                        strides=[te.var("s3"), te.var("s2"), ifmblock, 1],
+                        strides=[te.var("s1"), te.var("s0"), ifmblock, 1],
                         data_alignment=64)
 
     zz_ptr = tvm.tir.decl_buffer(C.shape, C.dtype,
                         name="OUT", offset_factor=1,
+                        strides=[te.var("s2"), ofmblock, 1],
                         data_alignment=64)
 
     def intrin_func(ins, outs):
@@ -200,7 +217,7 @@ def intrin_libxsmm_brgemm(
                                 input_width,
                                 False,
                                 yy_ptr.strides[0])
-        if math.ceil(in_channel / ifmblock.value) == rco: # rco = rco_i: if all the reduce axes are included
+        if math.ceil(in_channel / ifmblock) == rco: # rco = rco_i: if all the reduce axes are included
             return init_update, None, init_update
         else:
             return init_update, reset, update
@@ -242,7 +259,7 @@ def conv_auto_tuned(ofmblock,       # vec
     rci1 = te.reduce_axis((0, ifmblock), name='rci1') # Ivec
     cfg = autotvm.get_config()
 
-    cfg.define_knob("pack", [0,1]) # define packing
+    cfg.define_knob("pack", [0, 1]) # define packing
     pack = False
     w_tile = []
 
@@ -303,9 +320,11 @@ def conv_auto_tuned(ofmblock,       # vec
     # 1x1 (stride = 1 or (pack & stride > 1))
     if (((filter_height == 1 and filter_width == 1 and stride_width == 1 and stride_height == 1) or pack) and \
         (cfg["tile_h"].size[1] > 1 and w_factor_inner == ofw)): # HM > 1 & WI = OW (small W)
+        print("small: bind to h")
         tensorize_axis = hi
         block_output_height = cfg["tile_h"].size[2]
     else:
+        print("big: bind to rco_i")
         tensorize_axis = rco_i
         block_output_height = 1
 
@@ -348,6 +367,7 @@ def driver():
     sheet1.write(0,1,"AutoTVM_FLOPS")
     row1 = row1 + 1
     target = "llvm -mcpu=core-avx2"
+    vlen = 64
 
     for layer in layers:
 
@@ -364,7 +384,6 @@ def driver():
         pad_width = _resnet_layers[layer][7]
         stride_height = _resnet_layers[layer][6]
         stride_width = _resnet_layers[layer][6]
-        vlen = 64
         assert(pad_height == pad_width)
         assert(stride_height == stride_width)
         assert(kernel_height == kernel_width)
@@ -411,7 +430,8 @@ def driver():
             measure_option=measure_option,
             callbacks=[autotvm.callback.progress_bar(n_trial, prefix=layer),
                         autotvm.callback.log_to_file(log_file)])
-        with autotvm.apply_history_best(layer + '.log'):
+        with autotvm.apply_history_best(layer + '.log') as d:
+            print(d.query(task.target, task.workload))
             with tvm.target.create(target):
                 # all 4D
                 a_np, w_np, b_np  = get_ref_data(batch,out_channel,in_channel,input_height,input_width,kernel_height, kernel_width,stride_height,pad_height)
