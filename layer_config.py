@@ -230,8 +230,8 @@ class LayerConfig:
             lambda n, c_chunk, h, w, c_vec: te.sum(
                                                     (self._filter[c_chunk, rco, ry, rx, rci, c_vec] *
                                                     self._input[n, rco,
-                                                                h * stride_h,
-                                                                w * stride_w,
+                                                                h * stride_h + ry * dilation_h,
+                                                                w * stride_w + rx * dilation_w,
                                                                 rci])
                                                     .astype(self._output_dtype),
                                                     axis=[rco, ry, rx, rci]),

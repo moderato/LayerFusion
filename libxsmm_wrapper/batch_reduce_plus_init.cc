@@ -29,8 +29,12 @@ extern "C" int batch_reduce_kernel_update(
                                 int ifw,            /* original IW */
 
                                 bool init,          /* init indicator */
-                                int input_stride    /* input stride for 1x1*/) {
+                                int input_stride0,  /* input stride0 */
+                                int input_stride1   /* input stride1 */) {
     // printf("Call a microkernel\n");
+
+    // printf("blocks: %d\nofmblock: %d\nifmblock: %d\nofh_x_ofw: %d\nstride_w: %d\nr: %d\ns: %d\nifh: %d\nifw: %d\ninit: %d\ninput_stride: %d\n",\
+            blocks,     ofmblock,     ifmblock,     ofh_x_ofw,     stride_w,     r,     s,     ifh,     ifw,     init,     input_stride);
 
     float beta = init ? 0.0f : 1.0f;
     int l_flags = ( LIBXSMM_GEMM_FLAGS('N', 'N') );
@@ -59,12 +63,12 @@ extern "C" int batch_reduce_kernel_update(
     const unsigned long long cblocks = blocks;
     const float * A[cblocks]; // Weight pointer list
     const float * B[cblocks]; // Input pointer list
+    int weight_stride = ofmblock * ifmblock;
 
     if (r == 1 && s == 1) {
-        int weight_stride = ofmblock * ifmblock;
-        
+
         for (int icb = 0; icb < cblocks; icb++) {
-            B[icb] = &input[icb * input_stride];
+            B[icb] = &input[icb * input_stride0];
             A[icb] = &weight[icb * weight_stride];
         }
 
@@ -89,8 +93,8 @@ extern "C" int batch_reduce_kernel_update(
         for (int k = 0 ; k < blocks / (r*s); k++) {
             for (int i = 0; i < r; i++) {
                 for (int j = 0; j < s; j++) {
-                    A[k*r*s + i*s + j] = &weight[k*r*s*ofmblock*ifmblock +  (i*s + j)*ofmblock*ifmblock];
-                    B[k*r*s + i*s + j] = &input[k*ifw*ifh*ifmblock  +  i*ifw*ifmblock + j*ifmblock];
+                    A[k*r*s + i*s + j] = &weight[k * r * s * weight_stride +  (i * s + j) * weight_stride];
+                    B[k*r*s + i*s + j] = &input[k * input_stride0  +  i * input_stride1 + j * ifmblock];
                 }
             }
         }

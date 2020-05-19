@@ -19,7 +19,22 @@ def intrin_libxsmm_brgemm(
                             stride_width,
                             input_height,
                             input_width,
-                            in_channel):
+                            in_channel, scope=""):
+
+    # print("ifmblock: ", ifmblock,
+    #         "ofmblock: ",                 ofmblock,
+    #         "ofw: ",                 ofw,
+    #         "s: ",                 s,
+    #         "r: ",                 r,
+    #         "rco: ",                 rco,
+
+    #         "ofh: ",                 ofh,            # Either 1 (small hxw) or cfg["tile_h"].size[2]
+
+    #         "stride_height: ",                 stride_height,
+    #         "stride_width: ",                 stride_width,
+    #         "input_height: ",                 input_height,
+    #         "input_width: ",                 input_width,
+    #         "in_channel: ",                 in_channel)
 
     alignment = 64
 
@@ -36,8 +51,8 @@ def intrin_libxsmm_brgemm(
     C = te.compute(
             (ofh, ofw, ofmblock),
             lambda z, m, n: te.sum(A[k_outer, ry, rx, k, n] * B[k_outer,
-                                                                ry + z * stride_height,
-                                                                rx + m * stride_width,
+                                                                z * stride_height + ry,
+                                                                m * stride_width + rx,
                                                                 k],
                                 axis=[k_outer, ry, rx, k]),
             name='out')
@@ -79,7 +94,7 @@ def intrin_libxsmm_brgemm(
                                 input_height,
                                 input_width,
                                 True,
-                                yy_ptr.strides[0])
+                                yy_ptr.strides[0], yy_ptr.strides[1])
         reset = tvm.tir.call_extern("int32", "batch_reduce_kernel_init",
                                 outs[0].access_ptr("w"),
                                 ofmblock,
@@ -94,7 +109,7 @@ def intrin_libxsmm_brgemm(
                                 input_height,
                                 input_width,
                                 False,
-                                yy_ptr.strides[0])
+                                yy_ptr.strides[0], yy_ptr.strides[1])
         if math.ceil(in_channel / ifmblock.value) == rco: # rco = rco_i: if all the reduce axes are included
             return init_update, None, init_update
         else:

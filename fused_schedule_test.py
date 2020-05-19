@@ -54,14 +54,14 @@ targets = {
 def verify_fused(workload_name,
                     parameters,
                     dtype="float32",
-                    no_print_ir=False, 
-                    print_src=False, 
+                    no_print_ir=False,
+                    print_src=False,
                     dry_run=False,
-                    save_data=False, 
-                    export_code=False, 
-                    auto_tvm=False, 
-                    auto_tvm_skip_training=False, 
-                    auto_tvm_trials=20, 
+                    save_data=False,
+                    export_code=False,
+                    auto_tvm=False,
+                    auto_tvm_skip_training=False,
+                    auto_tvm_trials=32,
                     name='depth_conv'):
     def check_target(target):
         if not tvm.runtime.enabled(target):
@@ -204,7 +204,7 @@ if __name__ == "__main__":
         parser.add_argument("-c", "--export_code", action="store_true", help="Export generated kernel code.")
         parser.add_argument("-a", "--auto_tvm", action="store_true", help="AutoTVM for auto tuning.")
         parser.add_argument("-k", "--auto_tvm_skip_training", action="store_true", help="Run AutoTVM tuned kernel.")
-        parser.add_argument("-t", "--auto_tvm_trials", type=int, default=20, help="Number of AutoTVM trials")
+        parser.add_argument("-t", "--auto_tvm_trials", type=int, default=32, help="Number of AutoTVM trials")
         options = parser.parse_args()
         return options
 
