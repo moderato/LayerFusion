@@ -19,22 +19,7 @@ def intrin_libxsmm_brgemm(
                             stride_width,
                             input_height,
                             input_width,
-                            in_channel, scope=""):
-
-    # print("ifmblock: ", ifmblock,
-    #         "ofmblock: ",                 ofmblock,
-    #         "ofw: ",                 ofw,
-    #         "s: ",                 s,
-    #         "r: ",                 r,
-    #         "rco: ",                 rco,
-
-    #         "ofh: ",                 ofh,            # Either 1 (small hxw) or cfg["tile_h"].size[2]
-
-    #         "stride_height: ",                 stride_height,
-    #         "stride_width: ",                 stride_width,
-    #         "input_height: ",                 input_height,
-    #         "input_width: ",                 input_width,
-    #         "in_channel: ",                 in_channel)
+                            in_channel):
 
     alignment = 64
 
