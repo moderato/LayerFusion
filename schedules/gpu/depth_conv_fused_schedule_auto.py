@@ -1,8 +1,10 @@
 from tvm import autotvm, te
 
-def schedule_depth_conv_fused_nhwc_auto(cfg, outs, stages, params, layer_num=2, bn_relu=[]):
+def schedule_depth_conv_fused_nhwc_auto(cfg, fusion_cfg, outs, stages, params, bn_relu=[]):
     outs = [outs] if isinstance(outs, te.tensor.Tensor) else outs
     s = te.create_schedule([x.op for x in outs])
+    layer_num = fusion_cfg.layer_num
+    assert len(bn_relu) == layer_num
 
     packed = [False, False] # TODO: Deal with this
     stage_dict = {}
@@ -13,20 +15,15 @@ def schedule_depth_conv_fused_nhwc_auto(cfg, outs, stages, params, layer_num=2, 
     param_pt = 1
 
     for l in range(0, layer_num):
-        if packed[l]: # If this layer has array packing
-            stage_dict['PackedFilter_{}'.format(l)] = stages[stage_pt][0]
-            stage_pt += 1
         if bn_relu[l]:
             stage_dict['Output_{}'.format(l)], \
                 stage_dict['Output_{}_ScaleShift'.format(l)], \
                     stage_dict['Output_{}_ReLU'.format(l)] = stages[stage_pt]
             layer_output_dict['Layer_{}'.format(l)] = stage_dict['Output_{}_ReLU'.format(l)]
-            # TODO: Deal with this later
             param_dict['Filter_{}'.format(l)], param_dict['Scale_{}'.format(l)], param_dict['Shift_{}'.format(l)] = params[param_pt]
         else:
             stage_dict['Output_{}'.format(l)] = stages[stage_pt][0]
             layer_output_dict['Layer_{}'.format(l)] = stage_dict['Output_{}'.format(l)]
-            # # TODO: Deal with this later
             param_dict['Filter_{}'.format(l)] = params[param_pt][0]
         stage_pt += 1
         param_pt += 1
@@ -89,7 +86,7 @@ def schedule_depth_conv_fused_nhwc_auto(cfg, outs, stages, params, layer_num=2, 
     ######## Local output
     s[OL].compute_at(s[layer_output_dict['Layer_1']], thx)
     n, h, w, c = s[OL].op.axis
-    rc, = s[OL].op.reduce_axis
+    rc, _, _ = s[OL].op.reduce_axis
     xocc, xoicc, xiicc = cfg["split_layer_0_c"].apply(s, OL, rc)
     s[OL].reorder(n, xocc, xoicc, h, w, c, xiicc)
 

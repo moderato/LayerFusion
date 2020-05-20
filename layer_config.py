@@ -149,7 +149,7 @@ class LayerConfig:
                 cfg.define_split("split_layer_{}_c".format(self._layer_num), OC_chunk.value, num_outputs=2, policy='factors')
             else:
                 # cfg.define_split("split_layer_{}_c".format(self._layer_num), OC_chunk.value, num_outputs=(2 if (self._device == "cuda" or not self._is_final_stage) else 3), policy="verbose")
-                cfg.define_split("split_layer_{}_c".format(self._layer_num), OC_chunk.value, num_outputs=2, policy='factors')
+                cfg.define_split("split_layer_{}_c".format(self._layer_num), OC, num_outputs=3, policy='factors')
 
         if self._layout == "NHWC":
             Output = te.compute(self._output_shape,
@@ -201,17 +201,18 @@ class LayerConfig:
         dilation_h, dilation_w = self._filter_cfg.get_dilation()
 
         if cfg is not None:
-            cfg.define_split("split_layer_{}_h".format(self._layer_num), OH.value,
+            cfg.define_split("split_layer_{}_h".format(self._layer_num), OH,
                                 num_outputs=(4 if self._device == "cuda" else 3),
                                 policy='factors')
-            cfg.define_split("split_layer_{}_w".format(self._layer_num), OW.value,
+            cfg.define_split("split_layer_{}_w".format(self._layer_num), OW,
                                 num_outputs=3,
-                                policy='factors', filter=lambda x: x.size[-1] >= 4)
-            # cfg.define_split("split_layer_{}_c".format(self._layer_num), OC_chunk.value,
+                                policy='factors') # filter=lambda x: x.size[-1] >= 4
+            # cfg.define_split("split_layer_{}_c".format(self._layer_num), OC_chunk,
             #                     num_outputs=(2 if (self._device == "cuda" or not self._is_final_stage) else 3),
             #                     policy="verbose")
-            cfg.define_split("split_layer_{}_c".format(self._layer_num), OC_chunk.value,
-                                num_outputs=2, policy='factors')
+            cfg.define_split("split_layer_{}_c".format(self._layer_num),
+                                OC if self._device == "cuda" else OC_chunk,
+                                num_outputs=3, policy='factors')
 
         if self._layout == "NHWC":
             Output = te.compute(self._output_shape,

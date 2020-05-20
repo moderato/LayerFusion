@@ -262,9 +262,8 @@ def get_ref_data(workload_name,
     fusion_cfg = FusionConfig(parameters)
     assert(target is not None)
     pack = (target != "cuda")
-    if best_config is None:
-        vlen = 16
-    else:
+    vlen = 16
+    if best_config is not None:
         config_dict = best_config.to_json_dict()
         for e in config_dict['entity']:
             if e[0] == "vlen":

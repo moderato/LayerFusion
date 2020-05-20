@@ -26,10 +26,10 @@
 
 // #define DEBUG 1
 
-extern "C" __global__ void fused_2_kernel0( float* __restrict__ Input,
-                                            float* __restrict__ Filter_1,
-                                            float* __restrict__ Filter_2,
-                                            float* __restrict__ Conv2dOutput_0);
+// extern "C" __global__ void fused_2_kernel0( float* __restrict__ Input,
+//                                             float* __restrict__ Filter_1,
+//                                             float* __restrict__ Filter_2,
+//                                             float* __restrict__ Conv2dOutput_0);
 
 void getKernelConfig(std::string workload_name,
                         int& thx,

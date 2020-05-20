@@ -46,10 +46,10 @@ void benchmark_all_cudnn() {
     // benchmark_cudnn("alex_4_5", 1, 13, 13, 384, 3, 384, 1, false, NONE, 3, 256, 1, false, NONE,  find_best_algo, BENCH_NCHW);
 
     // // VGG
-    // benchmark_cudnn("vgg_2_3", 1, 112, 112, 128, 3, 128, 1, false, NONE, 3, 128, 1, false, NONE,  find_best_algo, BENCH_NCHW);
-    // benchmark_cudnn("vgg_4_5", 1, 56, 56, 256, 3, 256, 1, false, NONE, 3, 256, 1, false, NONE,  find_best_algo, BENCH_NCHW);
-    // benchmark_cudnn("vgg_6_7", 1, 28, 28, 512, 3, 128, 1, false, NONE, 3, 512, 1, false, NONE,  find_best_algo, BENCH_NCHW);
-    // benchmark_cudnn("vgg_8_9", 1, 14, 14, 512, 3, 128, 1, false, NONE, 3, 512, 1, false, NONE,  find_best_algo, BENCH_NCHW);
+    // benchmark_cudnn("vgg_3_4", 1, 112, 112, 128, 3, 128, 1, false, NONE, 3, 128, 1, false, NONE,  find_best_algo, BENCH_NCHW);
+    // benchmark_cudnn("vgg_5_6", 1, 56, 56, 256, 3, 256, 1, false, NONE, 3, 256, 1, false, NONE,  find_best_algo, BENCH_NCHW);
+    // benchmark_cudnn("vgg_8_9", 1, 28, 28, 512, 3, 512, 1, false, NONE, 3, 512, 1, false, NONE,  find_best_algo, BENCH_NCHW);
+    // benchmark_cudnn("vgg_11_12", 1, 14, 14, 512, 3, 512, 1, false, NONE, 3, 512, 1, false, NONE,  find_best_algo, BENCH_NCHW);
 }
 
 void benchmarkWithWorkloadString(std::string workload, int type) {
