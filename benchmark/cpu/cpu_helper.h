@@ -4,6 +4,7 @@
 #include <fstream>
 #include <cstdio>
 #include <chrono>
+#include <math.h>
 #include <ittnotify.h>
 #include <dlpack/dlpack.h>
 #include <tvm/runtime/module.h>
@@ -23,6 +24,21 @@
 #endif
 
 // #define DEBUG 1
+
+void getKernelConfig(std::string workload_name, int& vlen) {
+    std::fstream fin;
+
+    std::string filename = "../../generated_kernels/cpu/kernel_launch_config/" + workload_name + "_config.csv";
+    fin.open(filename, std::ios::in);
+
+    std::string line, word;
+    fin >> line;
+    std::stringstream s(line);
+    getline(s, word, ',');
+    vlen = std::stoi(word);
+
+    fin.close();
+}
 
 void benchmark_generated_cpu(std::string workload_name,
     int input_batch, int input_height, int input_width, int input_channel,
@@ -55,10 +71,10 @@ void benchmark_generated_cpu(std::string workload_name,
 
     // filenames
     std::string folder_name = "../../npy/" + workload_name + "/";
-    std::string input_name = folder_name + "input.npy";
-    std::string kernel_1_name = folder_name + (is_f1_depthwise ? "filter_1_d.npy" : "filter_1.npy");
-    std::string kernel_2_name = folder_name + "filter_2.npy";
-    std::string output_name = folder_name + "output.npy";
+    std::string input_name = folder_name + "input_NCHWc.npy";
+    std::string kernel_1_name = folder_name + (is_f1_depthwise ? "filter_1_d_NCHWc.npy" : "filter_1_NCHWc.npy");
+    std::string kernel_2_name = folder_name + "filter_2_NCHWc.npy";
+    std::string output_name = folder_name + "output_NCHWc.npy";
     // std::string scale_1_name = folder_name + "scale_1.npy";
     // std::string shift_1_name = folder_name + "shift_1.npy";
     // std::string scale_2_name = folder_name + "scale_2.npy";
@@ -87,23 +103,24 @@ void benchmark_generated_cpu(std::string workload_name,
     tvm::runtime::PackedFunc fused_2 = mod.GetFunction("fused_2");
     assert(fused_2 != nullptr);
     DLTensor *input, *filter_1, *filter_2, *output;
-    int ndim = 4;
+    int vlen;
+    getKernelConfig(workload_name, vlen);
     int dtype_code = kDLFloat;
     int dtype_bits = 32;
     int dtype_lanes = 1;
     int device_type = kDLCPU;
     int device_id = 0;
-    int64_t input_shape_tuple[4] = {input_batch, input_height, input_width, input_channel};
-    int64_t filter_1_shape_tuple[4] = {kernel_1_height, kernel_1_width, kernel_1_in_channel, kernel_1_out_channel_or_multiplier};
-    int64_t filter_2_shape_tuple[4] = {kernel_2_height, kernel_2_width, kernel_2_in_channel, kernel_2_out_channel};
-    int64_t output_shape_tuple[4] = {output_batch, output_height, output_width, output_channel};
-    TVMArrayAlloc(input_shape_tuple, ndim, dtype_code, dtype_bits, dtype_lanes,
+    int64_t input_shape_tuple[5] = {input_batch, int64_t(std::ceil(input_channel / vlen)), input_height, input_width, vlen};
+    int64_t filter_1_shape_tuple[6] = {is_f1_depthwise ? 1 : int64_t(std::ceil(kernel_1_out_channel_or_multiplier)), int64_t(std::ceil(kernel_1_in_channel / vlen)), kernel_1_height, kernel_1_width, vlen, 1};
+    int64_t filter_2_shape_tuple[6] = {int64_t(std::ceil(kernel_2_out_channel / vlen)), int64_t(std::ceil(kernel_2_in_channel / vlen)), kernel_2_height, kernel_2_width, vlen, vlen};
+    int64_t output_shape_tuple[5] = {output_batch, int64_t(std::ceil(output_channel / vlen)), output_height, output_width, vlen};
+    TVMArrayAlloc(input_shape_tuple, 5, dtype_code, dtype_bits, dtype_lanes,
                     device_type, device_id, &input);
-    TVMArrayAlloc(filter_1_shape_tuple, ndim, dtype_code, dtype_bits, dtype_lanes,
+    TVMArrayAlloc(filter_1_shape_tuple, 6, dtype_code, dtype_bits, dtype_lanes,
                     device_type, device_id, &filter_1);
-    TVMArrayAlloc(filter_2_shape_tuple, ndim, dtype_code, dtype_bits, dtype_lanes,
+    TVMArrayAlloc(filter_2_shape_tuple, 6, dtype_code, dtype_bits, dtype_lanes,
                     device_type, device_id, &filter_2);
-    TVMArrayAlloc(output_shape_tuple, ndim, dtype_code, dtype_bits, dtype_lanes,
+    TVMArrayAlloc(output_shape_tuple, 5, dtype_code, dtype_bits, dtype_lanes,
                     device_type, device_id, &output);
     memcpy(input->data, input_npy.data<float>(), input_batch * input_height * input_width * input_channel * sizeof(float));
     memcpy(filter_1->data, kernel_1_npy.data<float>(), kernel_1_height * kernel_1_width * kernel_1_in_channel * kernel_1_out_channel_or_multiplier * sizeof(float));

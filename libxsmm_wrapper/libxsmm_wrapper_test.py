@@ -313,7 +313,7 @@ def conv_auto_tuned(ofmblock,       # vec
     # (parallel) [N, OCO, HO],   (reorder) [OCI, rco_o, HM, WO],   HI, rco_i,   (microkernel start) [FH, FW, WI, Ovec, Ivec]
     s[B1].reorder(n, ko_o, ho, ko_i, rco_o, hm, wo, hi, rco_i, ry, rx, wi, ki, rci)
     cfg.define_reorder("reorder_outer", [ko_i, rco_o, hm, wo], policy="all")
-    cfg["reorder_outer"].apply(s, B1,[ko_i, rco_o, hm, wo])
+    cfg["reorder_outer"].apply(s, B1, [ko_i, rco_o, hm, wo])
 
     cfg.add_flop(np.prod(get_const_tuple(B1.shape)) * in_channel * filter_height * filter_width * 2)
 

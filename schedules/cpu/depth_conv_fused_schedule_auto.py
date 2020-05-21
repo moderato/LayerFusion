@@ -50,10 +50,13 @@ def schedule_depth_conv_fused_nhwc_auto(cfg, fusion_cfg, outs, stages, params, l
     fused_blx = s[layer_output_dict['Layer_1']].fuse(n, oc_chunk_o, ht, wt)
     s[layer_output_dict['Layer_1']].parallel(fused_blx)
 
+    cfg.define_reorder("reorder_outer", [oc_chunk_i, ic_chunk_o, ho, wo], policy="all")
+    cfg["reorder_outer"].apply(s, layer_output_dict['Layer_1'], [oc_chunk_i, ic_chunk_o, ho, wo])
+
     # Temporary skip the case of 1x1 stride > 1
     if (((filters_cfg['Layer_1'].H == 1 and filters_cfg['Layer_1'].W == 1 and \
             filters_cfg['Layer_1'].stride_h == 1 and filters_cfg['Layer_1'].stride_w == 1)) and \
-        (cfg["split_layer_1_h"].size[-2] > 1 and cfg["split_layer_1_w"].size[-1] <= 28)): # HM > 1 & WI = OW (small W)
+        (cfg["split_layer_1_h"].size[-2] > 1 and cfg["split_layer_1_w"].size[-1] == outputs_cfg['Layer_1'].W)): # HM > 1 & WI = OW (small W)
         # print("small: bind to h")
         tensorize_axis = h
         block_output_height = cfg["split_layer_1_h"].size[-1]

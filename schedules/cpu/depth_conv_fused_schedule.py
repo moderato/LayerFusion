@@ -92,7 +92,7 @@ def schedule_depth_conv_fused_nhwc(cfg, fusion_cfg, outs, stages, params, bn_rel
     # Temporary skip the case of 1x1 stride > 1
     if (((filters_cfg['Layer_1'].H == 1 and filters_cfg['Layer_1'].W == 1 and \
             filters_cfg['Layer_1'].stride_h == 1 and filters_cfg['Layer_1'].stride_w == 1)) and \
-        (step_num_h > 1 and output_step_tile_size_w <= 28)): # HM > 1 & WI = OW (small W)
+        (step_num_h > 1 and output_step_tile_size_w == outputs_cfg['Layer_1'].W)): # HM > 1 & WI = OW (small W)
         print("small: bind to h")
         tensorize_axis = h
         block_output_height = output_step_tile_size_h

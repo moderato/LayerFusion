@@ -101,7 +101,6 @@ do
       echo "| Generated/mkldnn DRAM AI: ${generated_kernel_dram_ai}, ${mkldnn_dram_ai}."
       echo "| Generated/mkldnn GFLOPS: ${generated_kernel_gflops}, ${mkldnn_gflops}."
       echo "|--------------------"
-      exit
     fi
   done < "$input"
 done

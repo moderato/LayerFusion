@@ -32,9 +32,14 @@ class LayerConfig:
             self._output_shape = (N, OH, OW, OC)
         else: # "NCHWc": 5D input 6D filter
             # Vector length
+            candidates = []
+            for i in range(8, 72, 8):
+                if IC % i == 0 and OC % i == 0:
+                    candidates.append(i)
+            assert candidates != []
             if cfg is not None:
-                cfg.define_knob("vlen", [8, 16, 32, 64])
-            vlen = 16 if cfg is None else cfg["vlen"].val
+                cfg.define_knob("vlen", candidates)
+            vlen = 8 if cfg is None else cfg["vlen"].val
             tmp_chunk = math.ceil(tmp / vlen) if not self._filter_cfg.depthwise else math.ceil(tmp * IC / vlen)
             IC_chunk = math.ceil(IC / vlen)
             if Input is None:
@@ -201,18 +206,19 @@ class LayerConfig:
         dilation_h, dilation_w = self._filter_cfg.get_dilation()
 
         if cfg is not None:
-            cfg.define_split("split_layer_{}_h".format(self._layer_num), OH,
+            cfg.define_split("split_layer_{}_h".format(self._layer_num), OH.value,
                                 num_outputs=(4 if self._device == "cuda" else 3),
                                 policy='factors')
-            cfg.define_split("split_layer_{}_w".format(self._layer_num), OW,
+            cfg.define_split("split_layer_{}_w".format(self._layer_num), OW.value,
                                 num_outputs=3,
                                 policy='factors') # filter=lambda x: x.size[-1] >= 4
             # cfg.define_split("split_layer_{}_c".format(self._layer_num), OC_chunk,
             #                     num_outputs=(2 if (self._device == "cuda" or not self._is_final_stage) else 3),
             #                     policy="verbose")
             cfg.define_split("split_layer_{}_c".format(self._layer_num),
-                                OC if self._device == "cuda" else OC_chunk,
-                                num_outputs=3, policy='factors')
+                                OC.value if self._device == "cuda" else OC_chunk.value,
+                                num_outputs=3 if self._device == "cuda" else 2,
+                                policy='factors')
 
         if self._layout == "NHWC":
             Output = te.compute(self._output_shape,

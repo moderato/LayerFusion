@@ -152,14 +152,16 @@ def verify_fused(workload_name,
         # Prepare data
         ref_data = get_ref_data(workload_name, parameters, target, best_config, dtype=dtype, save_data=save_data, name=name)
 
-        # export kernel launch config ONLY FOR GPUS, e.g. thxyz, blxy
+        # export kernel launch config, e.g. thxyz, blxy, vlen, etc
         output_shape = ref_data[-1].shape
-        if target == "cuda" and auto_tvm:
+        if auto_tvm:
             assert (best_config is not None)
-            export_kernel_launch_config(workload_name, output_shape, best_config)
+            export_kernel_launch_config(workload_name, output_shape, best_config, target)
 
         nd_arrays = []
         for idx, array in enumerate(ref_data):
+            # if idx == 2 or idx == 3:
+            #     print(array)
             if idx != len(ref_data) - 1: # Append data to nd_arrays
                 nd_arrays.append(tvm.nd.array(array, ctx))
             else: # Leave the last nd_array as all-zero

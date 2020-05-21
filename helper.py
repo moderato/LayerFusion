@@ -165,27 +165,27 @@ def get_workloads():
     ################################################################
 
     ##################### Depth conv workloads #####################
-    # # MobileNet-v1
-    # depth_conv_workloads['mv1_1'] = (1, 112, 112, 32, 3, 1, 1, True, None, 1, 64, 1, False, None, False) # 67.28 us / 183.70us
-    # depth_conv_workloads['mv1_2'] = (1, 112, 112, 64, 3, 1, 2, True, None, 1, 128, 1, False, None, False) # 91.97 us / 124.78 us
+    # MobileNet-v1
+    depth_conv_workloads['mv1_1'] = (1, 112, 112, 32, 3, 1, 1, True, None, 1, 64, 1, False, None, False) # 67.28 us / 183.70us
+    depth_conv_workloads['mv1_2'] = (1, 112, 112, 64, 3, 1, 2, True, None, 1, 128, 1, False, None, False) # 91.97 us / 124.78 us
     depth_conv_workloads['mv1_3'] = (1, 56, 56, 128, 3, 1, 1, True, None, 1, 128, 1, False, None, False) # 74.98 us / 134.67 us / 108.12 us (4, 4, 16, 4)
-    # depth_conv_workloads['mv1_4'] = (1, 56, 56, 128, 3, 1, 2, True, None, 1, 256, 1, False, None, False) # 69.34 us / 75.01 us
-    # depth_conv_workloads['mv1_5'] = (1, 28, 28, 256, 3, 1, 1, True, None, 1, 256, 1, False, None, False) # 79.91 us / 110.06 us / 117.21 us (2, 2, 8, 8)
-    # depth_conv_workloads['mv1_6'] = (1, 28, 28, 256, 3, 1, 2, True, None, 1, 512, 1, False, None, False) # 70.35 us / 64.22 us
-    # depth_conv_workloads['mv1_7-11'] = (1, 14, 14, 512, 3, 1, 1, True, None, 1, 512, 1, False, None, False) # 97.83 us / 112.37 us
-    # depth_conv_workloads['mv1_12'] = (1, 14, 14, 512, 3, 1, 2, True, None, 1, 1024, 1, False, None, False) # 97.71 us / 164.36 us
-    # depth_conv_workloads['mv1_13'] = (1, 7, 7, 1024, 3, 1, 1, True, None, 1, 1024, 1, False, None, False) # 129.61 us / 220.23 us
-    # depth_conv_workloads['test_tiny'] = (1, 4, 4, 1, 3, 1, 1, True, None, 1, 1, 1, False, None, False)
-    # depth_conv_workloads['test_single'] = (1, 56, 56, 64, 1, 64, 1, False, None, False)
+    depth_conv_workloads['mv1_4'] = (1, 56, 56, 128, 3, 1, 2, True, None, 1, 256, 1, False, None, False) # 69.34 us / 75.01 us
+    depth_conv_workloads['mv1_5'] = (1, 28, 28, 256, 3, 1, 1, True, None, 1, 256, 1, False, None, False) # 79.91 us / 110.06 us / 117.21 us (2, 2, 8, 8)
+    depth_conv_workloads['mv1_6'] = (1, 28, 28, 256, 3, 1, 2, True, None, 1, 512, 1, False, None, False) # 70.35 us / 64.22 us
+    depth_conv_workloads['mv1_7-11'] = (1, 14, 14, 512, 3, 1, 1, True, None, 1, 512, 1, False, None, False) # 97.83 us / 112.37 us
+    depth_conv_workloads['mv1_12'] = (1, 14, 14, 512, 3, 1, 2, True, None, 1, 1024, 1, False, None, False) # 97.71 us / 164.36 us
+    depth_conv_workloads['mv1_13'] = (1, 7, 7, 1024, 3, 1, 1, True, None, 1, 1024, 1, False, None, False) # 129.61 us / 220.23 us
+    depth_conv_workloads['test_tiny'] = (1, 4, 4, 1, 3, 1, 1, True, None, 1, 1, 1, False, None, False)
+    depth_conv_workloads['test_single'] = (1, 56, 56, 64, 1, 64, 1, False, None, False)
 
-    # # MobileNet-v2
-    # depth_conv_workloads['mv2_1'] = (1, 112, 112, 32, 3, 1, 1, True, None, 1, 16, 1, False, None, False) # 38.19 us / 123.81 us
-    # depth_conv_workloads['mv2_2'] = (1, 112, 112, 96, 3, 1, 2, True, None, 1, 24, 1, False, None, False) # 129.60 us / 117.13 us
-    # depth_conv_workloads['mv2_3'] = (1, 56, 56, 144, 3, 1, 2, True, None, 1, 32, 1, False, None, False) # 39.25 us / 53.14 us
-    # depth_conv_workloads['mv2_4'] = (1, 28, 28, 192, 3, 1, 2, True, None, 1, 64, 1, False, None, False) # 14.02 us / 35.55 us
-    # depth_conv_workloads['mv2_5'] = (1, 14, 14, 384, 3, 1, 1, True, None, 1, 96, 1, False, None, False) # 37.07 us / 51.26 us
-    # depth_conv_workloads['mv2_6'] = (1, 14, 14, 576, 3, 1, 2, True, None, 1, 160, 1, False, None, False) # 66.87 us / 65.03 us
-    # depth_conv_workloads['mv2_7'] = (1, 7, 7, 960, 3, 1, 1, True, None, 1, 320, 1, False, None, False) # 104.16 us / 162.04 us
+    # MobileNet-v2
+    depth_conv_workloads['mv2_1'] = (1, 112, 112, 32, 3, 1, 1, True, None, 1, 16, 1, False, None, False) # 38.19 us / 123.81 us
+    depth_conv_workloads['mv2_2'] = (1, 112, 112, 96, 3, 1, 2, True, None, 1, 24, 1, False, None, False) # 129.60 us / 117.13 us
+    depth_conv_workloads['mv2_3'] = (1, 56, 56, 144, 3, 1, 2, True, None, 1, 32, 1, False, None, False) # 39.25 us / 53.14 us
+    depth_conv_workloads['mv2_4'] = (1, 28, 28, 192, 3, 1, 2, True, None, 1, 64, 1, False, None, False) # 14.02 us / 35.55 us
+    depth_conv_workloads['mv2_5'] = (1, 14, 14, 384, 3, 1, 1, True, None, 1, 96, 1, False, None, False) # 37.07 us / 51.26 us
+    depth_conv_workloads['mv2_6'] = (1, 14, 14, 576, 3, 1, 2, True, None, 1, 160, 1, False, None, False) # 66.87 us / 65.03 us
+    depth_conv_workloads['mv2_7'] = (1, 7, 7, 960, 3, 1, 1, True, None, 1, 320, 1, False, None, False) # 104.16 us / 162.04 us
     ################################################################
 
     ######################## Block workloads #######################
@@ -199,39 +199,52 @@ def get_workloads():
 
     return workloads
 
-def export_kernel_launch_config(workload_name, output_shape, best_config):
-    assert best_config is not None
-
+def get_CPU_vlen(best_config=None):
+    if best_config is None:
+        return 8
     config_dict = best_config.to_json_dict()
-    n = output_shape[0]
-    ho = output_shape[1]
-    wo = output_shape[2]
-    recompute = output_shape[3]
-
-    # print("n: {}, ho: {}, wo: {}, recompute: {}".format(n, ho, wo, recompute))
     for e in config_dict['entity']:
-        if e[0] == "split_layer_1_h": # TODO: Fix it layer with a layer num
-            thz = e[2][1]
-            thy = e[2][2]
-            for ee in e[2][1:]:
-                ho = (ho + ee - 1) // ee
-                # print("ho: {}", ho)
-        elif e[0] == "split_layer_1_w":
-            for ee in e[2][1:]:
-                wo = (wo + ee - 1) // ee
-                # print("wo: {}", wo)
-        elif e[0] == "split_layer_1_c":
-            reuse = e[2][1]
-            thx = e[2][2]
-            for ee in e[2][1:]:
-                recompute = (recompute + ee - 1) // ee
-                # print("recompute: {}", recompute)
-    blx = n * ho * wo * recompute
-    print("n: {}, ho: {}, wo: {}, recompute: {}".format(n, ho, wo, recompute))
-    print("thx: {}, thy: {}, thz: {}, blx: {}".format(thx, thy, thz, blx))
+        if e[0] == "vlen":
+            return int(e[2])
 
-    with open("generated_kernels/gpu/kernel_launch_config/{}_config.csv".format(workload_name), "w") as f:
-        f.write("{},{},{},{}".format(thx, thy, thz, blx))
+def export_kernel_launch_config(workload_name, output_shape, best_config, target):
+    assert best_config is not None
+    config_dict = best_config.to_json_dict()
+
+    if target == "cuda":
+        n = output_shape[0]
+        ho = output_shape[1]
+        wo = output_shape[2]
+        recompute = output_shape[3]
+
+        # print("n: {}, ho: {}, wo: {}, recompute: {}".format(n, ho, wo, recompute))
+        for e in config_dict['entity']:
+            if e[0] == "split_layer_1_h": # TODO: Fix it layer with a layer num
+                thz = e[2][1]
+                thy = e[2][2]
+                for ee in e[2][1:]:
+                    ho = (ho + ee - 1) // ee
+                    # print("ho: {}", ho)
+            elif e[0] == "split_layer_1_w":
+                for ee in e[2][1:]:
+                    wo = (wo + ee - 1) // ee
+                    # print("wo: {}", wo)
+            elif e[0] == "split_layer_1_c":
+                reuse = e[2][1]
+                thx = e[2][2]
+                for ee in e[2][1:]:
+                    recompute = (recompute + ee - 1) // ee
+                    # print("recompute: {}", recompute)
+        blx = n * ho * wo * recompute
+        print("n: {}, ho: {}, wo: {}, recompute: {}".format(n, ho, wo, recompute))
+        print("thx: {}, thy: {}, thz: {}, blx: {}".format(thx, thy, thz, blx))
+
+        with open("generated_kernels/gpu/kernel_launch_config/{}_config.csv".format(workload_name), "w") as f:
+            f.write("{},{},{},{}".format(thx, thy, thz, blx))
+    else:
+        vlen = get_CPU_vlen(best_config)
+        with open("generated_kernels/cpu/kernel_launch_config/{}_config.csv".format(workload_name), "w") as f:
+            f.write("{}".format(vlen))
 
 def NHWC_to_NCHWc_data(nhwc, vlen):
     n, h, w, c = get_const_tuple(nhwc.shape)
@@ -262,12 +275,7 @@ def get_ref_data(workload_name,
     fusion_cfg = FusionConfig(parameters)
     assert(target is not None)
     pack = (target != "cuda")
-    vlen = 16
-    if best_config is not None:
-        config_dict = best_config.to_json_dict()
-        for e in config_dict['entity']:
-            if e[0] == "vlen":
-                vlen = int(e[2])
+    vlen = get_CPU_vlen(best_config)
     ref_data = []
 
     # Pretending the input_data is some output_data from stage -1
@@ -336,5 +344,7 @@ def get_ref_data(workload_name,
                 else:
                     if len(ref_data[i].shape) == 4: # Don't need to save NCHW format scale and shift data
                         np.save(filename+"_NCHW", np.array(ref_data[i].transpose(0, 3, 1, 2), order='C'))
+            else:
+                np.save(filename+"_NCHWc", ref_data[i])
 
     return ref_data
