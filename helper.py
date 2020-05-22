@@ -5,14 +5,17 @@ from topi.nn.util import get_pad_tuple
 from tvm import autotvm, te
 import os, math
 
-def vec_length(device="cuda"):
+def get_vlen(axis_length, device=None):
     if device == "cuda":
-        return [8, 16, 32, 64, 128]
-    if device == "llvm -mcpu=core-avx2":
-        return [8]
-    if device == "llvm -mcpu=skylake-avx512":
-        return [16]
-    return [4]
+        candidates = [8, 16, 32, 64, 128]
+    elif device == "llvm -mcpu=core-avx2" or device == "llvm -mcpu=skylake-avx512":
+        candidates = [8, 16, 24, 32, 64]
+    vlens = []
+    for i in candidates:
+        if axis_length % i == 0:
+            vlens.append(i)
+    assert vlens != []
+    return vlens
 
 def register_count(device=None):
     if device == "llvm -mcpu=corei7-avx":
@@ -119,6 +122,18 @@ class FusionConfig:
         OUTPUT = self.layers[-1][0]
         print("Output size: {}".format(DATA.get_shape()))
 
+    def get_FLOP(self):
+        flop = 0
+        for l in range(0, self.layer_num):
+            fcfg = self.get_filter(l)
+            ocfg = self.get_output(l)
+
+            if fcfg.depthwise:
+                flop += 2 * (ocfg.N * ocfg.H * ocfg.W * ocfg.C) * (fcfg.H * fcfg.W)
+            else:
+                flop += 2 * (ocfg.N * ocfg.H * ocfg.W * ocfg.C) * (fcfg.H * fcfg.W * fcfg.I)
+        return flop
+
 def flatten_list(lst):
     return sum(([x] if not isinstance(x, list) else flatten_list(x) for x in lst), [])
 
@@ -199,14 +214,6 @@ def get_workloads():
 
     return workloads
 
-def get_CPU_vlen(best_config=None):
-    if best_config is None:
-        return 8
-    config_dict = best_config.to_json_dict()
-    for e in config_dict['entity']:
-        if e[0] == "vlen":
-            return int(e[2])
-
 def export_kernel_launch_config(workload_name, output_shape, best_config, target):
     assert best_config is not None
     config_dict = best_config.to_json_dict()
@@ -246,24 +253,32 @@ def export_kernel_launch_config(workload_name, output_shape, best_config, target
         with open("generated_kernels/cpu/kernel_launch_config/{}_config.csv".format(workload_name), "w") as f:
             f.write("{}".format(vlen))
 
+def get_CPU_vlen(best_config=None, cfg_key=""):
+    if best_config is None:
+        return 16
+    config_dict = best_config.to_json_dict()
+    for e in config_dict['entity']:
+        if e[0] == cfg_key:
+            return int(e[2])
+
 def NHWC_to_NCHWc_data(nhwc, vlen):
     n, h, w, c = get_const_tuple(nhwc.shape)
     c_chunk = math.ceil(c / vlen)
     nchwc = nhwc.reshape(n, h, w, c_chunk, vlen)
     return np.array(nchwc.transpose(0, 3, 1, 2, 4), order='C')
 
-def NHWC_to_NCHWc_kernel(hwio, vlen, depthwise=False):
+def NHWC_to_NCHWc_kernel(hwio, vlen_i, vlen_o, depthwise=False):
     h, w, i, o = get_const_tuple(hwio.shape)
-    i_chunk = math.ceil(i / vlen)
-    oihwio = hwio.reshape(h, w, i_chunk, vlen, math.ceil(o / vlen), vlen) if not depthwise else \
-                hwio.reshape(h, w, i_chunk, vlen, 1, 1)
+    i_chunk = math.ceil(i / vlen_i)
+    oihwio = hwio.reshape(h, w, i_chunk, vlen_i, math.ceil(o / vlen_o), vlen_o) if not depthwise else \
+                hwio.reshape(h, w, i_chunk, vlen_i, 1, 1)
     return np.array(oihwio.transpose(4, 2, 0, 1, 3, 5), order='C')
 
-def tensor_transformation(data, pack, vlen, tensor_type="data", depthwise=False):
+def tensor_transformation(data, pack, vlen_i, vlen_o, tensor_type="data", depthwise=False):
     if tensor_type == "data":
-        return data if not pack else NHWC_to_NCHWc_data(data, vlen)
+        return data if not pack else NHWC_to_NCHWc_data(data, vlen_o)
     else: # kernel:
-        return data if not pack else NHWC_to_NCHWc_kernel(data, vlen, depthwise)
+        return data if not pack else NHWC_to_NCHWc_kernel(data, vlen_i, vlen_o, depthwise)
 
 def get_ref_data(workload_name,
                     parameters,
@@ -275,20 +290,24 @@ def get_ref_data(workload_name,
     fusion_cfg = FusionConfig(parameters)
     assert(target is not None)
     pack = (target != "cuda")
-    vlen = get_CPU_vlen(best_config)
     ref_data = []
 
     # Pretending the input_data is some output_data from stage -1
+    vlen = get_CPU_vlen(best_config, 'vlen_input' if not fusion_cfg.get_filter(0).depthwise else "vlen_layer_0")
     output_data = np.random.uniform(0.0, 0.1, size=fusion_cfg.layers[0][0].get_shape()).astype(dtype)
-    ref_data.append(tensor_transformation(output_data, pack, vlen, "data"))
+    ref_data.append(tensor_transformation(output_data, pack, -1, vlen, "data"))
     # params names for saving data
     params_name = ["input"]
     
     for idx in range(fusion_cfg.layer_num):
         f = fusion_cfg.get_filter(idx)
+        vlen_i = get_CPU_vlen(best_config, "vlen_input" if (idx == 0 and not f.depthwise) else\
+                                            ("vlen_layer_{}".format(idx) if idx == 0 else\
+                                                "vlen_layer_{}".format(idx-1)))
+        vlen_o = get_CPU_vlen(best_config, "vlen_layer_{}".format(idx))
 
         filter_data = np.random.uniform(0.0, 0.1, size=get_const_tuple(f.get_shape())).astype(dtype)
-        ref_data.append(tensor_transformation(filter_data, pack, vlen, "filter", f.depthwise))
+        ref_data.append(tensor_transformation(filter_data, pack, vlen_i, vlen_o, "filter", f.depthwise))
 
         input_data = np.copy(output_data)
 
@@ -322,9 +341,9 @@ def get_ref_data(workload_name,
             params_name.extend(['scale_{}'.format(idx+1), 'shift_{}'.format(idx+1)])
 
         if idx == fusion_cfg.layer_num - 1: # At the last stage, append output_data as the final output for reference
-            ref_data.append(tensor_transformation(output_data, pack, vlen, "data"))
+            ref_data.append(tensor_transformation(output_data, pack, -1, vlen_o, "data"))
     params_name.append('output')
-    
+
     if save_data:
         # Save ref data
         for i in range(0, len(ref_data)):

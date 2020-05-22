@@ -1,7 +1,6 @@
 import tvm
 from tvm import autotvm, te
 import math
-from helper import vec_length, register_count
 from .libxsmm_intrin import intrin_libxsmm_brgemm
 
 ########## gepm_var1 ##########

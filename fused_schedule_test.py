@@ -184,7 +184,7 @@ def verify_fused(workload_name,
             print(np.where(d))
         # print("Error rate: {:.2f}%".format((len(d) / len(ref_data[-1]) * 100)))
         print("{}_fused of {} ({}): average running time is {:.2f} us.".format(name, workload_name, "NHWC" if target == "cuda" else "NCHWc", tcost_d * 1e6))
-        FLOP = autotvm.task.task.compute_flop(s)
+        FLOP = FusionConfig(parameters).get_FLOP()
         print("FLOP: {}, GFLOPS: {:.2f}.".format(FLOP, FLOP / tcost_d / 1e9))
 
     for target in ["llvm -mcpu=core-avx2"]:
