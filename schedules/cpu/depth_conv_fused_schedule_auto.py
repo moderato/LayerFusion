@@ -95,6 +95,10 @@ def schedule_depth_conv_fused_nhwc_auto(cfg, fusion_cfg, outs, stages, params, l
     s[layer_output_dict['Layer_0']].reorder(n, c_chunk, h, ry, rx, w, c_vec)
     s[layer_output_dict['Layer_0']].vectorize(c_vec)
 
+    cfg.define_reorder("reorder_depthwise", [h, ry, rx, w], policy="candidate",\
+                                            candidate=[[h, w, ry, rx], [h, ry, w, rx], [h, ry, rx, w], [ry, h, rx, w], [ry, rx, h, w]])
+    cfg["reorder_depthwise"].apply(s, layer_output_dict['Layer_0'], [h, ry, rx, w])
+
     s = s.normalize()
 
     return s

@@ -25,7 +25,8 @@
 
 // #define DEBUG 1
 
-void getKernelConfig(std::string workload_name, int& vlen) {
+// TODO: Generalize the vlens reading
+void getKernelConfig(std::string workload_name, int& vlen1, int& vlen2) {
     std::fstream fin;
 
     std::string filename = "../../generated_kernels/cpu/kernel_launch_config/" + workload_name + "_config.csv";
@@ -35,7 +36,9 @@ void getKernelConfig(std::string workload_name, int& vlen) {
     fin >> line;
     std::stringstream s(line);
     getline(s, word, ',');
-    vlen = std::stoi(word);
+    vlen1 = std::stoi(word);
+    getline(s, word, ',');
+    vlen2 = std::stoi(word);
 
     fin.close();
 }
@@ -103,17 +106,17 @@ void benchmark_generated_cpu(std::string workload_name,
     tvm::runtime::PackedFunc fused_2 = mod.GetFunction("fused_2");
     assert(fused_2 != nullptr);
     DLTensor *input, *filter_1, *filter_2, *output;
-    int vlen;
-    getKernelConfig(workload_name, vlen);
+    int vlen1, vlen2;
+    getKernelConfig(workload_name, vlen1, vlen2);
     int dtype_code = kDLFloat;
     int dtype_bits = 32;
     int dtype_lanes = 1;
     int device_type = kDLCPU;
     int device_id = 0;
-    int64_t input_shape_tuple[5] = {input_batch, int64_t(std::ceil(input_channel / vlen)), input_height, input_width, vlen};
-    int64_t filter_1_shape_tuple[6] = {is_f1_depthwise ? 1 : int64_t(std::ceil(kernel_1_out_channel_or_multiplier)), int64_t(std::ceil(kernel_1_in_channel / vlen)), kernel_1_height, kernel_1_width, vlen, 1};
-    int64_t filter_2_shape_tuple[6] = {int64_t(std::ceil(kernel_2_out_channel / vlen)), int64_t(std::ceil(kernel_2_in_channel / vlen)), kernel_2_height, kernel_2_width, vlen, vlen};
-    int64_t output_shape_tuple[5] = {output_batch, int64_t(std::ceil(output_channel / vlen)), output_height, output_width, vlen};
+    int64_t input_shape_tuple[5] = {input_batch, int64_t(std::ceil(input_channel / vlen1)), input_height, input_width, vlen1};
+    int64_t filter_1_shape_tuple[6] = {is_f1_depthwise ? 1 : int64_t(std::ceil(kernel_1_out_channel_or_multiplier)), int64_t(std::ceil(kernel_1_in_channel / vlen1)), kernel_1_height, kernel_1_width, vlen1, 1};
+    int64_t filter_2_shape_tuple[6] = {int64_t(std::ceil(kernel_2_out_channel / vlen2)), int64_t(std::ceil(kernel_2_in_channel / vlen1)), kernel_2_height, kernel_2_width, vlen1, vlen2};
+    int64_t output_shape_tuple[5] = {output_batch, int64_t(std::ceil(output_channel / vlen2)), output_height, output_width, vlen2};
     TVMArrayAlloc(input_shape_tuple, 5, dtype_code, dtype_bits, dtype_lanes,
                     device_type, device_id, &input);
     TVMArrayAlloc(filter_1_shape_tuple, 6, dtype_code, dtype_bits, dtype_lanes,

@@ -37,10 +37,7 @@ class LayerConfig:
                 if idx == 0 and not self._filter_cfg.depthwise: # First layer is not depthwise: define input vlen
                     cfg.define_knob("vlen_input", get_vlen(IC, device))
                 cfg.define_knob("vlen_layer_{}".format(idx), get_vlen(OC, device))
-            if cfg is None:
-                vlen_i = 16
-                vlen_o = 16
-            else:
+
                 # TODO: What if depthwise in the middle?
                 if idx == 0 and not self._filter_cfg.depthwise:
                     vlen_i = cfg["vlen_input"].val
@@ -49,6 +46,10 @@ class LayerConfig:
                 else:
                     vlen_i = cfg["vlen_layer_{}".format(idx-1)].val
                 vlen_o = cfg["vlen_layer_{}".format(idx)].val
+            else:
+                vlen_i = 16
+                vlen_o = 16
+
             OC_chunk = math.ceil(tmp / vlen_o) if not self._filter_cfg.depthwise else math.ceil(tmp * IC / vlen_o)
             IC_chunk = math.ceil(IC / vlen_i)
             if Input is None:
@@ -66,6 +67,7 @@ class LayerConfig:
         self._filter = Filter
         self._output = None
         self._output_dtype = Input.dtype
+        self._pack = pack
         self._layer_idx = idx
         self._device = device
         self._is_first_stage = (idx == 0)
@@ -80,34 +82,34 @@ class LayerConfig:
         return self._raw_input
 
     def get_input_shape(self):
-        if len(self._input.shape) == 4:
+        if self._pack:
+            n, c_chunk, h, w, c_vec = self._input.shape
+            return n, c_chunk, h, w, c_vec
+        else:
             n, h, w, c = self._input.shape
             return n, h, w, c
-        else: # Packed
-            n, c_chunk, h, w, c_vec = self._input.shape
-            return n, c_chunk, h, w, c_vec
 
     def get_filter_shape(self):
-        if len(self._filter.shape) == 4:
-            h, w, ic, tmp = self._filter.shape # tmp represents either oc (normal conv) or channel multiplier (depthwise)
-            return h, w, ic, tmp
-        else: # Packed, 6D
+        if self._pack: # 6D
             tmp_chunk, ic_chunk, h, w, ic_vec, tmp = self._filter.shape
             return tmp_chunk, ic_chunk, h, w, ic_vec, tmp
+        else: # 4D
+            h, w, ic, tmp = self._filter.shape # tmp represents either oc (normal conv) or channel multiplier (depthwise)
+            return h, w, ic, tmp
 
     def get_output_shape(self):
-        if len(self._output_shape) == 4:
-            n, h, w, c = self._output_shape
-            return n, h, w, c
-        else: # Packed
+        if self._pack:
             n, c_chunk, h, w, c_vec = self._input.shape
             return n, c_chunk, h, w, c_vec
+        else:
+            n, h, w, c = self._output_shape
+            return n, h, w, c
 
     def padding(self, cfg):
-        if self._layout == "NHWC":
-            FH, FW, _, _ = self.get_filter_shape()
-        else: # "NCHWc"
+        if self._pack:
             _, _, FH, FW, _, _ = self.get_filter_shape()
+        else:
+            FH, FW, _, _ = self.get_filter_shape()
 
         # Only pad when it's not 1x1
         if FH.value > 1 and FW.value > 1:
@@ -115,14 +117,14 @@ class LayerConfig:
             tmp = []
             pad_top, pad_left, pad_down, pad_right = self._filter_cfg.get_padding_shape()
 
-            if self._layout == "NHWC":
-                # 4D Input (NHWC)
-                pad_before = [0, pad_top, pad_left, 0]
-                pad_after = [0, pad_down, pad_right, 0]
-            else: # "NCHWc"
+            if self._pack:
                 # 5D PackedInput (NCHWc)
                 pad_before = [0, 0, pad_top, pad_left, 0]
                 pad_after = [0, 0, pad_down, pad_right, 0]
+            else:
+                # 4D Input (NHWC)
+                pad_before = [0, pad_top, pad_left, 0]
+                pad_after = [0, pad_down, pad_right, 0]
 
             PaddedInput = pad(self._input, pad_before, pad_after, name="Layer_{}_PaddedInput".format(self._layer_idx))
             tmp.append(PaddedInput)
@@ -134,14 +136,14 @@ class LayerConfig:
     def make_depthwise_output(self, cfg):
         # Pad if necessary
         self.padding(cfg)
-        if self._layout == "NHWC":
-            N, IH, IW, IC = self.get_input_shape()
-            FH, FW, _, _ = self.get_filter_shape()
-            N, OH, OW, OC = self.get_output_shape()
-        else: # Packed input
+        if self._pack:
             N, IC_chunk, IH, IW, IC_vec = self.get_input_shape()
             _, _, FH, FW, _, _ = self.get_filter_shape()
             N, OC_chunk, OH, OW, OC_vec = self.get_output_shape()
+        else:
+            N, IH, IW, IC = self.get_input_shape()
+            FH, FW, _, _ = self.get_filter_shape()
+            N, OH, OW, OC = self.get_output_shape()
 
         # Don't consider 1by1 depthwise
         assert not (self._filter_cfg.depthwise and FH == 1 and FW == 1)
@@ -162,19 +164,7 @@ class LayerConfig:
                 # cfg.define_split("split_layer_{}_c".format(self._layer_idx), OC_chunk.value, num_outputs=(2 if (self._device == "cuda" or not self._is_final_stage) else 3), policy="verbose")
                 cfg.define_split("split_layer_{}_c".format(self._layer_idx), OC, num_outputs=3, policy='factors')
 
-        if self._layout == "NHWC":
-            Output = te.compute(self._output_shape,
-                        lambda n, h, w, c: te.sum(
-                                                (self._filter[ry, rx, c, 0] * 
-                                                self._input[n,
-                                                            h * stride_h + ry * dilation_h,
-                                                            w * stride_w + rx * dilation_w,
-                                                            c])
-                                                .astype(self._output_dtype),
-                                                axis=[ry, rx]),
-                                            name='Layer_{}_DepthwiseConv2dOutput'.format(self._layer_idx),
-                                            tag="depthwise_nhwc")
-        else:
+        if self._pack:
             Output = te.compute(self._output_shape,
             lambda n, c_chunk, h, w, c_vec: te.sum(
                                                 (self._filter[0, c_chunk, ry, rx, c_vec, 0] *
@@ -186,17 +176,24 @@ class LayerConfig:
                                                 axis=[ry, rx]),
                                             name='Layer_{}_DepthwiseConv2dOutput'.format(self._layer_idx),
                                             tag="depthwise_nchw{}c".format(OC_vec))
+        else:
+            Output = te.compute(self._output_shape,
+                        lambda n, h, w, c: te.sum(
+                                                (self._filter[ry, rx, c, 0] *
+                                                self._input[n,
+                                                            h * stride_h + ry * dilation_h,
+                                                            w * stride_w + rx * dilation_w,
+                                                            c])
+                                                .astype(self._output_dtype),
+                                                axis=[ry, rx]),
+                                            name='Layer_{}_DepthwiseConv2dOutput'.format(self._layer_idx),
+                                            tag="depthwise_nhwc")
         self._output = Output
 
     def make_conv_output(self, cfg):
         # Pad if necessary
         self.padding(cfg)
-        if self._layout == "NHWC":
-            N, IH, IW, IC = self.get_input_shape()
-            FH, FW, _, CM = self.get_filter_shape()
-            N, OH, OW, OC = self.get_output_shape()
-            rc = te.reduce_axis((0, IC), name='rc')
-        else: # Packed input
+        if self._pack:
             N, IC_chunk, IH, IW, IC_vec = self.get_input_shape()
             IC = IC_chunk * IC_vec
             _, IC_chunk, FH, FW, IC_vec, _ = self.get_filter_shape()
@@ -204,6 +201,11 @@ class LayerConfig:
             OC = OC_chunk * OC_vec
             rco = te.reduce_axis((0, IC_chunk), name='rco')
             rci = te.reduce_axis((0, IC_vec), name='rci')
+        else:
+            N, IH, IW, IC = self.get_input_shape()
+            FH, FW, _, CM = self.get_filter_shape()
+            N, OH, OW, OC = self.get_output_shape()
+            rc = te.reduce_axis((0, IC), name='rc')
 
         ry = te.reduce_axis((0, FH), name='ry')
         rx = te.reduce_axis((0, FW), name='rx')
@@ -226,19 +228,7 @@ class LayerConfig:
                                 num_outputs=3 if self._device == "cuda" else 2,
                                 policy='factors')
 
-        if self._layout == "NHWC":
-            Output = te.compute(self._output_shape,
-                        lambda n, h, w, c: te.sum(
-                                                    (self._filter[ry, rx, rc, c] *
-                                                    self._input[n,
-                                                                h * stride_h + ry * dilation_h,
-                                                                w * stride_w + rx * dilation_w,
-                                                                rc])
-                                                    .astype(self._output_dtype),
-                                                    axis=[rc, ry, rx]),
-                                                name="Layer_{}_Conv2dOutput".format(self._layer_idx),
-                                                tag="conv2d_nhwc")
-        else: # "NCHWc"
+        if self._pack:
             Output = te.compute(self._output_shape,
             lambda n, c_chunk, h, w, c_vec: te.sum(
                                                     (self._filter[c_chunk, rco, ry, rx, rci, c_vec] *
@@ -250,27 +240,39 @@ class LayerConfig:
                                                     axis=[rco, ry, rx, rci]),
                                                 name="Layer_{}_Conv2dOutput".format(self._layer_idx),
                                                 tag="conv2d_nchw{}c".format(OC_vec))
+        else:
+            Output = te.compute(self._output_shape,
+                        lambda n, h, w, c: te.sum(
+                                                    (self._filter[ry, rx, rc, c] *
+                                                    self._input[n,
+                                                                h * stride_h + ry * dilation_h,
+                                                                w * stride_w + rx * dilation_w,
+                                                                rc])
+                                                    .astype(self._output_dtype),
+                                                    axis=[rc, ry, rx]),
+                                                name="Layer_{}_Conv2dOutput".format(self._layer_idx),
+                                                tag="conv2d_nhwc")
         self._output = Output
 
     def process_relu(self, block_input):
-        if len(self._output_shape) == 4:
-            _, _, _, OC = self._output_shape
-        else: # Packed
+        if self._pack:
             _, OC_chunk, _, _, OC_vec = self._output_shape
             OC = OC_chunk * OC_vec
+        else:
+            _, _, _, OC = self._output_shape
         Scale = te.placeholder((OC),
                                 name='Layer_{}_Scale_{}'.format(self._layer_idx, 'DepthwiseConv2d' if self.depthwise else 'Conv2d'))
         Shift = te.placeholder((OC),
                                 name='Layer_{}_Shift_{}'.format(self._layer_idx, 'DepthwiseConv2d' if self.depthwise else 'Conv2d'))
-        if len(self._output_shape) == 4:
-            ScaleShift =  te.compute(self._output_shape, lambda n, h, w, c: self._output[n, h, w, c] * Scale[c] + Shift[c],
-                                name='Layer_{}_ScaleShift_{}'.format(self._layer_idx, 'DepthwiseConv2d' if self.depthwise else 'Conv2d'),
-                                tag='scaleshift_nhwc')
-        else: # Packed
+        if self._pack:
             ScaleShift =  te.compute(self._output_shape, lambda n, c_chunk, h, w, c_vec: self._output[n, c_chunk, h, w, c_vec] * Scale[c_chunk * OC_vec + c_vec] + Shift[c_chunk * OC_vec + c_vec],
                                 name='Layer_{}_ScaleShift_{}'.format(
                                     self._layer_idx, 'DepthwiseConv2d' if self.depthwise else 'Conv2d'),
                                 tag='scaleshift_nchw{}c'.format())
+        else:
+            ScaleShift =  te.compute(self._output_shape, lambda n, h, w, c: self._output[n, h, w, c] * Scale[c] + Shift[c],
+                                name='Layer_{}_ScaleShift_{}'.format(self._layer_idx, 'DepthwiseConv2d' if self.depthwise else 'Conv2d'),
+                                tag='scaleshift_nhwc')
         self._params[-1].append(Scale)
         self._params[-1].append(Shift)
         self._stages[-1].append(ScaleShift)

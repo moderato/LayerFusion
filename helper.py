@@ -249,17 +249,28 @@ def export_kernel_launch_config(workload_name, output_shape, best_config, target
         with open("generated_kernels/gpu/kernel_launch_config/{}_config.csv".format(workload_name), "w") as f:
             f.write("{},{},{},{}".format(thx, thy, thz, blx))
     else:
-        vlen = get_CPU_vlen(best_config)
+        vlens = get_CPU_vlen(best_config, "all")
+        vlens = [str(v) for v in vlens]
         with open("generated_kernels/cpu/kernel_launch_config/{}_config.csv".format(workload_name), "w") as f:
-            f.write("{}".format(vlen))
+            f.write(",".join(vlens))
 
 def get_CPU_vlen(best_config=None, cfg_key=""):
     if best_config is None:
         return 16
     config_dict = best_config.to_json_dict()
-    for e in config_dict['entity']:
-        if e[0] == cfg_key:
-            return int(e[2])
+    if cfg_key != "all":
+        for e in config_dict['entity']:
+            if e[0] == cfg_key:
+                return int(e[2])
+    else: # Get all vlens, sort by keys and return values
+        vlens_dict = {}
+        for e in config_dict['entity']:
+            if "vlen" in e[0]:
+                vlens_dict[e[0]] = int(e[2])
+        vlens = []
+        for k in sorted (vlens_dict.keys()):
+            vlens.append(vlens_dict[k])
+        return vlens
 
 def NHWC_to_NCHWc_data(nhwc, vlen):
     n, h, w, c = get_const_tuple(nhwc.shape)

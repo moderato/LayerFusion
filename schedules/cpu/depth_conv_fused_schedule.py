@@ -34,17 +34,19 @@ def schedule_depth_conv_fused_nhwc(cfg, fusion_cfg, outs, stages, params, bn_rel
 
     # Searchable parameters
     # --------------------
-    # output_step_tile_size_h = 2
+    # output_step_tile_size_h = 7
     # output_step_tile_size_w = 14
-    # step_num_h = 2
+    # step_num_h = 1
     # step_num_w = 1
-    # reduce_split = 8
+    # reduce_split = 4
+    # oc_chunk_split = 4
     # ---
     output_step_tile_size_h = 2
     output_step_tile_size_w = 2
     step_num_h = 2
     step_num_w = 2
     reduce_split = 1
+    oc_chunk_split = 1
     # --------------------
     output_tile_size_h = output_step_tile_size_h * step_num_h
     output_tile_size_w = output_step_tile_size_w * step_num_w
@@ -58,7 +60,7 @@ def schedule_depth_conv_fused_nhwc(cfg, fusion_cfg, outs, stages, params, bn_rel
 
     # ---
     n, oc_chunk, h, w, oc = s[layer_output_dict['Layer_1']].op.axis
-    oc_chunk_o, oc_chunk_i = s[layer_output_dict['Layer_1']].split(oc_chunk, factor=1)
+    oc_chunk_o, oc_chunk_i = s[layer_output_dict['Layer_1']].split(oc_chunk, factor=oc_chunk_split)
     ic_chunk, ry, rx, ic = s[layer_output_dict['Layer_1']].op.reduce_axis
     ic_chunk_o, ic_chunk_i = s[layer_output_dict['Layer_1']].split(ic_chunk, factor=reduce_split)
     ht, wt, h, w = s[layer_output_dict['Layer_1']].tile(h, w, x_factor=output_tile_size_h, y_factor=output_tile_size_w)
@@ -132,9 +134,8 @@ def schedule_depth_conv_fused_nhwc(cfg, fusion_cfg, outs, stages, params, bn_rel
     # ---
     n, c_chunk, h, w, c_vec = s[layer_output_dict['Layer_0']].op.axis
     ry, rx = s[layer_output_dict['Layer_0']].op.reduce_axis
-    s[layer_output_dict['Layer_0']].reorder(n, c_chunk, h, ry, rx, w, c_vec)
+    s[layer_output_dict['Layer_0']].reorder(n, c_chunk, h, w, ry, rx, c_vec)
     s[layer_output_dict['Layer_0']].vectorize(c_vec)
-    s[layer_output_dict['Layer_0']].unroll(w)
 
     s = s.normalize()
 
