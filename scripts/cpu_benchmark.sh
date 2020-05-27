@@ -38,12 +38,14 @@ do
       cd ../../scripts
       ./parse_sde.sh /tmp/sde_generated.out* > /tmp/sde_generated.txt
       generated_kernel_total_flop="$(cat /tmp/sde_generated.txt | grep -e 'Total single-precision FLOPs' | awk '{ printf "%s\n", $5 }')"
+      generated_kernel_total_flop="$( echo "scale=4; $generated_kernel_total_flop / (${REP_BENCH} * 2)" | bc )"
       ./parse_vtune.sh -v /tmp/cpu_bench_report.summary > /tmp/bw_generated.txt
       total_dram_transactions="$(cat /tmp/bw_generated.txt | grep -e 'Total transactions' | awk '{ printf "%s\n", $4 }')"
 
       # GFLOPS and AI
-      generated_kernel_gflops="$( echo "scale=4; ($generated_kernel_total_flop / (${REP_BENCH} * 2)) / $generated_kernel_runtime * 1000000 / 1000000000" | bc )"
-      generated_kernel_dram_ai="$( echo "scale=4; ($generated_kernel_total_flop / (${REP_BENCH} * 2)) / ($total_dram_transactions * 64)" | bc )"
+      generated_kernel_gflops="$( echo "scale=4; $generated_kernel_total_flop / $generated_kernel_runtime * 1000000 / 1000000000" | bc )"
+      generated_kernel_dram_ai="$( echo "scale=4; $generated_kernel_total_flop / ($total_dram_transactions * 64)" | bc )"
+      # echo "--- Generated kernel details"
       # echo $generated_kernel_runtime
       # echo $generated_kernel_total_flop
       # echo $generated_kernel_gflops
@@ -78,6 +80,7 @@ do
       # GFLOPS and AI
       mkldnn_gflops="$( echo "scale=4; $mkldnn_total_flop / $mkldnn_runtime * 1000000 / 1000000000" | bc )"
       mkldnn_dram_ai="$( echo "scale=4; ($mkldnn_total_flop / ($total_dram_transactions * 64))" | bc )"
+      # echo "--- MKLDNN details"
       # echo $mkldnn_runtime
       # echo $mkldnn_total_flop
       # echo $mkldnn_gflops
@@ -90,7 +93,7 @@ do
       mkdir -p logs/arithmetic_intensity/cpu
       echo -e "generated_dram,mkldnn_dram\n$generated_kernel_dram_ai,$mkldnn_dram_ai" > "logs/arithmetic_intensity/cpu/${workload_name}.csv"
       mkdir -p logs/gflops/cpu
-      echo -e "generated,mkldnn\n$generated_kernel_gfloops,$mkldnn_gflops" > "logs/gflops/cpu/${workload_name}.csv"
+      echo -e "generated,mkldnn\n$generated_kernel_gflops,$mkldnn_gflops" > "logs/gflops/cpu/${workload_name}.csv"
       cd scripts
 
       # Print results

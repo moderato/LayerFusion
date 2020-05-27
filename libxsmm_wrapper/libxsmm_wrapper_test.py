@@ -231,15 +231,14 @@ def intrin_libxsmm_brgemm(
         else:
             return init_update, reset, update
 
-    with tvm.target.build_config(data_alignment=64):
-        return te.decl_tensor_intrin(C.op,
-                                        intrin_func,   
-                                        name="GEMM",
-                                        binds={
-                                                A: xx_ptr,
-                                                B: yy_ptr,
-                                                C: zz_ptr
-                                        })
+    return te.decl_tensor_intrin(C.op,
+                                    intrin_func,   
+                                    name="GEMM",
+                                    binds={
+                                            A: xx_ptr,
+                                            B: yy_ptr,
+                                            C: zz_ptr
+                                    })
 
 #AutoTVM template for libxmm brgemm based tensorize implementation
 @autotvm.template("conv2d")
