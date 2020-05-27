@@ -17,9 +17,20 @@ def intrin_libxsmm_brgemm(
 
                             stride_height,
                             stride_width,
-                            input_height,
-                            input_width,
                             in_channel):
+
+    # print("ifmblock: ", ifmblock,
+    #         "ofmblock: ",                 ofmblock,
+    #         "ofw: ",                 ofw,
+    #         "s: ",                 s,
+    #         "r: ",                 r,
+    #         "rco: ",                 rco,
+
+    #         "ofh: ",                 ofh,            # Either 1 (small hxw) or cfg["tile_h"].size[2]
+
+    #         "stride_height: ",                 stride_height,
+    #         "stride_width: ",                 stride_width,
+    #         "in_channel: ",                 in_channel)
 
     alignment = 64
 
@@ -76,8 +87,6 @@ def intrin_libxsmm_brgemm(
                                 ofh * ofw,
                                 stride_width,
                                 r, s,
-                                input_height,
-                                input_width,
                                 True,
                                 yy_ptr.strides[0], yy_ptr.strides[1])
         reset = tvm.tir.call_extern("int32", "batch_reduce_kernel_init",
@@ -91,8 +100,6 @@ def intrin_libxsmm_brgemm(
                                 ofh * ofw,
                                 stride_width,
                                 r, s,
-                                input_height,
-                                input_width,
                                 False,
                                 yy_ptr.strides[0], yy_ptr.strides[1])
         if math.ceil(in_channel / ifmblock.value) == rco: # rco = rco_i: if all the reduce axes are included

@@ -64,6 +64,7 @@ class FusionConfig:
     def __init__(self, p):
         self.is_block = False
         self.layers = []
+        self.padded_input_HWs = []
         idx = 0
         OUTPUT = None
         while 1:
@@ -89,6 +90,10 @@ class FusionConfig:
             if KERNEL.padding_shape is None:
                 KERNEL.padding_shape = (pad_top, pad_left, pad_down, pad_right)
 
+            # Padded input HW for convenience
+            padded_input_HW = (DATA.H - pad_top + pad_down, DATA.W - pad_left + pad_right)
+            self.padded_input_HWs.append(padded_input_HW)
+
             ON = DATA.N
             OH = simplify((DATA.H - dilated_kernel_h + pad_top + pad_down) // KERNEL.stride_h + 1)
             OW = simplify((DATA.W - dilated_kernel_w + pad_left + pad_right) // KERNEL.stride_w + 1)
@@ -109,6 +114,10 @@ class FusionConfig:
     def get_output(self, idx):
         assert(idx >= 0 and idx < self.layer_num)
         return self.layers[idx+1][0]
+
+    def get_padded_input_HW(self, idx):
+        assert(idx >= 0 and idx < self.layer_num)
+        return self.padded_input_HWs[idx]
 
     def get_bn_relu(self):
         return [l[1].bn_relu for l in self.layers[:self.layer_num]]
@@ -177,6 +186,15 @@ def get_workloads():
     # conv_conv_workloads['vgg_5_6'] = (1, 56, 56, 256, 3, 256, 1, False, None, 3, 256, 1, False, None, False) # / 2519.97 us
     # conv_conv_workloads['vgg_8_9'] = (1, 28, 28, 512, 3, 512, 1, False, None, 3, 512, 1, False, None, False) # / 877.67 us
     # conv_conv_workloads['vgg_11_12'] = (1, 14, 14, 512, 3, 512, 1, False, None, 3, 512, 1, False, None, False) # / 359.19 us
+
+    # ResNet-50
+    conv_conv_workloads['res_2x'] = (1, 56, 56, 64, 3, 64, 1, False, 'relu', 1, 256, 1, False, 'relu', False)
+    conv_conv_workloads['res_3x'] = (1, 28, 28, 128, 3, 128, 1, False, None, 1, 512, 1, False, None, False)
+    conv_conv_workloads['res_4x'] = (1, 14, 14, 256, 3, 256, 1, False, None, 1, 1024, 1, False, None, False)
+    conv_conv_workloads['res_5x'] = (1, 7, 7, 512, 3, 512, 1, False, None, 1, 2048, 1, False, None, False)
+
+    # Test
+    conv_conv_workloads['conv_conv_test_tiny'] = (1, 8, 8, 1, 3, 1, 1, False, 'relu', 1, 1, 1, False, 'relu', False)
     ################################################################
 
     ##################### Depth conv workloads #####################

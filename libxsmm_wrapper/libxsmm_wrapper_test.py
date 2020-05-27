@@ -39,22 +39,38 @@ _resnet_layers ={
     'test':[1,4,4,4,4,1,1,0],
     'resnet2':[1,256,64,56,56,1,1,0],
     'resnet3':[1,64,64,56,56,1,1,0],
+
+    # ---
     'resnet4':[1,64,64,56,56,3,1,1],
     'resnet5':[1,64,256,56,56,1,1,0],
+    # ---
+
     'resnet6':[1,512,256,56,56,1,2,0],
     'resnet7':[1,128,256,56,56,1,2,0],
+
+    # ---
     'resnet8':[1,128,128,28,28,3,1,1],
     'resnet9':[1,512,128,28,28,1,1,0],
+    # ---
+
     'resnet10':[1,128,512,28,28,1,1,0],
     'resnet11':[1,1024,512,28,28,1,2,0],
     'resnet12':[1,256,512,28,28,1,2,0],
+
+    # ---
     'resnet13':[1,256,256,14,14,3,1,1],
     'resnet14':[1,1024,256,14,14,1,1,0],
+    # ---
+
     'resnet15':[1,256,1024,14,14,1,1,0],
     'resnet16':[1,2048,1024,14,14,1,2,0],
     'resnet17':[1,512,1024,14,14,1,2,0],
+
+    # ---
     'resnet18':[1,512,512,7,7,3,1,1],
     'resnet19':[1,2048,512,7,7,1,1,0],
+    # ---
+
     'resnet20':[1,512,2048,7,7,1,1,0]
 }
 
@@ -126,24 +142,21 @@ def intrin_libxsmm_brgemm(
 
                             stride_height,
                             stride_width,
-                            input_height,
-                            input_width,
+
                             in_channel):
 
-    print("ifmblock: ", ifmblock,
-            "ofmblock: ",                 ofmblock,
-            "ofw: ",                 ofw,
-            "s: ",                 s,
-            "r: ",                 r,
-            "rco: ",                 rco,
+    # print("ifmblock: ", ifmblock,
+    #         "ofmblock: ",                 ofmblock,
+    #         "ofw: ",                 ofw,
+    #         "s: ",                 s,
+    #         "r: ",                 r,
+    #         "rco: ",                 rco,
 
-            "ofh: ",                 ofh,            # Either 1 (small hxw) or cfg["tile_h"].size[2]
+    #         "ofh: ",                 ofh,            # Either 1 (small hxw) or cfg["tile_h"].size[2]
 
-            "stride_height: ",                 stride_height,
-            "stride_width: ",                 stride_width,
-            "input_height: ",                 input_height,
-            "input_width: ",                 input_width,
-            "in_channel: ",                 in_channel)
+    #         "stride_height: ",                 stride_height,
+    #         "stride_width: ",                 stride_width,
+    #         "in_channel: ",                 in_channel)
 
     block_input_height = (ofh - 1) * stride_width + r
     block_input_width = (ofw - 1) * stride_width + s
@@ -198,8 +211,6 @@ def intrin_libxsmm_brgemm(
                                 ofh * ofw,
                                 stride_width,
                                 r, s,
-                                input_height,
-                                input_width,
                                 True,
                                 yy_ptr.strides[0])
         reset = tvm.tir.call_extern("int32", "batch_reduce_kernel_init",
@@ -213,8 +224,6 @@ def intrin_libxsmm_brgemm(
                                 ofh * ofw,
                                 stride_width,
                                 r, s,
-                                input_height,
-                                input_width,
                                 False,
                                 yy_ptr.strides[0])
         if math.ceil(in_channel / ifmblock) == rco: # rco = rco_i: if all the reduce axes are included
@@ -340,8 +349,6 @@ def conv_auto_tuned(ofmblock,       # vec
                                                 stride_height,
                                                 stride_width,
 
-                                                input_height,
-                                                input_width,
                                                 in_channel)
     s[B1].tensorize(tensorize_axis, libxsmm_tensorize)
 
@@ -363,8 +370,8 @@ def driver():
     book = xlwt.Workbook(encoding="utf-8")
     sheet1 = book.add_sheet("Sheet 1")
     row1 = 0
-    sheet1.write(0,0,"Layer")
-    sheet1.write(0,1,"AutoTVM_FLOPS")
+    sheet1.write(0, 0, "Layer")
+    sheet1.write(0, 1, "AutoTVM_FLOPS")
     row1 = row1 + 1
     target = "llvm -mcpu=core-avx2"
     vlen = 64
@@ -374,16 +381,16 @@ def driver():
         print(_resnet_layers[layer])
 
         batch = _resnet_layers[layer][0]
-        in_channel = _resnet_layers[layer][2]
         out_channel = _resnet_layers[layer][1]
+        in_channel = _resnet_layers[layer][2]
         input_height = _resnet_layers[layer][3]
         input_width = _resnet_layers[layer][4]
         kernel_height = _resnet_layers[layer][5]
         kernel_width = _resnet_layers[layer][5]
-        pad_height = _resnet_layers[layer][7]
-        pad_width = _resnet_layers[layer][7]
         stride_height = _resnet_layers[layer][6]
         stride_width = _resnet_layers[layer][6]
+        pad_height = _resnet_layers[layer][7]
+        pad_width = _resnet_layers[layer][7]
         assert(pad_height == pad_width)
         assert(stride_height == stride_width)
         assert(kernel_height == kernel_width)
@@ -423,7 +430,7 @@ def driver():
         tuner = autotvm.tuner.RandomTuner(task)
         # Please limit n_trial to reduce tuning time
         n_trial= 32
-        log_file = layer + ".log"
+        log_file = "logs/" + layer + ".log"
 
         # comment out the following call to tuner to just run the best case from log file history
         tuner.tune(n_trial=n_trial,
@@ -463,11 +470,11 @@ def driver():
                 gflops_tvm1 = gflops_tvm1 / 1e9 / t1
 
                 print("Time for conv(tuned) is: {0:.6f}".format(t1))
-                print("GFLOPS: {0:.3f} ".format( gflops_tvm1))
-                sheet1.write(row1,1,gflops_tvm1)
+                print("GFLOPS: {0:.3f} ".format(gflops_tvm1))
+                sheet1.write(row1, 1, gflops_tvm1)
 
         row1 = row1 + 1
-        book.save( "AutoTVM_tensorize_resnet" + layer +".xls")
+        book.save("logs/AutoTVM_tensorize_" + layer + ".xls")
 
 if __name__ == "__main__":
     driver()

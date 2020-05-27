@@ -25,15 +25,13 @@ extern "C" int batch_reduce_kernel_update(
 
                                 int r,              /* FH */
                                 int s,              /* FW */
-                                int ifh,            /* original IH */
-                                int ifw,            /* original IW */
 
                                 bool init,          /* init indicator */
                                 int input_stride0,  /* input stride0 */
                                 int input_stride1   /* input stride1 */) {
     // printf("****** Call a microkernel ******\n");
-    // printf("blocks: %d\nofmblock: %d\nifmblock: %d\nofh_x_ofw: %d\nstride_w: %d\nr: %d\ns: %d\nifh: %d\nifw: %d\ninit: %d\ninput_stride0: %d\ninput_stride1: %d\n",\
-    //         blocks,     ofmblock,     ifmblock,     ofh_x_ofw,     stride_w,     r,     s,     ifh,     ifw,     init,     input_stride0,     input_stride1);
+    // printf("blocks: %d\nofmblock: %d\nifmblock: %d\nofh_x_ofw: %d\nstride_w: %d\nr: %d\ns: %d\ninit: %d\ninput_stride0: %d\ninput_stride1: %d\n",\
+    //         blocks,     ofmblock,     ifmblock,     ofh_x_ofw,     stride_w,     r,     s,     init,     input_stride0,     input_stride1);
 
     float beta = init ? 0.0f : 1.0f;
     int l_flags = ( LIBXSMM_GEMM_FLAGS('N', 'N') );

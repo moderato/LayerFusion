@@ -214,18 +214,24 @@ class LayerConfig:
         dilation_h, dilation_w = self._filter_cfg.get_dilation()
 
         if cfg is not None:
+            H_num_outputs = (4 if self._device == "cuda" else (3 if self._is_final_stage else 2))
+            W_num_outputs = (3 if self._device == "cuda" or self._is_final_stage else 2)
+
             cfg.define_split("split_layer_{}_h".format(self._layer_idx), OH.value,
-                                num_outputs=(4 if self._device == "cuda" else 3),
+                                num_outputs=H_num_outputs,
                                 policy='factors')
             cfg.define_split("split_layer_{}_w".format(self._layer_idx), OW.value,
-                                num_outputs=3,
-                                policy='factors') # filter=lambda x: x.size[-1] >= 4
-            # cfg.define_split("split_layer_{}_c".format(self._layer_idx), OC_chunk,
-            #                     num_outputs=(2 if (self._device == "cuda" or not self._is_final_stage) else 3),
-            #                     policy="verbose")
+                                num_outputs=W_num_outputs,
+                                policy='factors')
             cfg.define_split("split_layer_{}_c".format(self._layer_idx),
-                                OC.value if self._device == "cuda" else OC_chunk.value,
+                                OC.value if self._pack else OC_chunk.value,
                                 num_outputs=3 if self._device == "cuda" else 2,
+                                policy='factors')
+
+            if self._is_first_stage:
+                cfg.define_split("split_layer_0_rc",
+                                OC.value if self._pack else OC_chunk.value,
+                                num_outputs=2,
                                 policy='factors')
 
         if self._pack:
@@ -260,18 +266,18 @@ class LayerConfig:
             OC = OC_chunk * OC_vec
         else:
             _, _, _, OC = self._output_shape
-        Scale = te.placeholder((OC),
-                                name='Layer_{}_Scale_{}'.format(self._layer_idx, 'DepthwiseConv2d' if self.depthwise else 'Conv2d'))
-        Shift = te.placeholder((OC),
-                                name='Layer_{}_Shift_{}'.format(self._layer_idx, 'DepthwiseConv2d' if self.depthwise else 'Conv2d'))
+        Scale = te.placeholder((OC,),
+                                name='Layer_{}_Scale_{}'.format(self._layer_idx, 'DepthwiseConv2d' if self._filter_cfg.depthwise else 'Conv2d'))
+        Shift = te.placeholder((OC,),
+                                name='Layer_{}_Shift_{}'.format(self._layer_idx, 'DepthwiseConv2d' if self._filter_cfg.depthwise else 'Conv2d'))
         if self._pack:
             ScaleShift =  te.compute(self._output_shape, lambda n, c_chunk, h, w, c_vec: self._output[n, c_chunk, h, w, c_vec] * Scale[c_chunk * OC_vec + c_vec] + Shift[c_chunk * OC_vec + c_vec],
                                 name='Layer_{}_ScaleShift_{}'.format(
-                                    self._layer_idx, 'DepthwiseConv2d' if self.depthwise else 'Conv2d'),
+                                    self._layer_idx, 'DepthwiseConv2d' if self._filter_cfg.depthwise else 'Conv2d'),
                                 tag='scaleshift_nchw{}c'.format())
         else:
             ScaleShift =  te.compute(self._output_shape, lambda n, h, w, c: self._output[n, h, w, c] * Scale[c] + Shift[c],
-                                name='Layer_{}_ScaleShift_{}'.format(self._layer_idx, 'DepthwiseConv2d' if self.depthwise else 'Conv2d'),
+                                name='Layer_{}_ScaleShift_{}'.format(self._layer_idx, 'DepthwiseConv2d' if self._filter_cfg.depthwise else 'Conv2d'),
                                 tag='scaleshift_nhwc')
         self._params[-1].append(Scale)
         self._params[-1].append(Shift)
@@ -289,17 +295,17 @@ class LayerConfig:
             self._stages[-1].append(Output)
 
         Last = self._stages[-1][-1] # ScaleShift if it's not a block, Output if it's a block
-        if self.bn_relu == 'relu':
+        if self._filter_cfg.bn_relu == 'relu':
             ReLU = te.compute(Last.shape,
                             lambda *i: te.max(Last(*i), tvm.runtime.const(0, Last.dtype)),
                             name='Layer_{}_ReLU_{}'.format(
-                                self._layer_idx, 'DepthwiseConv2d' if self.depthwise else 'Conv2d'),
+                                self._layer_idx, 'DepthwiseConv2d' if self._filter_cfg.depthwise else 'Conv2d'),
                             tag='relu_nhwc')
         else: # 'relu6'
             ReLU = te.compute(Last.shape,
                             lambda *i: te.min(te.max(Last(*i), te.const(0, Last.dtype)), tvm.runtime.const(6, Last.dtype)),
                             name='Layer_{}_ReLU6_{}'.format(
-                                self._layer_idx, 'DepthwiseConv2d' if self.depthwise else 'Conv2d'),
+                                self._layer_idx, 'DepthwiseConv2d' if self._filter_cfg.depthwise else 'Conv2d'),
                             tag='relu6_nhwc')
         self._stages[-1].append(ReLU)
 
@@ -320,6 +326,10 @@ class LayerConfig:
 
             if self._filter_cfg.bn_relu:
                 self.process_relu(block_input)
+
+            # if cfg is not None:
+            #     cfg.define_knob("layer_{}_auto_unroll_max_step".format(self._layer_idx), [0, 224])
+            #     cfg.define_knob("layer_{}_unroll_explicit".format(self._layer_idx), [0, 1])
 
     def get_stages(self):
         return self._stages
