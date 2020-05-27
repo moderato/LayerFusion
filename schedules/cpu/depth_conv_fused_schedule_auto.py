@@ -4,12 +4,12 @@ import math
 from .libxsmm_intrin import intrin_libxsmm_brgemm
 
 ########## gepm_var1 ##########
-def schedule_depth_conv_fused_nhwc_auto(cfg, fusion_cfg, outs, stages, params, layer_num=2, device="llvm -mcpu=core-avx2", bn_relu=[]):
+def schedule_depth_conv_fused_nhwc_auto(cfg, fusion_cfg, outs, stages, params, device="llvm -mcpu=core-avx2"):
     outs = [outs] if isinstance(outs, te.tensor.Tensor) else outs
     s = te.create_schedule([x.op for x in outs])
-    assert len(bn_relu) == layer_num
+    layer_num = fusion_cfg.layer_num
+    bn_relu=fusion_cfg.get_bn_relu()
 
-    packed = [True, True] # TODO: Deal with this
     stage_dict = {}
     stage_dict['PaddedInput'] = stages[1][0]
     layer_output_dict = {} # A dict for the synonym of the output of each layer
@@ -77,8 +77,6 @@ def schedule_depth_conv_fused_nhwc_auto(cfg, fusion_cfg, outs, stages, params, l
                                                 filters_cfg['Layer_1'].stride_h,
                                                 filters_cfg['Layer_1'].stride_w,
 
-                                                inputs_cfg['Layer_1'].H,
-                                                inputs_cfg['Layer_1'].W,
                                                 inputs_cfg['Layer_1'].C)
     s[layer_output_dict['Layer_1']].tensorize(tensorize_axis, libxsmm_tensorize)
 

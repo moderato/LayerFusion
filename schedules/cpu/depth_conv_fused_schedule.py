@@ -3,11 +3,11 @@ from tvm import te
 from .libxsmm_intrin import intrin_libxsmm_brgemm
 
 ########## gepm_var1 ##########
-def schedule_depth_conv_fused_nhwc(cfg, fusion_cfg, outs, stages, params, bn_relu=[]):
+def schedule_depth_conv_fused_nhwc(cfg, fusion_cfg, outs, stages, params):
     outs = [outs] if isinstance(outs, te.tensor.Tensor) else outs
     s = te.create_schedule([x.op for x in outs])
     layer_num = fusion_cfg.layer_num
-    assert len(bn_relu) == layer_num
+    bn_relu=fusion_cfg.get_bn_relu()
 
     stage_dict = {}
     stage_dict['PaddedInput'] = stages[1][0]
@@ -116,8 +116,6 @@ def schedule_depth_conv_fused_nhwc(cfg, fusion_cfg, outs, stages, params, bn_rel
                                                 filters_cfg['Layer_1'].stride_h,
                                                 filters_cfg['Layer_1'].stride_w,
 
-                                                inputs_cfg['Layer_1'].H,
-                                                inputs_cfg['Layer_1'].W,
                                                 inputs_cfg['Layer_1'].C)
 
     # ---

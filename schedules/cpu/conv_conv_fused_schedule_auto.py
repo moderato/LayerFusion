@@ -1,218 +1,147 @@
 import tvm
-from tvm import autotvm
+from tvm import autotvm, te
+import math
+from .libxsmm_intrin import intrin_libxsmm_brgemm
 
-def schedule_conv_conv_fused_nhwc_auto(outs, stages, params, device="cuda", bn_relu1=None, bn_relu2=None):
-    outs = [outs] if isinstance(outs, tvm.tensor.Tensor) else outs
-    s = tvm.create_schedule([x.op for x in outs])
+def schedule_conv_conv_fused_nhwc_auto(cfg, fusion_cfg, outs, stages, params, device="llvm -mcpu=core-avx2"):
+    outs = [outs] if isinstance(outs, te.tensor.Tensor) else outs
+    s = te.create_schedule([x.op for x in outs])
+    layer_num = fusion_cfg.layer_num
+    bn_relu=fusion_cfg.get_bn_relu()
 
-    ######## Get stages
-    PaddedInput = stages[1][0]
-    if bn_relu1 is not None:
-        Inter, InterScaleShift, InterReLU = stages[2]
-        IntermediateStage = InterReLU
-        F_1, Scale_1, Shift_1 = params[1]
-    else:
-        Inter = stages[2][0]
-        IntermediateStage = Inter
-        F_1 = params[1][0]
+    packed = [True, True] # TODO: Deal with this
+    stage_dict = {}
+    layer_output_dict = {} # A dict for the synonym of the output of each layer
+    stage_pt = 1
+    param_pt = 1
+    hasPaddedInput = [False, False] # TODO: put it in layer config
+    inputs_cfg = {}
+    filters_cfg = {}
+    outputs_cfg = {}
 
-    hasPaddedInter = False
-    if bn_relu2 is not None:
-        if 'Padded' in stages[3][0].op.name:
-            hasPaddedInter = True
-            PaddedInter = stages[3][0]
-            Out, OutScaleShift, OutReLU = stages[4]
+    for l in range(0, layer_num):
+        if 'Padded' in stages[stage_pt][0].op.name:
+            hasPaddedInput[l] = True
+            stage_dict['PaddedInput_{}'.format(l)] = stages[stage_pt][0]
+            stage_pt += 1
+        if bn_relu[l]:
+            stage_dict['Output_{}'.format(l)], \
+                stage_dict['Output_{}_ScaleShift'.format(l)], \
+                    stage_dict['Output_{}_ReLU'.format(l)] = stages[stage_pt]
+            layer_output_dict['Layer_{}'.format(l)] = stage_dict['Output_{}_ReLU'.format(l)]
         else:
-            Out, OutScaleShift, OutReLU = stages[3]
-        OutputStage = OutReLU
-        F_2, Scale_2, Shift_2 = params[2]
+            stage_dict['Output_{}'.format(l)] = stages[stage_pt][0]
+            layer_output_dict['Layer_{}'.format(l)] = stage_dict['Output_{}'.format(l)]
+        inputs_cfg['Layer_{}'.format(l)] = fusion_cfg.get_input(l)
+        filters_cfg['Layer_{}'.format(l)] = fusion_cfg.get_filter(l)
+        outputs_cfg['Layer_{}'.format(l)] = fusion_cfg.get_output(l)
+        stage_pt += 1
+
+    s[stage_dict['Output_0']].set_scope('global')
+    for l in range(0, layer_num):
+        if bn_relu[l]:
+            s[stage_dict['Output_{}_ScaleShift'.format(l)]].compute_inline()
+
+    n, oc_chunk, h, w, oc = s[layer_output_dict['Layer_1']].op.axis
+    oc_chunk_o, oc_chunk_i = cfg["split_layer_1_c"].apply(s, layer_output_dict['Layer_1'], oc_chunk)
+    ic_chunk, ry, rx, ic = s[layer_output_dict['Layer_1']].op.reduce_axis
+    ic_chunk_o, ic_chunk_i = cfg["split_layer_0_c"].apply(s, layer_output_dict['Layer_1'], ic_chunk)
+    ht, ho, h = cfg["split_layer_1_h"].apply(s, layer_output_dict['Layer_1'], h)
+    wt, wo, w = cfg["split_layer_1_w"].apply(s, layer_output_dict['Layer_1'], w)
+    s[layer_output_dict['Layer_1']].reorder(n, oc_chunk_o, ht, wt, oc_chunk_i, ic_chunk_o, ho, wo, h, ic_chunk_i, ry, rx, w, oc, ic)
+    fused_blx = s[layer_output_dict['Layer_1']].fuse(n, oc_chunk_o, ht, wt)
+    s[layer_output_dict['Layer_1']].parallel(fused_blx)
+
+    cfg.define_reorder("reorder_layer_1_outer", [oc_chunk_i, ic_chunk_o, ho, wo], policy="all")
+    cfg["reorder_layer_1_outer"].apply(s, layer_output_dict['Layer_1'], [oc_chunk_i, ic_chunk_o, ho, wo])
+
+    # Temporary skip the case of 1x1 stride > 1
+    if (((filters_cfg['Layer_1'].H == 1 and filters_cfg['Layer_1'].W == 1 and \
+            filters_cfg['Layer_1'].stride_h == 1 and filters_cfg['Layer_1'].stride_w == 1)) and \
+        (cfg["split_layer_1_h"].size[-2] > 1 and cfg["split_layer_1_w"].size[-1] == outputs_cfg['Layer_1'].W)): # HM > 1 & WI = OW (small W)
+        # print("small: bind to h")
+        tensorize_axis = h
+        block_output_height = cfg["split_layer_1_h"].size[-1]
     else:
-        if 'Padded' in stages[3][0].op.name:
-            hasPaddedInter = True
-            PaddedInter = stages[3][0]
-            Out = stages[4][0]
-        else:
-            Out = stages[3][0]
-        OutputStage = Out
-        F_2 = params[2][0]
+        # print("big: bind to ic_chunk_i")
+        tensorize_axis = ic_chunk_i
+        block_output_height = 1
 
-    ######## Input data, weights, BN, etc
-    s[PaddedInput].compute_inline()
-    PaddedSharedInput = s.cache_read(PaddedInput, "shared", [Inter])
-    FS_1 = s.cache_read(F_1, "shared", [Inter])
-    FS_2 = s.cache_read(F_2, "shared", [Out])
-    s[Inter].set_scope("local")
-    ConvLocalAccumulator = Inter
+    libxsmm_tensorize = intrin_libxsmm_brgemm(
+                                                ic.dom.extent,                      # n of brgemm   -> rci
+                                                oc.dom.extent,                      # k of brgemm   -> ki
+                                                cfg["split_layer_1_w"].size[-1],    # m of brgemm   -> wi
+                                                filters_cfg['Layer_1'].W,           #               -> rx
+                                                filters_cfg['Layer_1'].H,           #               -> ry
+                                                cfg["split_layer_0_c"].size[-1],    #               -> rco_i
 
-    # Put the input of the second stage into the shared memory
-    if hasPaddedInter:
-        s[PaddedInter].set_scope("shared")
+                                                block_output_height,                #               -> hi
+
+                                                filters_cfg['Layer_1'].stride_h,
+                                                filters_cfg['Layer_1'].stride_w,
+
+                                                inputs_cfg['Layer_1'].C)
+    s[layer_output_dict['Layer_1']].tensorize(tensorize_axis, libxsmm_tensorize)
+
+    # # ######## Intermediate output
+    # # s[layer_output_dict['Layer_0']].compute_at(s[OL], orc)
+    # s[layer_output_dict['Layer_0']].compute_at(s[layer_output_dict['Layer_1']], wo)
+    # n, c_chunk, h, w, c_vec = s[layer_output_dict['Layer_0']].op.axis
+    # ry, rx = s[layer_output_dict['Layer_0']].op.reduce_axis
+    # # ho, h = cfg["split_layer_0_h"].apply(s, layer_output_dict['Layer_0'], h)
+    # # wo, w = cfg["split_layer_0_w"].apply(s, layer_output_dict['Layer_0'], w)
+    # # co, ci = s[layer_output_dict['Layer_0']].split(c_chunk, factor=cfg["split_layer_0_c"].size[-2])
+    # # s[layer_output_dict['Layer_0']].reorder(n, co, ho, wo, h, ry, rx, w, ci, c_vec)
+    # # s[layer_output_dict['Layer_0']].unroll(ci)
+    # s[layer_output_dict['Layer_0']].reorder(n, c_chunk, h, ry, rx, w, c_vec)
+    # s[layer_output_dict['Layer_0']].vectorize(c_vec)
+
+    # cfg.define_reorder("reorder_depthwise", [h, ry, rx, w], policy="candidate",\
+    #                                         candidate=[[h, w, ry, rx], [h, ry, w, rx], [h, ry, rx, w], [ry, h, rx, w], [ry, rx, h, w]])
+    # cfg["reorder_depthwise"].apply(s, layer_output_dict['Layer_0'], [h, ry, rx, w])
+
+    s[layer_output_dict['Layer_0']].compute_at(s[layer_output_dict['Layer_1']], oc_chunk_i)
+    s[stage_dict['PaddedInput_0']].compute_at(s[layer_output_dict['Layer_1']], oc_chunk_i)
+
+    n, oc_chunk, h, w, oc = s[layer_output_dict['Layer_0']].op.axis
+    ho, h = cfg["split_layer_0_h"].apply(s, layer_output_dict['Layer_0'], h)
+    wo, w = cfg["split_layer_0_w"].apply(s, layer_output_dict['Layer_0'], w)
+    ic_chunk, ry, rx, ic = s[layer_output_dict['Layer_0']].op.reduce_axis
+    ic_chunk_o, ic_chunk_i = cfg["split_layer_0_rc"].apply(s, layer_output_dict['Layer_0'], ic_chunk)
+    s[layer_output_dict['Layer_0']].reorder(oc_chunk, ic_chunk_o, ho, wo, h, ic_chunk_i, ry, rx, w, oc, ic)
+
+    cfg.define_reorder("reorder_layer_0_outer", [oc_chunk, ic_chunk_o, ho, wo], policy="all")
+    cfg["reorder_layer_0_outer"].apply(s, layer_output_dict['Layer_0'], [oc_chunk, ic_chunk_o, ho, wo])
+
+    # Temporary skip the case of 1x1 stride > 1
+    if (((filters_cfg['Layer_0'].H == 1 and filters_cfg['Layer_0'].W == 1 and \
+            filters_cfg['Layer_0'].stride_h == 1 and filters_cfg['Layer_0'].stride_w == 1)) and \
+        (cfg["split_layer_0_h"].size[-2] > 1 and cfg["split_layer_0_w"].size[-1] == outputs_cfg['Layer_0'].W)): # HM > 1 & WI = OW (small W)
+        # print("small: bind to h")
+        tensorize_axis = h
+        block_output_height = cfg["split_layer_0_h"].size[-1]
     else:
-        s[IntermediateStage].set_scope("shared")
+        # print("big: bind to ic_chunk_i")
+        tensorize_axis = ic_chunk_i
+        block_output_height = 1
 
-    if bn_relu1 is not None:
-        s[InterScaleShift].compute_inline()
-        ScaleL_1 = s.cache_read(Scale_1, "local", [InterScaleShift])
-        ShiftL_1 = s.cache_read(Shift_1, "local", [InterScaleShift])
-        if hasPaddedInter:
-            s[IntermediateStage].compute_inline()
-    IntermediateStage = PaddedInter
+    libxsmm_tensorize = intrin_libxsmm_brgemm(
+                                                ic.dom.extent,                      # n of brgemm   -> ic
+                                                oc.dom.extent,                      # k of brgemm   -> oc
+                                                cfg["split_layer_0_w"].size[-1],    # m of brgemm   -> wi
+                                                filters_cfg['Layer_0'].W,           #               -> rx
+                                                filters_cfg['Layer_0'].H,           #               -> ry
+                                                cfg["split_layer_0_c"].size[-1],    #               -> rco_i
 
-    if bn_relu2 is not None:
-        s[OutScaleShift].compute_inline()
-        s[Out].set_scope("local")
-        ScaleL_2 = s.cache_read(Scale_2, "local", [OutScaleShift])
-        ShiftL_2 = s.cache_read(Shift_2, "local", [OutScaleShift])
-        OL = Out
-    else:
-        OL = s.cache_write(OutputStage, "local")
+                                                block_output_height,                #               -> hi
 
-    ######## Blocks, threads and vthreads
-    if device == "cuda":
-        block_x = tvm.thread_axis("blockIdx.x")
-        thread_x = tvm.thread_axis("threadIdx.x")
-        thread_y = tvm.thread_axis("threadIdx.y")
-        thread_z = tvm.thread_axis("threadIdx.z")
-        vthread_x = tvm.thread_axis("vthread", name="vthread_x")
-        vthread_y = tvm.thread_axis("vthread", name="vthread_y")
-        vthread_z = tvm.thread_axis("vthread", name="vthread_z")
+                                                filters_cfg['Layer_0'].stride_h,
+                                                filters_cfg['Layer_0'].stride_w,
 
-    ################################################################
+                                                inputs_cfg['Layer_0'].C)
 
-    ######## AutoTVM config
-    cfg = autotvm.get_config()
+    s[layer_output_dict['Layer_0']].tensorize(tensorize_axis, libxsmm_tensorize)
 
-    ######## Vectorization
-    vec = [4] if device == "cuda" else [2, 4, 8, 16, 32, 64]
-    cfg.define_knob("vectorization", candidate=vec)
-
-    ######## Global output
-    n, h, w, c = s[OutputStage].op.axis
-    cfg.define_split("split_h", h, num_outputs=4)
-    cfg.define_split("split_w", w, num_outputs=3)
-    cfg.define_split("split_c", c, num_outputs=3, filter=lambda x: x.size[-1] in [8, 16, 32, 64, 128, 256]) # _, intermediate_reuse, num_thread_x
-    ho, thz, thy, h = cfg["split_h"].apply(s, OutputStage, h)
-    wo, vthy, w = cfg["split_w"].apply(s, OutputStage, w)
-    recompute, reuse, thx = cfg["split_c"].apply(s, OutputStage, c) # reuse > 1 ??
-    s[OutputStage].reorder(n, ho, wo, recompute, reuse, vthy, thz, thy, thx, h, w)
-    fused_blx = s[OutputStage].fuse(n, ho, wo, recompute)
-    if device == "cuda":
-        s[OutputStage].bind(fused_blx, block_x)
-        s[OutputStage].bind(reuse, vthread_x)
-        s[OutputStage].bind(vthy, vthread_y)
-        s[OutputStage].bind(thz, thread_z)
-        s[OutputStage].bind(thy, thread_y)
-        s[OutputStage].bind(thx, thread_x)
-    num_thread_z = output_step_tile_size_h = cfg["split_h"].size[1]
-    num_thread_y = output_step_tile_size_w = cfg["split_h"].size[2]
-    num_thread_x = cfg["split_c"].size[2]
-    num_vthread_y = cfg["split_w"].size[1]
-    output_tile_size_h = cfg["split_h"].size[1] * cfg["split_h"].size[2] * cfg["split_h"].size[3]
-    output_tile_size_w = cfg["split_w"].size[1] * cfg["split_w"].size[2]
-
-    ######## Local output
-    s[OL].compute_at(s[OutputStage], thx)
-    ry, rx, rc = s[OL].op.reduce_axis
-    orc, irc = s[OL].split(rc, factor=num_thread_x)
-    cfg.define_split("split_acc1_irc", c, num_outputs=2) # _, reduce_split1
-    oirc, iirc = cfg["split_acc1_irc"].apply(s, OL, irc)
-    n, h, w, c = s[OL].op.axis
-    s[OL].reorder(n, orc, oirc, ry, rx, iirc, h, w, c)
-
-    if bn_relu2 is not None:
-        s[ScaleL_2].compute_at(s[OutputStage], thx)
-        s[ShiftL_2].compute_at(s[OutputStage], thx)
-
-    ######## Filter 2
-    # ---
-    s[FS_2].compute_at(s[OL], rx)
-    h, w, i, o = s[FS_2].op.axis
-    io = s[FS_2].fuse(i, o)
-    io, iox = s[FS_2].split(io, factor=num_thread_x * 4)
-    ioz, io = s[FS_2].split(io, nparts=num_thread_z)
-    ioy, io = s[FS_2].split(io, nparts=num_thread_y)
-    iox, io4 = s[FS_2].split(iox, factor=4)
-    s[FS_2].reorder(h, w, io, ioz, ioy, iox, io4)
-    s[FS_2].bind(ioz, thread_z)
-    s[FS_2].bind(iox, thread_x)
-    s[FS_2].bind(ioy, thread_y)
-    s[FS_2].vectorize(io4)
-    # ---
-    # s[FS_2].compute_at(s[OL], oirc)
-    # ---
-
-    ######## Intermediate output in shared memory
-    s[IntermediateStage].compute_at(s[OL], orc)
-    n, h, w, c = s[IntermediateStage].op.axis
-    inter_oc, inter_ic = s[IntermediateStage].split(c, factor=num_thread_x)
-    # ho, wo, h_tile, w_tile = s[IntermediateStage].tile(h, w, x_factor=output_tile_size_h, y_factor=output_tile_size_w)
-    # ---
-    # h_step, w_step, h_step_tile, w_step_tile = s[IntermediateStage].tile(h_tile, w_tile, x_factor=output_step_tile_size_h, y_factor=output_step_tile_size_w)
-    # s[IntermediateStage].reorder(n, ho, wo, inter_oc, h_step, w_step, h_step_tile, w_step_tile, inter_ic)
-    # vthz = s[IntermediateStage].fuse(h_step, w_step)
-    # s[IntermediateStage].bind(h_step_tile, thread_z)
-    # s[IntermediateStage].bind(w_step_tile, thread_y)
-    # s[IntermediateStage].bind(inter_ic, thread_x)
-    # s[IntermediateStage].bind(vthz, vthread_z)
-    # ---
-    thz, h_tile = s[IntermediateStage].split(h, nparts=num_thread_z)
-    thy, h_tile = s[IntermediateStage].split(h_tile, nparts=num_thread_y)
-    vthy, w_tile = s[IntermediateStage].split(w, nparts=num_vthread_y)
-    s[IntermediateStage].reorder(n, inter_oc, vthy, thz, thy, inter_ic, h_tile, w_tile)
-    s[IntermediateStage].bind(vthy, vthread_y)
-    s[IntermediateStage].bind(thz, thread_z)
-    s[IntermediateStage].bind(thy, thread_y)
-    s[IntermediateStage].bind(inter_ic, thread_x)
-    # ---
-
-    ######## Intermediate output local accumulator
-    s[ConvLocalAccumulator].compute_at(s[IntermediateStage], inter_ic)
-    ry, rx, rc = s[ConvLocalAccumulator].op.reduce_axis
-    nl, h, w, c = s[ConvLocalAccumulator].op.axis
-    # oc, ic = s[ConvLocalAccumulator].split(c, factor=num_thread_x)
-    # recompute, reuse = s[ConvLocalAccumulator].split(oc, factor=input_reuse)
-    orc, irc = s[ConvLocalAccumulator].split(rc, factor=num_thread_x)
-    cfg.define_split("split_acc2_irc", c, num_outputs=2) # _, reduce_split2
-    oirc, iirc = cfg["split_acc2_irc"].apply(s, ConvLocalAccumulator, irc)
-    # # ---
-    # # h_step, w_step, h_step_tile, w_step_tile = s[ConvLocalAccumulator].tile(h, w, x_factor=output_step_tile_size_h, y_factor=output_step_tile_size_w)
-    # # s[ConvLocalAccumulator].reorder(nl, orc, recompute, reuse, oirc, ry, rx, iirc, h_step, w_step, h_step_tile, w_step_tile, ic)
-    # # vthz = s[ConvLocalAccumulator].fuse(h_step, w_step)
-    # # s[ConvLocalAccumulator].bind(vthz, vthread_z)
-    # # ---
-    s[ConvLocalAccumulator].reorder(nl, orc, oirc, ry, rx, iirc, h, w, c)
-    # # s[ConvLocalAccumulator].bind(ic, thread_x)
-    # # s[ConvLocalAccumulator].bind(w_step_tile, thread_y)
-    # # s[ConvLocalAccumulator].bind(h_step_tile, thread_z)
-    # s[ConvLocalAccumulator].unroll(h)
-    s[ConvLocalAccumulator].unroll(w)
-
-    if bn_relu1 is not None:
-        s[ScaleL_1].compute_at(s[IntermediateStage], n)
-        s[ShiftL_1].compute_at(s[IntermediateStage], n)
-
-    # ######## Filter 1
-    s[FS_1].compute_at(s[ConvLocalAccumulator], rx)
-    h, w, i, o = s[FS_1].op.axis
-    io = s[FS_1].fuse(i, o)
-    io, iox = s[FS_1].split(io, factor=num_thread_x * 4)
-    ioz, io = s[FS_1].split(io, nparts=num_thread_z)
-    ioy, io = s[FS_1].split(io, nparts=num_thread_y)
-    iox, io4 = s[FS_1].split(iox, factor=4)
-    s[FS_1].reorder(h, w, io, ioz, ioy, iox, io4)
-    s[FS_1].bind(ioz, thread_z)
-    s[FS_1].bind(iox, thread_x)
-    s[FS_1].bind(ioy, thread_y)
-    s[FS_1].vectorize(io4)
-
-    ####### Shared Input
-    s[PaddedSharedInput].compute_at(s[ConvLocalAccumulator], orc)
-    n, h, w, c = s[PaddedSharedInput].op.axis
-    co, ci = s[PaddedSharedInput].split(c, factor=num_thread_x)
-    ho, wo, h_tile, w_tile = s[PaddedSharedInput].tile(h, w, x_factor=output_step_tile_size_h, y_factor=output_step_tile_size_w)
-    s[PaddedSharedInput].reorder(co, n, ho, wo, h_tile, w_tile, ci)
-    s[PaddedSharedInput].bind(h_tile, thread_z)
-    s[PaddedSharedInput].bind(w_tile, thread_y)
-    s[PaddedSharedInput].bind(ci, thread_x)
+    s = s.normalize()
 
     return s
