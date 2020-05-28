@@ -9,12 +9,12 @@ plt.rc('font', **font)
 
 markersize = 10
 colors = ['b','g','r','y','m','c']
-styles = ['o','s','v','^','D',">","<","*","h","H","+","1","2","3","4","8","p","d","|","_",".",","]
+styles = ['o','s','v','^','D','>','<','*','h','H','+','1','2','3','4','8','p','d','|','_','.',',']
 devices = ['cpu', 'gpu']
 workload_types = ['depth_conv']
 device_roofline = {
-    'cpu': "/home/zhongyilin/Documents/experimental/cs-roofline-toolkit/Empirical_Roofline_Tool-1.1.0/Results.i7-7700K.lb.gov/Run.001/roofline.json",
-    'gpu': "/home/zhongyilin/Documents/experimental/cs-roofline-toolkit/Empirical_Roofline_Tool-1.1.0/Results.1050Ti-cuda-fp32.01/Run.001/roofline.json"
+    'cpu': '/home/zhongyilin/Documents/experimental/cs-roofline-toolkit/Empirical_Roofline_Tool-1.1.0/Results.i7-7700K.lb.gov/Run.001/roofline.json',
+    'gpu': '/home/zhongyilin/Documents/experimental/cs-roofline-toolkit/Empirical_Roofline_Tool-1.1.0/Results.1050Ti-cuda-fp32.01/Run.001/roofline.json'
 }
 device_name = {
     'cpu': 'i7_7700K',
@@ -23,7 +23,7 @@ device_name = {
 HOME = os.getenv('LF_HOME')
 
 for device in devices:
-    filename = "{}_plot".format(device_name[device])
+    filename = '{}_plot'.format(device_name[device])
 
     AI_dram_generated = []
     AI_dram_library = []
@@ -40,14 +40,14 @@ for device in devices:
     has_L2 = False
 
     for w in workload_types:
-        workload_filename = "{}/workloads/{}_workloads.csv".format(HOME, w)
-        with open(workload_filename , "r") as f:
+        workload_filename = '{}/workloads/{}_workloads.csv'.format(HOME, w)
+        with open(workload_filename , 'r') as f:
             lines = f.readlines()
             for idx, line in enumerate(lines[1:]): # skip header
                 splitted = line.strip().split(',')
                 workload_name = splitted[0]
                 # Read AI
-                with open("{}/logs/arithmetic_intensity/{}/{}.csv".format(HOME, device, workload_name), "r") as ff:
+                with open('{}/logs/arithmetic_intensity/{}/{}.csv'.format(HOME, device, workload_name), 'r') as ff:
                     lls = ff.readlines()
                     for l in lls[1:]: # skip header
                         splitted = l.strip().split(',')
@@ -58,7 +58,7 @@ for device in devices:
                             AI_L2_generated.append(float(splitted[2]))
                             AI_L2_library.append(float(splitted[3]))
                 # Read FLOPS
-                with open("{}/logs/gflops/{}/{}.csv".format(HOME, device, workload_name), "r") as ff:
+                with open('{}/logs/gflops/{}/{}.csv'.format(HOME, device, workload_name), 'r') as ff:
                     lls = ff.readlines()
                     for l in lls[1:]: # skip header
                         splitted = l.strip().split(',')
@@ -70,18 +70,18 @@ for device in devices:
                     break
 
         device_info_file_dir = device_roofline[device]
-        with open(device_info_file_dir, "r") as f:
+        with open(device_info_file_dir, 'r') as f:
             device_info = json.load(f)
-            for l in device_info["empirical"]["gbytes"]["data"]:
-                if l[0] == "DRAM":
-                    smem_roof_name.append("DRAM")
+            for l in device_info['empirical']['gbytes']['data']:
+                if l[0] == 'DRAM':
+                    smem_roof_name.append('DRAM')
                     smemroofs.append(float(l[1]))
-                elif l[0] == "L1":
-                    smem_roof_name.append("L2") # For GPU, ERT recognizes L2 as L1
+                elif l[0] == 'L1':
+                    smem_roof_name.append('L2') # For GPU, ERT recognizes L2 as L1
                     smemroofs.append(float(l[1]))
-            for l in device_info["empirical"]["gflops"]["data"]:
-                if l[0] == "FP32 GFLOPs":
-                    scomp_roof_name.append("FP32")
+            for l in device_info['empirical']['gflops']['data']:
+                if l[0] == 'FP32 GFLOPs':
+                    scomp_roof_name.append('FP32')
                     scomproofs.append(float(l[1]))
 
         # print(AI_dram_generated, AI_dram_library, AI_L2_generated, AI_L2_library, \
@@ -196,7 +196,7 @@ for device in devices:
         # ax.add_artist(leg1)
 
         patch_handles = list()
-        src_name = ["generated", "library"]
+        src_name = ['generated', 'library']
         for i in range(0,len(smem_roof_name)):
             patch_handles.append(mpatches.Patch(color=colors[i],label=src_name[i]))
 

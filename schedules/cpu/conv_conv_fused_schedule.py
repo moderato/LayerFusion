@@ -15,13 +15,13 @@ def schedule_conv_conv_fused_nhwc(cfg, fusion_cfg, outs, stages, params):
     param_dict = {}
     stage_pt = 1 # Skip input
     param_pt = 1 # Skip input
-    hasPaddedInput = [False, False] # TODO: put it in layer config
+    hasPaddedInput = [False, False]
     inputs_cfg = {}
     filters_cfg = {}
     outputs_cfg = {}
 
     for l in range(0, layer_num):
-        if 'Padded' in stages[stage_pt][0].op.name:
+        if fusion_cfg.need_padding(l):
             hasPaddedInput[l] = True
             stage_dict['PaddedInput_{}'.format(l)] = stages[stage_pt][0]
             stage_pt += 1
@@ -77,7 +77,7 @@ def schedule_conv_conv_fused_nhwc(cfg, fusion_cfg, outs, stages, params):
         s[stage_dict['Output_1_ScaleShift']].compute_inline()
     #     OL = stage_dict['Output_1']
     # else:
-    #     OL = s.cache_write(layer_output_dict['Layer_1'], "local")
+    #     OL = s.cache_write(layer_output_dict['Layer_1'], 'local')
 
     ######## Global output
     n, oc_chunk, h, w, oc = s[layer_output_dict['Layer_1']].op.axis
@@ -93,11 +93,11 @@ def schedule_conv_conv_fused_nhwc(cfg, fusion_cfg, outs, stages, params):
     if (((filters_cfg['Layer_1'].H == 1 and filters_cfg['Layer_1'].W == 1 and \
             filters_cfg['Layer_1'].stride_h == 1 and filters_cfg['Layer_1'].stride_w == 1)) and \
         (step_num_h > 1 and output_step_tile_size_w == outputs_cfg['Layer_1'].W)): # HM > 1 & WI = OW (small W)
-        print("small: bind to h")
+        print('small: bind to h')
         tensorize_axis = h
         block_output_height = output_step_tile_size_h
     else:
-        print("big: bind to ic_chunk_i")
+        print('big: bind to ic_chunk_i')
         tensorize_axis = ic_chunk_i
         block_output_height = 1
 
@@ -131,11 +131,11 @@ def schedule_conv_conv_fused_nhwc(cfg, fusion_cfg, outs, stages, params):
     if (((filters_cfg['Layer_0'].H == 1 and filters_cfg['Layer_0'].W == 1 and \
             filters_cfg['Layer_0'].stride_h == 1 and filters_cfg['Layer_0'].stride_w == 1)) and \
         (step_num_h > 1 and output_step_tile_size_w == outputs_cfg['Layer_0'].W)): # HM > 1 & WI = OW (small W)
-        print("small: bind to h")
+        print('small: bind to h')
         tensorize_axis = h
         block_output_height = output_step_tile_size_h
     else:
-        print("big: bind to ic_chunk_i")
+        print('big: bind to ic_chunk_i')
         tensorize_axis = ic_chunk_i
         block_output_height = 1
 

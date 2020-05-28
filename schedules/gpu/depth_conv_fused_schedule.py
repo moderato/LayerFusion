@@ -1,10 +1,10 @@
 from tvm import te
 
-def schedule_depth_conv_fused_nhwc(cfg, fusion_cfg, outs, stages, params, bn_relu=[]):
+def schedule_depth_conv_fused_nhwc(cfg, fusion_cfg, outs, stages, params):
     outs = [outs] if isinstance(outs, te.tensor.Tensor) else outs
     s = te.create_schedule([x.op for x in outs])
     layer_num = fusion_cfg.layer_num
-    assert len(bn_relu) == layer_num
+    bn_relu=fusion_cfg.get_bn_relu()
 
     packed = [False, False] # TODO: Deal with this
     stage_dict = {}
@@ -48,39 +48,39 @@ def schedule_depth_conv_fused_nhwc(cfg, fusion_cfg, outs, stages, params, bn_rel
 
     # ######## Input data, weights, BN, etc
     s[stage_dict['PaddedInput']].compute_inline()
-    PaddedSharedInput = s.cache_read(stage_dict['PaddedInput'], "shared", [stage_dict['Output_0']])
-    FL_1 = s.cache_read(param_dict['Filter_0'], "local", [stage_dict['Output_0']])
-    FS_2 = s.cache_read(param_dict['Filter_1'], "shared", [stage_dict['Output_1']])
-    s[layer_output_dict['Layer_0']].set_scope("shared")
+    PaddedSharedInput = s.cache_read(stage_dict['PaddedInput'], 'shared', [stage_dict['Output_0']])
+    FL_1 = s.cache_read(param_dict['Filter_0'], 'local', [stage_dict['Output_0']])
+    FS_2 = s.cache_read(param_dict['Filter_1'], 'shared', [stage_dict['Output_1']])
+    s[layer_output_dict['Layer_0']].set_scope('shared')
 
     if bn_relu[0]:
         s[stage_dict['Output_0_ScaleShift']].compute_inline()
-        s[stage_dict['Output_0']].set_scope("local")
-        ScaleL_1 = s.cache_read(param_dict['Scale_0'], "local", [stage_dict['Output_0_ScaleShift']])
-        ShiftL_1 = s.cache_read(param_dict['Shift_0'], "local", [stage_dict['Output_0_ScaleShift']])
+        s[stage_dict['Output_0']].set_scope('local')
+        ScaleL_1 = s.cache_read(param_dict['Scale_0'], 'local', [stage_dict['Output_0_ScaleShift']])
+        ShiftL_1 = s.cache_read(param_dict['Shift_0'], 'local', [stage_dict['Output_0_ScaleShift']])
         DepthwiseLocalAccumulator = stage_dict['Output_0']
     else:
-        DepthwiseLocalAccumulator = s.cache_write(layer_output_dict['Layer_0'], "local")
+        DepthwiseLocalAccumulator = s.cache_write(layer_output_dict['Layer_0'], 'local')
 
     if bn_relu[1]:
         s[stage_dict['Output_1_ScaleShift']].compute_inline()
-        s[stage_dict['Output_1']].set_scope("local")
-        ScaleL_2 = s.cache_read(param_dict['Scale_1'], "local", [stage_dict['Output_1_ScaleShift']])
-        ShiftL_2 = s.cache_read(param_dict['Scale_1'], "local", [stage_dict['Output_1_ScaleShift']])
+        s[stage_dict['Output_1']].set_scope('local')
+        ScaleL_2 = s.cache_read(param_dict['Scale_1'], 'local', [stage_dict['Output_1_ScaleShift']])
+        ShiftL_2 = s.cache_read(param_dict['Scale_1'], 'local', [stage_dict['Output_1_ScaleShift']])
         OL = stage_dict['Output_1']
     else:
-        OL = s.cache_write(layer_output_dict['Layer_1'], "local")
+        OL = s.cache_write(layer_output_dict['Layer_1'], 'local')
 
     # ######## Blocks and threads
-    block_x = te.thread_axis("blockIdx.x")
-    thread_x = te.thread_axis((0, num_thread_x), "threadIdx.x")
-    thread_y = te.thread_axis((0, num_thread_y), "threadIdx.y")
-    thread_z = te.thread_axis((0, num_thread_z), "threadIdx.z")
+    block_x = te.thread_axis('blockIdx.x')
+    thread_x = te.thread_axis((0, num_thread_x), 'threadIdx.x')
+    thread_y = te.thread_axis((0, num_thread_y), 'threadIdx.y')
+    thread_z = te.thread_axis((0, num_thread_z), 'threadIdx.z')
 
     # ######## Vthreads
-    vthread_x = te.thread_axis((0, num_vthread_x), "vthread", name="vthread_x")
-    vthread_y = te.thread_axis((0, num_vthread_y), "vthread", name="vthread_y")
-    vthread_z = te.thread_axis((0, num_vthread_z), "vthread", name="vthread_z")
+    vthread_x = te.thread_axis((0, num_vthread_x), 'vthread', name='vthread_x')
+    vthread_y = te.thread_axis((0, num_vthread_y), 'vthread', name='vthread_y')
+    vthread_z = te.thread_axis((0, num_vthread_z), 'vthread', name='vthread_z')
 
     # ######## Global output
     n, h, w, c = s[layer_output_dict['Layer_1']].op.axis

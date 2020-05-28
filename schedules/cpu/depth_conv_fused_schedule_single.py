@@ -9,7 +9,6 @@ def schedule_depth_conv_fused_nhwc(cfg, fusion_cfg, outs, stages, params):
     layer_num = fusion_cfg.layer_num
     bn_relu=fusion_cfg.get_bn_relu()
 
-    packed = [True, True] # TODO: Deal with this
     stage_dict = {}
     layer_output_dict = {} # A dict for the synonym of the output of each layer
     stage_pt = 1

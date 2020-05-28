@@ -95,11 +95,11 @@ def schedule_depth_conv_fused_nhwc(cfg, fusion_cfg, outs, stages, params):
     if (((filters_cfg['Layer_1'].H == 1 and filters_cfg['Layer_1'].W == 1 and \
             filters_cfg['Layer_1'].stride_h == 1 and filters_cfg['Layer_1'].stride_w == 1)) and \
         (step_num_h > 1 and output_step_tile_size_w == outputs_cfg['Layer_1'].W)): # HM > 1 & WI = OW (small W)
-        print("small: bind to h")
+        print('small: bind to h')
         tensorize_axis = h
         block_output_height = output_step_tile_size_h
     else:
-        print("big: bind to ic_chunk_i")
+        print('big: bind to ic_chunk_i')
         tensorize_axis = ic_chunk_i
         block_output_height = 1
 

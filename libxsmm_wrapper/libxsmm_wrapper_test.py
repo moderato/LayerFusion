@@ -28,9 +28,9 @@ from tvm import te, autotvm
 from tvm.autotvm.tuner import XGBTuner, GATuner, RandomTuner, GridSearchTuner
 
 parser = argparse.ArgumentParser()
-parser.add_argument("-d", nargs=1, type=str, default=["resnet2", "resnet3", "resnet4", "resnet5", \
-    "resnet6", "resnet7", "resnet8", "resnet9", "resnet10", "resnet11", "resnet12", "resnet13", \
-    "resnet14", "resnet15", "resnet16", "resnet17", "resnet18", "resnet19", "resnet20"])
+parser.add_argument('-d', nargs=1, type=str, default=['resnet2', 'resnet3', 'resnet4', 'resnet5', \
+    'resnet6', 'resnet7', 'resnet8', 'resnet9', 'resnet10', 'resnet11', 'resnet12', 'resnet13', \
+    'resnet14', 'resnet15', 'resnet16', 'resnet17', 'resnet18', 'resnet19', 'resnet20'])
 args = parser.parse_args()
 layers = args.d
 
@@ -138,25 +138,25 @@ def intrin_libxsmm_brgemm(
                             r,
                             rco,
 
-                            ofh,            # Either 1 (small hxw) or cfg["tile_h"].size[2]
+                            ofh,            # Either 1 (small hxw) or cfg['tile_h'].size[2]
 
                             stride_height,
                             stride_width,
 
                             in_channel):
 
-    # print("ifmblock: ", ifmblock,
-    #         "ofmblock: ",                 ofmblock,
-    #         "ofw: ",                 ofw,
-    #         "s: ",                 s,
-    #         "r: ",                 r,
-    #         "rco: ",                 rco,
+    # print('ifmblock: ', ifmblock,
+    #         'ofmblock: ',                 ofmblock,
+    #         'ofw: ',                 ofw,
+    #         's: ',                 s,
+    #         'r: ',                 r,
+    #         'rco: ',                 rco,
 
-    #         "ofh: ",                 ofh,            # Either 1 (small hxw) or cfg["tile_h"].size[2]
+    #         'ofh: ',                 ofh,            # Either 1 (small hxw) or cfg['tile_h'].size[2]
 
-    #         "stride_height: ",                 stride_height,
-    #         "stride_width: ",                 stride_width,
-    #         "in_channel: ",                 in_channel)
+    #         'stride_height: ',                 stride_height,
+    #         'stride_width: ',                 stride_width,
+    #         'in_channel: ',                 in_channel)
 
     block_input_height = (ofh - 1) * stride_width + r
     block_input_width = (ofw - 1) * stride_width + s
@@ -189,23 +189,23 @@ def intrin_libxsmm_brgemm(
         exit(1)
 
     xx_ptr = tvm.tir.decl_buffer(A.shape, A.dtype,
-                        name="W", offset_factor=1,
+                        name='W', offset_factor=1,
                         data_alignment=64)
 
     yy_ptr = tvm.tir.decl_buffer(B.shape, B.dtype,
-                        name="X", offset_factor=1,
-                        strides=[te.var("s1"), te.var("s0"), ifmblock, 1],
+                        name='X', offset_factor=1,
+                        strides=[te.var('s1'), te.var('s0'), ifmblock, 1],
                         data_alignment=64)
 
     zz_ptr = tvm.tir.decl_buffer(C.shape, C.dtype,
-                        name="OUT", offset_factor=1,
-                        strides=[te.var("s2"), ofmblock, 1],
+                        name='OUT', offset_factor=1,
+                        strides=[te.var('s2'), ofmblock, 1],
                         data_alignment=64)
 
     def intrin_func(ins, outs):
         # tvm call extern is used to interface to libxsmm batch reduce kernel gemm implementation
-        init_update = tvm.tir.call_extern("int32", "batch_reduce_kernel_update",
-                                ins[0].access_ptr("r"), ins[1].access_ptr("r"), outs[0].access_ptr("w"),
+        init_update = tvm.tir.call_extern('int32', 'batch_reduce_kernel_update',
+                                ins[0].access_ptr('r'), ins[1].access_ptr('r'), outs[0].access_ptr('w'),
                                 rco * r * s,
                                 ofmblock, ifmblock,
                                 ofh * ofw,
@@ -213,12 +213,12 @@ def intrin_libxsmm_brgemm(
                                 r, s,
                                 True,
                                 yy_ptr.strides[0])
-        reset = tvm.tir.call_extern("int32", "batch_reduce_kernel_init",
-                                outs[0].access_ptr("w"),
+        reset = tvm.tir.call_extern('int32', 'batch_reduce_kernel_init',
+                                outs[0].access_ptr('w'),
                                 ofmblock,
                                 ofh * ofw) # Clear the (ofh * ofw * ofmblock) output block
-        update = tvm.tir.call_extern("int32", "batch_reduce_kernel_update",
-                                ins[0].access_ptr("r"), ins[1].access_ptr("r"), outs[0].access_ptr("w"),
+        update = tvm.tir.call_extern('int32', 'batch_reduce_kernel_update',
+                                ins[0].access_ptr('r'), ins[1].access_ptr('r'), outs[0].access_ptr('w'),
                                 rco * r * s,
                                 ofmblock, ifmblock,
                                 ofh * ofw,
@@ -233,7 +233,7 @@ def intrin_libxsmm_brgemm(
 
     return te.decl_tensor_intrin(C.op,
                                     intrin_func,   
-                                    name="GEMM",
+                                    name='GEMM',
                                     binds={
                                             A: xx_ptr,
                                             B: yy_ptr,
@@ -241,7 +241,7 @@ def intrin_libxsmm_brgemm(
                                     })
 
 #AutoTVM template for libxmm brgemm based tensorize implementation
-@autotvm.template("conv2d")
+@autotvm.template('conv2d')
 def conv_auto_tuned(ofmblock,       # vec
                     ofw,            # OW
                     ifmblock,       # vec
@@ -267,7 +267,7 @@ def conv_auto_tuned(ofmblock,       # vec
     rci1 = te.reduce_axis((0, ifmblock), name='rci1') # Ivec
     cfg = autotvm.get_config()
 
-    cfg.define_knob("pack", [0, 1]) # define packing
+    cfg.define_knob('pack', [0, 1]) # define packing
     pack = False
     w_tile = []
 
@@ -281,7 +281,7 @@ def conv_auto_tuned(ofmblock,       # vec
         w_tile.append((ofw, 1))
 
     # tile factors for output width
-    cfg.define_knob("tile_w", w_tile) # define w, use verbose policy
+    cfg.define_knob('tile_w', w_tile) # define w, use verbose policy
 
     # pack data when stride > 1 and pack flag set so that data for brgemm is continuous
     if filter_height == 1 and filter_width == 1 and stride_width > 1 and stride_height > 1 and cfg['pack'].val == 1:
@@ -309,30 +309,30 @@ def conv_auto_tuned(ofmblock,       # vec
     s = te.create_schedule(B1.op)
     n, ko, h, w, ki  = s[B1].op.axis
     rco, ry, rx, rci = s[B1].op.reduce_axis
-    cfg.define_split("tile_h", h, num_outputs=3)    # output height
-    cfg.define_split("tile_c", rco, num_outputs=2)  # input channel dimension
-    cfg.define_split("tile_k", ko, num_outputs=2)   # output channel dimension
-    w_factor_inner, _ =  cfg["tile_w"].val
+    cfg.define_split('tile_h', h, num_outputs=3)    # output height
+    cfg.define_split('tile_c', rco, num_outputs=2)  # input channel dimension
+    cfg.define_split('tile_k', ko, num_outputs=2)   # output channel dimension
+    w_factor_inner, _ =  cfg['tile_w'].val
     wo, wi = s[B1].split(w, w_factor_inner)         # tiling
-    rco_o, rco_i = cfg["tile_c"].apply(s, B1, rco)
-    ko_o, ko_i = cfg["tile_k"].apply(s, B1, ko)
-    ho, hm, hi =  cfg["tile_h"].apply(s, B1, h)
+    rco_o, rco_i = cfg['tile_c'].apply(s, B1, rco)
+    ko_o, ko_i = cfg['tile_k'].apply(s, B1, ko)
+    ho, hm, hi =  cfg['tile_h'].apply(s, B1, h)
 
     # (parallel) [N, OCO, HO],   (reorder) [OCI, rco_o, HM, WO],   HI, rco_i,   (microkernel start) [FH, FW, WI, Ovec, Ivec]
     s[B1].reorder(n, ko_o, ho, ko_i, rco_o, hm, wo, hi, rco_i, ry, rx, wi, ki, rci)
-    cfg.define_reorder("reorder_outer", [ko_i, rco_o, hm, wo], policy="all")
-    cfg["reorder_outer"].apply(s, B1, [ko_i, rco_o, hm, wo])
+    cfg.define_reorder('reorder_outer', [ko_i, rco_o, hm, wo], policy='all')
+    cfg['reorder_outer'].apply(s, B1, [ko_i, rco_o, hm, wo])
 
     cfg.add_flop(np.prod(get_const_tuple(B1.shape)) * in_channel * filter_height * filter_width * 2)
 
     # 1x1 (stride = 1 or (pack & stride > 1))
     if (((filter_height == 1 and filter_width == 1 and stride_width == 1 and stride_height == 1) or pack) and \
-        (cfg["tile_h"].size[1] > 1 and w_factor_inner == ofw)): # HM > 1 & WI = OW (small W)
-        print("small: bind to h")
+        (cfg['tile_h'].size[1] > 1 and w_factor_inner == ofw)): # HM > 1 & WI = OW (small W)
+        print('small: bind to h')
         tensorize_axis = hi
-        block_output_height = cfg["tile_h"].size[2]
+        block_output_height = cfg['tile_h'].size[2]
     else:
-        print("big: bind to rco_i")
+        print('big: bind to rco_i')
         tensorize_axis = rco_i
         block_output_height = 1
 
@@ -342,7 +342,7 @@ def conv_auto_tuned(ofmblock,       # vec
                                                 w_factor_inner,         # m of brgemm   -> wi
                                                 filter_width,           #               -> rx
                                                 filter_height,          #               -> ry
-                                                cfg["tile_c"].size[1],  #               -> rco_i
+                                                cfg['tile_c'].size[1],  #               -> rco_i
                                                 block_output_height,    #               -> hi
 
                                                 stride_height,
@@ -366,13 +366,13 @@ def conv_auto_tuned(ofmblock,       # vec
     return s, [W1, A1, B1]
 
 def driver():
-    book = xlwt.Workbook(encoding="utf-8")
-    sheet1 = book.add_sheet("Sheet 1")
+    book = xlwt.Workbook(encoding='utf-8')
+    sheet1 = book.add_sheet('Sheet 1')
     row1 = 0
-    sheet1.write(0, 0, "Layer")
-    sheet1.write(0, 1, "AutoTVM_FLOPS")
+    sheet1.write(0, 0, 'Layer')
+    sheet1.write(0, 1, 'AutoTVM_FLOPS')
     row1 = row1 + 1
-    target = "llvm -mcpu=core-avx2"
+    target = 'llvm -mcpu=core-avx2'
     vlen = 64
 
     for layer in layers:
@@ -403,10 +403,10 @@ def driver():
         sheet1.write(row1, 0, layer)
 
         if not ctx.exist:
-            print("Skip because %s is not enabled" % target)
+            print('Skip because %s is not enabled' % target)
             return
 
-        task = autotvm.task.create("conv2d",
+        task = autotvm.task.create('conv2d',
                                     args=(  vlen,
                                             output_width,
                                             vlen,
@@ -429,7 +429,7 @@ def driver():
         tuner = autotvm.tuner.RandomTuner(task)
         # Please limit n_trial to reduce tuning time
         n_trial= 32
-        log_file = "logs/" + layer + ".log"
+        log_file = 'logs/' + layer + '.log'
 
         # comment out the following call to tuner to just run the best case from log file history
         tuner.tune(n_trial=n_trial,
@@ -456,7 +456,7 @@ def driver():
                 w = tvm.nd.array(w_np2, ctx)
 
                 # print(tvm.lower(s, arg_bufs, simple_mode=True))
-                func = tvm.build(s, arg_bufs, target=target, name="conv2d")
+                func = tvm.build(s, arg_bufs, target=target, name='conv2d')
                 func(w, a, b)
 
                 # output 5D -> 4D
@@ -468,12 +468,12 @@ def driver():
                 gflops_tvm1 = np.prod(get_const_tuple(arg_bufs[2].shape))*in_channel*kernel_height*kernel_width*2
                 gflops_tvm1 = gflops_tvm1 / 1e9 / t1
 
-                print("Time for conv(tuned) is: {0:.6f}".format(t1))
-                print("GFLOPS: {0:.3f} ".format(gflops_tvm1))
+                print('Time for conv(tuned) is: {0:.6f}'.format(t1))
+                print('GFLOPS: {0:.3f} '.format(gflops_tvm1))
                 sheet1.write(row1, 1, gflops_tvm1)
 
         row1 = row1 + 1
-        book.save("logs/AutoTVM_tensorize_" + layer + ".xls")
+        book.save('logs/AutoTVM_tensorize_' + layer + '.xls')
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     driver()

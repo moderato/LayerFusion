@@ -8,7 +8,7 @@ from helper import get_vlen, register_count
 import math
 
 class LayerConfig:
-    def __init__(self, cfg, fusion_cfg, idx, Input=None, device="cuda", pack=False, dtype="float32"):
+    def __init__(self, cfg, fusion_cfg, idx, Input=None, device='cuda', pack=False, dtype='float32'):
         self._input_cfg = fusion_cfg.get_input(idx)
         self._filter_cfg = fusion_cfg.get_filter(idx)
         self._output_cfg = fusion_cfg.get_output(idx)
@@ -23,29 +23,30 @@ class LayerConfig:
         FH, FW, _, tmp = self._filter_cfg.get_shape()
         _, OH, OW, OC = self._output_cfg.get_shape()
 
-        if not pack: # "NHWC": 4D input 4D filter
+        if not pack: # 'NHWC': 4D input 4D filter
             if Input is None:
                 Input = te.placeholder((N, IH, IW, IC), name='Input')
             Filter = te.placeholder((FH, FW, IC, tmp),
                                     name='Layer_{}_{}Filter'.format(idx,
-                                                                    "Depthwise" if self._filter_cfg.depthwise else "Conv2d"))
-            self._layout = "NHWC"
+                                                                    'Depthwise' if self._filter_cfg.depthwise else 'Conv2d'))
+            self._layout = 'NHWC'
             self._output_shape = (N, OH, OW, OC)
-        else: # "NCHWc": 5D input 6D filter
+
+        else: # 'NCHWc': 5D input 6D filter
             # Vector length
             if cfg is not None:
                 if idx == 0 and not self._filter_cfg.depthwise: # First layer is not depthwise: define input vlen
-                    cfg.define_knob("vlen_input", get_vlen(IC, device))
-                cfg.define_knob("vlen_layer_{}".format(idx), get_vlen(OC, device))
+                    cfg.define_knob('vlen_input', get_vlen(IC, device))
+                cfg.define_knob('vlen_layer_{}'.format(idx), get_vlen(OC, device))
 
                 # TODO: What if depthwise in the middle?
                 if idx == 0 and not self._filter_cfg.depthwise:
-                    vlen_i = cfg["vlen_input"].val
+                    vlen_i = cfg['vlen_input'].val
                 elif idx == 0:
-                    vlen_i = cfg["vlen_layer_{}".format(idx)].val
+                    vlen_i = cfg['vlen_layer_{}'.format(idx)].val
                 else:
-                    vlen_i = cfg["vlen_layer_{}".format(idx-1)].val
-                vlen_o = cfg["vlen_layer_{}".format(idx)].val
+                    vlen_i = cfg['vlen_layer_{}'.format(idx-1)].val
+                vlen_o = cfg['vlen_layer_{}'.format(idx)].val
             else:
                 vlen_i = 16
                 vlen_o = 16
@@ -58,8 +59,8 @@ class LayerConfig:
                             (1, IC_chunk, FH, FW, vlen_i, 1)
             Filter = te.placeholder(filter_shape,
                                     name='Layer_{}_{}Filter'.format(idx,
-                                                                    "Depthwise" if self._filter_cfg.depthwise else "Conv2d"))
-            self._layout = "NCHWc"
+                                                                    'Depthwise' if self._filter_cfg.depthwise else 'Conv2d'))
+            self._layout = 'NCHWc'
             self._output_shape = (N, OC_chunk, OH, OW, vlen_o)
 
         self._input = Input
@@ -113,7 +114,7 @@ class LayerConfig:
 
         # Only pad when it's not 1x1
         if FH.value > 1 and FW.value > 1:
-            # print("Padding is needed!")
+            # print('Padding is needed!')
             tmp = []
             pad_top, pad_left, pad_down, pad_right = self._filter_cfg.get_padding_shape()
 
@@ -126,7 +127,7 @@ class LayerConfig:
                 pad_before = [0, pad_top, pad_left, 0]
                 pad_after = [0, pad_down, pad_right, 0]
 
-            PaddedInput = pad(self._input, pad_before, pad_after, name="Layer_{}_PaddedInput".format(self._layer_idx))
+            PaddedInput = pad(self._input, pad_before, pad_after, name='Layer_{}_PaddedInput'.format(self._layer_idx))
             tmp.append(PaddedInput)
             self._stages.append(tmp)
 
@@ -156,13 +157,13 @@ class LayerConfig:
 
         if cfg is not None:
             # Assuming not final layer:
-            if self._device != "cuda": # Workaround: don't split HW here for CUDA; assume this won't be the last layer. TODO: Get rid of this.
-                # cfg.define_split("split_layer_{}_h".format(self._layer_idx), OH.value, num_outputs=2, policy="verbose")
-                # cfg.define_split("split_layer_{}_w".format(self._layer_idx), OW.value, num_outputs=2, policy="verbose")
-                cfg.define_split("split_layer_{}_c".format(self._layer_idx), OC_chunk.value, num_outputs=2, policy='factors')
+            if self._device != 'cuda': # Workaround: don't split HW here for CUDA; assume this won't be the last layer. TODO: Get rid of this.
+                # cfg.define_split('split_layer_{}_h'.format(self._layer_idx), OH.value, num_outputs=2, policy='verbose')
+                # cfg.define_split('split_layer_{}_w'.format(self._layer_idx), OW.value, num_outputs=2, policy='verbose')
+                cfg.define_split('split_layer_{}_c'.format(self._layer_idx), OC_chunk.value, num_outputs=2, policy='factors')
             else:
-                # cfg.define_split("split_layer_{}_c".format(self._layer_idx), OC_chunk.value, num_outputs=(2 if (self._device == "cuda" or not self._is_final_stage) else 3), policy="verbose")
-                cfg.define_split("split_layer_{}_c".format(self._layer_idx), OC, num_outputs=3, policy='factors')
+                # cfg.define_split('split_layer_{}_c'.format(self._layer_idx), OC_chunk.value, num_outputs=(2 if (self._device == 'cuda' or not self._is_final_stage) else 3), policy='verbose')
+                cfg.define_split('split_layer_{}_c'.format(self._layer_idx), OC, num_outputs=3, policy='factors')
 
         if self._pack:
             Output = te.compute(self._output_shape,
@@ -175,7 +176,7 @@ class LayerConfig:
                                                 .astype(self._output_dtype),
                                                 axis=[ry, rx]),
                                             name='Layer_{}_DepthwiseConv2dOutput'.format(self._layer_idx),
-                                            tag="depthwise_nchw{}c".format(OC_vec))
+                                            tag='depthwise_nchw{}c'.format(OC_vec))
         else:
             Output = te.compute(self._output_shape,
                         lambda n, h, w, c: te.sum(
@@ -187,7 +188,7 @@ class LayerConfig:
                                                 .astype(self._output_dtype),
                                                 axis=[ry, rx]),
                                             name='Layer_{}_DepthwiseConv2dOutput'.format(self._layer_idx),
-                                            tag="depthwise_nhwc")
+                                            tag='depthwise_nhwc')
         self._output = Output
 
     def make_conv_output(self, cfg):
@@ -214,28 +215,35 @@ class LayerConfig:
         dilation_h, dilation_w = self._filter_cfg.get_dilation()
 
         if cfg is not None:
-            H_num_outputs = (4 if self._device == "cuda" else (3 if self._is_final_stage else 2))
-            # Choose between these two
-            # ---
-            W_num_outputs = (4 if self._device == "cuda" else (3 if self._is_final_stage else 2))
-            # ---
-            # W_num_outputs = (3 if self._device == "cuda" or self._is_final_stage else 2)
-            # ---
+            if self._device == 'cuda':
+                if self._is_final_stage:
+                    H_num_outputs = 4
+                    W_num_outputs = 4 # 3 for depthwise + 1x1, 4 for 3x3 + 1x1
+                else:
+                    H_num_outputs = 3
+                    W_num_outputs = 3
+            else:
+                if self._is_final_stage:
+                    H_num_outputs = 3
+                    W_num_outputs = 3
+                else:
+                    H_num_outputs = 2
+                    W_num_outputs = 2
 
-            cfg.define_split("split_layer_{}_h".format(self._layer_idx), OH.value,
+            cfg.define_split('split_layer_{}_h'.format(self._layer_idx), OH,
                                 num_outputs=H_num_outputs,
                                 policy='factors')
-            cfg.define_split("split_layer_{}_w".format(self._layer_idx), OW.value,
+            cfg.define_split('split_layer_{}_w'.format(self._layer_idx), OW,
                                 num_outputs=W_num_outputs,
                                 policy='factors')
-            cfg.define_split("split_layer_{}_c".format(self._layer_idx),
-                                OC.value if self._pack else OC_chunk.value,
-                                num_outputs=3 if self._device == "cuda" else 2,
+            cfg.define_split('split_layer_{}_c'.format(self._layer_idx),
+                                OC_chunk if self._pack else OC,
+                                num_outputs=3 if self._device == 'cuda' else 2,
                                 policy='factors')
 
             if self._is_first_stage:
-                cfg.define_split("split_layer_0_rc",
-                                OC.value if self._pack else OC_chunk.value,
+                cfg.define_split('split_layer_0_rc',
+                                OC_chunk if self._pack else OC,
                                 num_outputs=2,
                                 policy='factors')
 
@@ -249,8 +257,8 @@ class LayerConfig:
                                                                 rci])
                                                     .astype(self._output_dtype),
                                                     axis=[rco, ry, rx, rci]),
-                                                name="Layer_{}_Conv2dOutput".format(self._layer_idx),
-                                                tag="conv2d_nchw{}c".format(OC_vec))
+                                                name='Layer_{}_Conv2dOutput'.format(self._layer_idx),
+                                                tag='conv2d_nchw{}c'.format(OC_vec))
         else:
             Output = te.compute(self._output_shape,
                         lambda n, h, w, c: te.sum(
@@ -261,8 +269,8 @@ class LayerConfig:
                                                                 rc])
                                                     .astype(self._output_dtype),
                                                     axis=[rc, ry, rx]),
-                                                name="Layer_{}_Conv2dOutput".format(self._layer_idx),
-                                                tag="conv2d_nhwc")
+                                                name='Layer_{}_Conv2dOutput'.format(self._layer_idx),
+                                                tag='conv2d_nhwc')
         self._output = Output
 
     def process_relu(self, block_input):
@@ -295,7 +303,7 @@ class LayerConfig:
         
             First = inputs[0] # TODO: Support multiple branches addition later
             Last = self._stages[-1][-1] # Output if bn_relu is None, ScaleShift if it's not None
-            assert sorted(get_const_tuple(First.shape)) == sorted(get_const_tuple(Last.shape)), "{} is not the same as {}".format(First.shape, Last.shape)
+            assert sorted(get_const_tuple(First.shape)) == sorted(get_const_tuple(Last.shape)), '{} is not the same as {}'.format(First.shape, Last.shape)
             if self._pack:
                 Output = te.compute(self._output_shape,
                                     lambda n, c_chunk, h, w, c_vec: (First[n, c_chunk, h, w, c_vec] + (Last[n, c_chunk, h, w, c_vec])),
@@ -342,8 +350,8 @@ class LayerConfig:
                 self.process_relu(block_input)
 
             # if cfg is not None:
-            #     cfg.define_knob("layer_{}_auto_unroll_max_step".format(self._layer_idx), [0, 224])
-            #     cfg.define_knob("layer_{}_unroll_explicit".format(self._layer_idx), [0, 1])
+            #     cfg.define_knob('layer_{}_auto_unroll_max_step'.format(self._layer_idx), [0, 224])
+            #     cfg.define_knob('layer_{}_unroll_explicit'.format(self._layer_idx), [0, 1])
 
     def get_stages(self):
         return self._stages
