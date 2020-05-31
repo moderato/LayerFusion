@@ -1,40 +1,17 @@
 import tvm
-from tvm import autotvm, te
-import math
+from tvm import te
+from schedule_utils import get_stages_and_cfgs
 from .libxsmm_intrin import intrin_libxsmm_brgemm
 
 def schedule_conv_conv_fused_nhwc_auto(cfg, fusion_cfg, outs, stages, params, device='llvm -mcpu=core-avx2'):
     outs = [outs] if isinstance(outs, te.tensor.Tensor) else outs
     s = te.create_schedule([x.op for x in outs])
     layer_num = fusion_cfg.layer_num
-    bn_relu=fusion_cfg.get_bn_relu()
+    bn_relu = fusion_cfg.get_bn_relu()
 
-    stage_dict = {}
-    layer_output_dict = {} # A dict for the synonym of the output of each layer
-    stage_pt = 1
-    param_pt = 1
-    hasPaddedInput = [False, False]
-    inputs_cfg = {}
-    filters_cfg = {}
-    outputs_cfg = {}
-
-    for l in range(0, layer_num):
-        if fusion_cfg.need_padding(l):
-            hasPaddedInput[l] = True
-            stage_dict['PaddedInput_{}'.format(l)] = stages[stage_pt][0]
-            stage_pt += 1
-        if bn_relu[l]:
-            stage_dict['Output_{}'.format(l)], \
-                stage_dict['Output_{}_ScaleShift'.format(l)], \
-                    stage_dict['Output_{}_ReLU'.format(l)] = stages[stage_pt]
-            layer_output_dict['Layer_{}'.format(l)] = stage_dict['Output_{}_ReLU'.format(l)]
-        else:
-            stage_dict['Output_{}'.format(l)] = stages[stage_pt][0]
-            layer_output_dict['Layer_{}'.format(l)] = stage_dict['Output_{}'.format(l)]
-        inputs_cfg['Layer_{}'.format(l)] = fusion_cfg.get_input(l)
-        filters_cfg['Layer_{}'.format(l)] = fusion_cfg.get_filter(l)
-        outputs_cfg['Layer_{}'.format(l)] = fusion_cfg.get_output(l)
-        stage_pt += 1
+    stage_dict, layer_output_dict, param_dict, inputs_cfg, filters_cfg, outputs_cfg = \
+        get_stages_and_cfgs(fusion_cfg, stages, params)
+    hasPaddedInput = [fusion_cfg.need_padding(idx) for idx in range(layer_num)]
 
     s[stage_dict['Output_0']].set_scope('global')
     for l in range(0, layer_num):

@@ -1,36 +1,25 @@
-from tvm import autotvm, te
+import tvm
+from tvm import te
+from schedule_utils import get_stages_and_cfgs
 
 def schedule_depth_conv_fused_nhwc_auto(cfg, fusion_cfg, outs, stages, params):
     outs = [outs] if isinstance(outs, te.tensor.Tensor) else outs
     s = te.create_schedule([x.op for x in outs])
     layer_num = fusion_cfg.layer_num
-    bn_relu=fusion_cfg.get_bn_relu()
+    bn_relu = fusion_cfg.get_bn_relu()
 
-    packed = [False, False] # TODO: Deal with this
-    stage_dict = {}
-    param_dict = {}
-    stage_dict['PaddedInput'] = stages[1][0]
-    layer_output_dict = {} # A dict for the synonym of the output of each layer
-    stage_pt = 2
-    param_pt = 1
+    stage_dict, layer_output_dict, param_dict, inputs_cfg, filters_cfg, outputs_cfg = \
+        get_stages_and_cfgs(fusion_cfg, stages, params)
+    hasPaddedInput = [fusion_cfg.need_padding(idx) for idx in range(layer_num)]
 
-    for l in range(0, layer_num):
-        if bn_relu[l]:
-            stage_dict['Output_{}'.format(l)], \
-                stage_dict['Output_{}_ScaleShift'.format(l)], \
-                    stage_dict['Output_{}_ReLU'.format(l)] = stages[stage_pt]
-            layer_output_dict['Layer_{}'.format(l)] = stage_dict['Output_{}_ReLU'.format(l)]
-            param_dict['Filter_{}'.format(l)], param_dict['Scale_{}'.format(l)], param_dict['Shift_{}'.format(l)] = params[param_pt]
-        else:
-            stage_dict['Output_{}'.format(l)] = stages[stage_pt][0]
-            layer_output_dict['Layer_{}'.format(l)] = stage_dict['Output_{}'.format(l)]
-            param_dict['Filter_{}'.format(l)] = params[param_pt][0]
-        stage_pt += 1
-        param_pt += 1
+    from pprint import pprint
+    pprint(stage_dict)
+    pprint(layer_output_dict)
+    pprint(param_dict)
 
     # ######## Input data, weights, BN, etc
-    s[stage_dict['PaddedInput']].compute_inline()
-    PaddedSharedInput = s.cache_read(stage_dict['PaddedInput'], 'shared', [stage_dict['Output_0']])
+    s[stage_dict['PaddedInput_0']].compute_inline()
+    PaddedSharedInput = s.cache_read(stage_dict['PaddedInput_0'], 'shared', [stage_dict['Output_0']])
     FL_1 = s.cache_read(param_dict['Filter_0'], 'local', [stage_dict['Output_0']])
     FS_2 = s.cache_read(param_dict['Filter_1'], 'shared', [stage_dict['Output_1']])
     s[layer_output_dict['Layer_0']].set_scope('shared')
