@@ -1,25 +1,37 @@
 import numpy as np
 import matplotlib.pyplot as plt
-import sys
-import os
-import json
 import matplotlib.patches as mpatches
+import sys, os, json, math
 font = {'size' : 15}
 plt.rc('font', **font)
 
-markersize = 10
+markersize = 5
 colors = ['b','g','r','y','m','c']
 styles = ['o','s','v','^','D','>','<','*','h','H','+','1','2','3','4','8','p','d','|','_','.',',']
 devices = ['cpu', 'gpu']
 workload_types = ['depth_conv']
-device_roofline = {
-    'cpu': '/home/zhongyilin/Documents/experimental/cs-roofline-toolkit/Empirical_Roofline_Tool-1.1.0/Results.i7-7700K.lb.gov/Run.001/roofline.json',
+device_empirical = {
+    'cpu': '/home/zhongyilin/Documents/experimental/cs-roofline-toolkit/Empirical_Roofline_Tool-1.1.0/Results.i7-7700K/Run.001/roofline.json',
     'gpu': '/home/zhongyilin/Documents/experimental/cs-roofline-toolkit/Empirical_Roofline_Tool-1.1.0/Results.1050Ti-cuda-fp32.01/Run.001/roofline.json'
 }
 device_name = {
     'cpu': 'i7_7700K',
     'gpu': '1050Ti'
 }
+device_theoretical = {
+    '1050Ti': {
+        'FP32 GFLOPS': 2138.0,
+        'DRAM': 112.1,
+        'Cache': 1117
+    },
+    'i7_7700K': {
+        'FP32 GFLOPS': 537.6,
+        'DRAM': 62.22,
+        'Cache': 500
+    }
+}
+arrowprops = dict(arrowstyle="-|>,head_width=0.15,head_length=0.55", linewidth="0.001", shrinkA=0, shrinkB=0, fc="k", ec="k")
+
 HOME = os.getenv('LF_HOME')
 
 for device in devices:
@@ -32,12 +44,14 @@ for device in devices:
     FLOPS_generated = []
     FLOPS_library = []
     labels = []
-    scomproofs = []
-    scomp_roof_name = []
-    smemroofs = []
-    smem_roof_name = []
+    gflops_roof = []
+    gflops_roof_name = []
+    BW_roof = []
+    BW_roof_name = []
+    workloads = []
 
     has_L2 = False
+    read_empirical = False # Whether read empirical or theoretical roofs
 
     for w in workload_types:
         workload_filename = '{}/workloads/{}_workloads.csv'.format(HOME, w)
@@ -46,6 +60,7 @@ for device in devices:
             for idx, line in enumerate(lines[1:]): # skip header
                 splitted = line.strip().split(',')
                 workload_name = splitted[0]
+                workloads.append(workload_name)
                 # Read AI
                 with open('{}/logs/arithmetic_intensity/{}/{}.csv'.format(HOME, device, workload_name), 'r') as ff:
                     lls = ff.readlines()
@@ -66,29 +81,43 @@ for device in devices:
                         FLOPS_library.append(float(splitted[1]))
                 # Labels
                 labels.append(workload_name)
-                if idx >= 5:
-                    break
+                # if idx >= 5:
+                #     break
 
-        device_info_file_dir = device_roofline[device]
-        with open(device_info_file_dir, 'r') as f:
-            device_info = json.load(f)
-            for l in device_info['empirical']['gbytes']['data']:
-                if l[0] == 'DRAM':
-                    smem_roof_name.append('DRAM')
-                    smemroofs.append(float(l[1]))
-                elif l[0] == 'L1':
-                    smem_roof_name.append('L2') # For GPU, ERT recognizes L2 as L1
-                    smemroofs.append(float(l[1]))
-            for l in device_info['empirical']['gflops']['data']:
-                if l[0] == 'FP32 GFLOPs':
-                    scomp_roof_name.append('FP32')
-                    scomproofs.append(float(l[1]))
+        if read_empirical:
+            device_info_file_dir = device_empirical[device]
+            with open(device_info_file_dir, 'r') as f:
+                device_info = json.load(f)
+                for l in device_info['empirical']['gbytes']['data']:
+                    if l[0] == 'DRAM':
+                        BW_roof_name.append('DRAM')
+                        BW_roof.append(float(l[1]))
+                    elif l[0] == 'L1':
+                        BW_roof_name.append('L2') # For GPU, ERT recognizes L2 as L1
+                        BW_roof.append(float(l[1]))
+                for l in device_info['empirical']['gflops']['data']:
+                    if l[0] == 'FP32 GFLOPs':
+                        gflops_roof_name.append('FP32')
+                        gflops_roof.append(float(l[1]))
+        else:
+            device_info = device_theoretical[device_name[device]]
+            if 'DRAM' in device_info.keys():
+                BW_roof_name.append('DRAM')
+                BW_roof.append(device_info['DRAM'])
+            if 'Cache' in device_info.keys():
+                BW_roof_name.append('Cache')
+                BW_roof.append(device_info['Cache'])
+            if 'FP32 GFLOPS' in device_info.keys():
+                gflops_roof_name.append('FP32')
+                gflops_roof.append(device_info['FP32 GFLOPS'])
 
-        # print(AI_dram_generated, AI_dram_library, AI_L2_generated, AI_L2_library, \
-        #       FLOPS_generated, FLOPS_library, \
-        #       labels, scomproofs, scomp_roof_name, smemroofs, smem_roof_name)
+        print(AI_dram_generated, AI_dram_library, AI_L2_generated, AI_L2_library, \
+                FLOPS_generated, FLOPS_library, \
+                labels, \
+                gflops_roof, gflops_roof_name, \
+                BW_roof, BW_roof_name)
 
-        fig = plt.figure(1,figsize=(10.67,6.6))
+        fig = plt.figure(1, figsize=(10.67,6.6))
         plt.clf()
         ax = fig.gca()
         ax.set_xscale('log')
@@ -98,10 +127,18 @@ for device in devices:
         # ax.set_title('Original GPU Performance')
 
         nx = 10000
-        xmin = -0.15
-        xmax = 2.3
-        ymin = 100.0
-        ymax = 3000
+        if device == "gpu":
+            ymin = 70.0
+            ymax = 3000.0
+            xmin = 0.1
+            xmax = 2.3
+            text_distance_scale = 1.1
+        else:
+            ymin = 160.0
+            ymax = 600.0
+            xmin = -0.4
+            xmax = 3.1
+            text_distance_scale = 1.02
 
         ax.set_xlim(10**xmin, 10**xmax)
         ax.set_ylim(ymin, ymax)
@@ -115,66 +152,83 @@ for device in devices:
         smem_x_elbow = [] 
         smem_ix_elbow = [] 
 
-        x = np.logspace(xmin,xmax,nx)
-        for roof in scomproofs:
-            for ix in range(1,nx):
-                if smemroofs[0] * x[ix] >= roof and smemroofs[0] * x[ix-1] < roof:
+        x = np.logspace(xmin, xmax, nx)
+        for roof in gflops_roof:
+            for ix in range(1, nx):
+                BW_roof_max = max(BW_roof)
+                if BW_roof_max * x[ix] >= roof and BW_roof_max * x[ix-1] < roof:
                     scomp_x_elbow.append(x[ix-1])
                     scomp_ix_elbow.append(ix-1)
                     break
 
-
-        for roof in smemroofs:
-            for ix in range(1,nx):
-                if (scomproofs[0] <= roof * x[ix] and scomproofs[0] > roof * x[ix-1]):
+        for roof in BW_roof:
+            for ix in range(1, nx):
+                if (gflops_roof[0] <= roof * x[ix] and gflops_roof[0] > roof * x[ix-1]):
                     smem_x_elbow.append(x[ix-1])
                     smem_ix_elbow.append(ix-1)
                     break
 
-        for i in range(0,len(scomproofs)):
-            roof = scomproofs[i]
+        for i in range(0, len(gflops_roof)):
+            roof = gflops_roof[i]
             y = np.ones(len(x)) * roof
-            ax.plot(x[scomp_ix_elbow[i]:],y[scomp_ix_elbow[i]:],c='k',ls='-',lw='2')
+            ax.plot(x[scomp_ix_elbow[i]:], y[scomp_ix_elbow[i]:], c='k', ls='-', lw='2')
 
-        for i in range(0,len(smemroofs)):
-            roof = smemroofs[i]
+        for i in range(0, len(BW_roof)):
+            roof = BW_roof[i]
             y = x * roof
-            ax.plot(x[:smem_ix_elbow[i]+1],y[:smem_ix_elbow[i]+1],c='k',ls='-',lw='2')
-
+            ax.plot(x[:smem_ix_elbow[i]+1], y[:smem_ix_elbow[i]+1], c='k', ls='-', lw='2')
 
         marker_handles = list()
 
         # workload: marker styles
         # generated/library: colors
-        for i in range(0,len(AI_dram_generated)):
-            ax.plot(float(AI_dram_generated[i]),float(FLOPS_generated[i]),c=colors[0],marker=styles[i],linestyle='None',ms=markersize,label=labels[i])
-            marker_handles.append(ax.plot([],[],c='gray',marker=styles[i],linestyle='None',ms=markersize,label=labels[i])[0]) 
-            # ax.plot((AI_dram_generated),(FLOPS_generated),c='k',linestyle='-.')
-        for i in range(0,len(AI_dram_library)):
-            ax.plot(float(AI_dram_library[i]),float(FLOPS_library[i]),c=colors[1],marker=styles[i],linestyle='None',ms=markersize,label=labels[i])
-            marker_handles.append(ax.plot([],[],c='gray',marker=styles[i],linestyle='None',ms=markersize,label=labels[i])[0]) 
-            # ax.plot((AI_dram_library),(FLOPS_library),c='k',linestyle='-.')
+        for i in range(0, len(workloads)):
+            ax.plot(float(AI_dram_generated[i]), float(FLOPS_generated[i]), c=colors[0], marker=styles[i], linestyle='None', ms=markersize, label=labels[i])
+            marker_handles.append(ax.plot([], [], c='gray', marker=styles[i], linestyle='None', ms=markersize, label=labels[i])[0]) 
+        for i in range(0, len(workloads)):
+            ax.plot(float(AI_dram_library[i]),float(FLOPS_library[i]), c=colors[1], marker=styles[i], linestyle='None', ms=markersize, label=labels[i])
+            marker_handles.append(ax.plot([], [], c='gray', marker=styles[i], linestyle='None', ms=markersize, label=labels[i])[0]) 
+        for i in range(0, len(AI_dram_generated)):
+            x0 = float(AI_dram_library[i])
+            y0 = float(FLOPS_library[i])
+            dx = (float(AI_dram_generated[i]) - float(AI_dram_library[i]))
+            dy = (float(FLOPS_generated[i]) - float(FLOPS_library[i]))
+            dx_dy = math.sqrt(math.pow(dx, 2) + math.pow(dy, 2))
+            scaled_dx = dx
+            scaled_dy = dy
+            ax.arrow(x0, y0, scaled_dx, scaled_dy, linestyle=(0, (1, 6)))
+            ax.annotate('', xy=(x0 + dx, y0 + dy), xytext=(x0, y0), arrowprops=arrowprops)
+            ax.text(x0 * (0.98 if dx > 0 else 1.02), y0 * 0.98, workloads[i], fontsize=8)
 
         if has_L2:
             for i in range(0,len(AI_L2_generated)):
-                ax.plot(float(AI_L2_generated[i]),float(FLOPS_generated[i]),c=colors[0],marker=styles[i],linestyle='None',ms=markersize,label=labels[i])
-                # ax.plot((AI_L2),(FLOPS_generated),c=colors[1],linestyle='-')
+                ax.plot(float(AI_L2_generated[i]),float(FLOPS_generated[i]),c=colors[2],marker=styles[i],linestyle='None',ms=markersize,label=labels[i])
             for i in range(0,len(AI_L2_library)):
-                ax.plot(float(AI_L2_library[i]),float(FLOPS_library[i]),c=colors[1],marker=styles[i],linestyle='None',ms=markersize,label=labels[i])
-                # ax.plot((AI_L2),(FLOPS_library),c=colors[1],linestyle='-')
+                ax.plot(float(AI_L2_library[i]),float(FLOPS_library[i]),c=colors[3],marker=styles[i],linestyle='None',ms=markersize,label=labels[i])
+            for i in range(0, len(AI_L2_generated)):
+                x0 = float(AI_L2_library[i])
+                y0 = float(FLOPS_library[i])
+                dx = (float(AI_L2_generated[i]) - float(AI_L2_library[i]))
+                dy = (float(FLOPS_generated[i]) - float(FLOPS_library[i]))
+                dx_dy = math.sqrt(math.pow(dx, 2) + math.pow(dy, 2))
+                scaled_dx = dx
+                scaled_dy = dy
+                ax.arrow(x0, y0, scaled_dx, scaled_dy, linestyle=(0, (1, 6)))
+                ax.annotate('', xy=(x0 + dx, y0 + dy), xytext=(x0, y0), arrowprops=arrowprops)
+                # ax.text(x0 * (0.98 if dx > 0 else 1.02), y0 * 0.98, workloads[i], fontsize=8)
 
-        for roof in scomproofs:
+        for roof in gflops_roof:
             ax.text(x[-ixx],roof,
-                    scomp_roof_name[scomproofs.index(roof)] + ': ' + '{0:.1f}'.format(float(roof)) + ' GFLOP/s',
+                    gflops_roof_name[gflops_roof.index(roof)] + ': ' + '{0:.1f}'.format(float(roof)) + ' GFLOP/s',
                     horizontalalignment='right',
                     verticalalignment='bottom')
 
-        for roof in smemroofs:
+        for roof in BW_roof:
             ang = np.arctan(np.log10(xlim[1]/xlim[0]) / np.log10(ylim[1]/ylim[0]) 
-                                        * fig.get_size_inches()[1]/fig.get_size_inches()[0] )
+                                        * fig.get_size_inches()[1]/fig.get_size_inches()[0])
             if x[ixx]*roof >ymin:
                 ax.text(x[ixx],x[ixx]*roof*(1+0.25*np.sin(ang)**2),
-                    smem_roof_name[smemroofs.index(roof)] + ': ' + '{0:.1f}'.format(float(roof)) + ' GB/s',
+                    BW_roof_name[BW_roof.index(roof)] + ': ' + '{0:.1f}'.format(float(roof)) + ' GB/s',
                     horizontalalignment='left',
                     verticalalignment='bottom',
                     rotation=180/np.pi*ang)
@@ -186,8 +240,9 @@ for device in devices:
                         ymin_x_elbow.append(x[ix-1])
                         ymin_ix_elbow.append(ix-1)
                         break
-                ax.text(x[ixx+ymin_ix_elbow[0]],x[ixx+ymin_ix_elbow[0]]*roof*(1+0.25*np.sin(ang)**2),
-                    smem_roof_name[smemroofs.index(roof)] + ': ' + '{0:.1f}'.format(float(roof)) + ' GB/s',
+                ax.text(x[ixx+ymin_ix_elbow[0]]*0.8,\
+                    x[ixx+ymin_ix_elbow[0]]*roof*(1+0.05*np.sin(ang)**2),
+                    BW_roof_name[BW_roof.index(roof)] + ': ' + '{0:.1f}'.format(float(roof)) + ' GB/s',
                     horizontalalignment='left',
                     verticalalignment='bottom',
                     rotation=180/np.pi*ang)
@@ -196,13 +251,14 @@ for device in devices:
         # ax.add_artist(leg1)
 
         patch_handles = list()
-        src_name = ['generated', 'library']
-        for i in range(0,len(smem_roof_name)):
+        src_name = ['generated (DRAM)', 'library (DRAM)', 'generated (Cache)', 'library (Cache)']
+        # print(BW_roof_name)
+        for i in range(0, len(src_name)):
             patch_handles.append(mpatches.Patch(color=colors[i],label=src_name[i]))
 
         leg2 = plt.legend(handles = patch_handles, loc='lower right', scatterpoints = 1)
 
-        ax.text(xlim[0]*1.1,ylim[1]/1.1, device_name[device], horizontalalignment='left', verticalalignment='top')
+        ax.text(xlim[0]*text_distance_scale, ylim[1]/text_distance_scale, device_name[device], horizontalalignment='left', verticalalignment='top')
 
         plt.savefig(filename + '.png')
         plt.savefig(filename + '.eps')

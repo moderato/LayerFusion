@@ -312,19 +312,23 @@ def NHWC_to_NCHWc_kernel(hwio, vlen_i, vlen_o, depthwise=False):
                 hwio.reshape(h, w, i_chunk, vlen_i, 1, 1)
     return np.array(oihwio.transpose(4, 2, 0, 1, 3, 5), order='C')
 
-def tensor_transformation(data, idx, pack, best_config, fusion_cfg, depthwise=False):
-    if idx == -1: # data
+def tensor_transformation(data, idx, pack, best_config, fusion_cfg, tensor_type):
+    if tensor_type == "data":
         if pack:
-            vlen_o = get_CPU_vlen(best_config, 'vlen_input' if not fusion_cfg.get_filter(0).depthwise else 'vlen_layer_0')
+            vlen_o = get_CPU_vlen(best_config, 'vlen_input' if (idx == 0 and not fusion_cfg.get_filter(idx).depthwise) else 'vlen_layer_{}'.format(idx))
             return NHWC_to_NCHWc_data(data, vlen_o)
         return data
     else: # kernel:
         if pack:
-            vlen_i = get_CPU_vlen(best_config, 'vlen_input' if (idx == 0 and not f.depthwise) else\
-                                                ('vlen_layer_{}'.format(idx) if idx == 0 else\
-                                                    'vlen_layer_{}'.format(idx-1)))
+            # if first layer and not depthwise -> vlen_input
+            # if first layer and depthwise -> vlen_layer_0
+            # otherwise -> vlen_layer_{idx-1}
+            cfg_key = 'vlen_input' if (idx == 0 and not fusion_cfg.get_filter(idx).depthwise) else\
+                        ('vlen_layer_0' if idx == 0 else\
+                        'vlen_layer_{}'.format(idx-1))
+            vlen_i = get_CPU_vlen(best_config, cfg_key)
             vlen_o = get_CPU_vlen(best_config, 'vlen_layer_{}'.format(idx))
-            return NHWC_to_NCHWc_kernel(data, vlen_i, vlen_o, depthwise)
+            return NHWC_to_NCHWc_kernel(data, vlen_i, vlen_o, fusion_cfg.get_filter(idx).depthwise)
         return data
 
 def get_ref_data(workload_name,
@@ -341,14 +345,14 @@ def get_ref_data(workload_name,
 
     # Pretending the input_data is some output_data from stage -1
     output_data = np.random.uniform(0.0, 0.1, size=fusion_cfg.layers[0][0].get_shape()).astype(dtype)
-    ref_data.append(tensor_transformation(output_data, -1, pack, best_config, fusion_cfg))
+    ref_data.append(tensor_transformation(output_data, 0, pack, best_config, fusion_cfg, 'data'))
     # params names for saving data
     params_name = ['input']
     
     for idx in range(fusion_cfg.layer_num):
         f = fusion_cfg.get_filter(idx)
         filter_data = np.random.uniform(0.0, 0.1, size=get_const_tuple(f.get_shape())).astype(dtype)
-        ref_data.append(tensor_transformation(filter_data, idx, pack, best_config, fusion_cfg, f.depthwise))
+        ref_data.append(tensor_transformation(filter_data, idx, pack, best_config, fusion_cfg, 'kernel'))
         input_data = np.copy(output_data)
 
         if f.depthwise:
@@ -381,13 +385,12 @@ def get_ref_data(workload_name,
             params_name.extend(['scale_{}'.format(idx+1), 'shift_{}'.format(idx+1)])
 
         if idx == fusion_cfg.layer_num - 1: # At the last stage, append output_data as the final output for reference
-            ref_data.append(tensor_transformation(output_data, -1, pack, best_config, fusion_cfg))
+            ref_data.append(tensor_transformation(output_data, idx, pack, best_config, fusion_cfg, 'data'))
     params_name.append('output')
 
     if save_data:
         # Save ref data
         for i in range(0, len(ref_data)):
-            # filename = 'npy/{}_{}/'.format(name, '_'.join(str(s) for s in Parameters(parameters).get_params()))
             filename = 'npy/{}/'.format(workload_name)
             if not os.path.exists(filename):
                 os.mkdir(filename)

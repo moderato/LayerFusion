@@ -4,6 +4,16 @@ export DMLC_CORE=${TVM_HOME}/3rdparty/dmlc-core
 export VTUNE_HOME=${HOME}/intel/vtune_profiler
 export LIBXSMM_HOME=${HOME}/Documents/experimental/libxsmm
 
+# Make folders
+mkdir -p logs/arithmetic_intensity/cpu
+mkdir -p logs/arithmetic_intensity/gpu
+mkdir -p logs/autotvm/cpu
+mkdir -p logs/autotvm/gpu
+mkdir -p logs/gflops/cpu
+mkdir -p logs/gflops/gpu
+mkdir -p logs/runtime/cpu
+mkdir -p logs/runtime/gpu
+
 # For VTune benchmark
 sudo sh -c 'echo 0 >/proc/sys/kernel/perf_event_paranoid' 
 sudo sh -c 'echo 0 >/proc/sys/kernel/kptr_restrict'

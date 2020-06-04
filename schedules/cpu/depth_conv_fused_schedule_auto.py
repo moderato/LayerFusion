@@ -30,7 +30,11 @@ def schedule_depth_conv_fused_nhwc_auto(cfg, fusion_cfg, outs, stages, params, d
     fused_blx = s[layer_output_dict['Layer_1']].fuse(n, oc_chunk_o, ht, wt)
     s[layer_output_dict['Layer_1']].parallel(fused_blx)
 
-    cfg.define_reorder('reorder_outer', [oc_chunk_i, ic_chunk_o, ho, wo], policy='all')
+    cfg.define_reorder('reorder_outer', [oc_chunk_i, ic_chunk_o, ho, wo], policy='candidate',
+                        candidate=[[oc_chunk_i, ic_chunk_o, ho, wo], [oc_chunk_i, ho, ic_chunk_o, wo], [oc_chunk_i, ho, wo, ic_chunk_o],
+                                    [ho, oc_chunk_i, ic_chunk_o, wo], [ho, oc_chunk_i, wo, ic_chunk_o], [ho, wo, oc_chunk_i, ic_chunk_o],
+                                    [ic_chunk_o, oc_chunk_i, ho, wo], [ic_chunk_o, ho, oc_chunk_i, wo], [ic_chunk_o, ho, wo, oc_chunk_i],
+                                    [ho, ic_chunk_o, oc_chunk_i, wo], [ho, ic_chunk_o, wo, oc_chunk_i], [ho, wo, ic_chunk_o, oc_chunk_i]])
     cfg['reorder_outer'].apply(s, layer_output_dict['Layer_1'], [oc_chunk_i, ic_chunk_o, ho, wo])
 
     # Temporary skip the case of 1x1 stride > 1
@@ -75,7 +79,7 @@ def schedule_depth_conv_fused_nhwc_auto(cfg, fusion_cfg, outs, stages, params, d
     s[layer_output_dict['Layer_0']].vectorize(c_vec)
 
     cfg.define_reorder('reorder_depthwise', [h, ry, rx, w], policy='candidate',\
-                                            candidate=[[h, w, ry, rx], [h, ry, w, rx], [h, ry, rx, w], [ry, h, rx, w], [ry, rx, h, w]])
+                        candidate=[[h, w, ry, rx], [h, ry, w, rx], [h, ry, rx, w], [ry, h, w, rx], [ry, h, rx, w], [ry, rx, h, w]])
     cfg['reorder_depthwise'].apply(s, layer_output_dict['Layer_0'], [h, ry, rx, w])
 
     s = s.normalize()
