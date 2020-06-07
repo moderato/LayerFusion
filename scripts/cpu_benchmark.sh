@@ -1,5 +1,10 @@
 #!/bin/bash
-REP_BENCH=400 # 20 iterations for flops and bandwidth measurements
+REP_BENCH=20 # By default 20 * 2 = 40 iterations for flops and bandwidth measurements
+if [ "$#" == 1 ] ;
+then
+  REP_BENCH="$1"
+fi
+echo "$(( ${REP_BENCH} * 2 )) iterations for profiling."
 
 for input in "../workloads/depth_conv_workloads.csv"
 do
@@ -103,15 +108,14 @@ do
       echo "    DRAM AI: $mkldnn_dram_ai"
       echo "    L1 bytes: $library_l1_bytes"
       echo "    L1 AI: $mkldnn_l1_ai"
-      exit
 
       cd ..
-      mkdir -p logs/runtime/cpu
-      echo -e "generated,mkldnn\n$generated_kernel_runtime,$mkldnn_runtime" > "logs/runtime/cpu/${workload_name}.csv"
-      mkdir -p logs/arithmetic_intensity/cpu
-      echo -e "generated_dram,mkldnn_dram,generated_l1,mkldnn_l1\n$generated_kernel_dram_ai,$mkldnn_dram_ai,${generated_kernel_l1_ai},${mkldnn_l1_ai}" > "logs/arithmetic_intensity/cpu/${workload_name}.csv"
-      mkdir -p logs/gflops/cpu
-      echo -e "generated,mkldnn\n$generated_kernel_gflops,$mkldnn_gflops" > "logs/gflops/cpu/${workload_name}.csv"
+      mkdir -p logs/runtime/cpu/$(( ${REP_BENCH} * 2 ))
+      echo -e "generated,mkldnn\n$generated_kernel_runtime,$mkldnn_runtime" > "logs/runtime/cpu/$(( ${REP_BENCH} * 2 ))/${workload_name}.csv"
+      mkdir -p logs/arithmetic_intensity/cpu/$(( ${REP_BENCH} * 2 ))
+      echo -e "generated_dram,mkldnn_dram,generated_l1,mkldnn_l1\n$generated_kernel_dram_ai,$mkldnn_dram_ai,${generated_kernel_l1_ai},${mkldnn_l1_ai}" > "logs/arithmetic_intensity/cpu/$(( ${REP_BENCH} * 2 ))/${workload_name}.csv"
+      mkdir -p logs/gflops/cpu/$(( ${REP_BENCH} * 2 ))
+      echo -e "generated,mkldnn\n$generated_kernel_gflops,$mkldnn_gflops" > "logs/gflops/cpu/$(( ${REP_BENCH} * 2 ))/${workload_name}.csv"
       cd scripts
 
       # Print results

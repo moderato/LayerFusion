@@ -85,22 +85,22 @@ class LayerConfig:
     def get_input_shape(self):
         if self._pack:
             n, c_chunk, h, w, c_vec = self._input.shape
-            return n, c_chunk, h, w, c_vec
+            return n.value, c_chunk.value, h.value, w.value, c_vec.value
         else:
             n, h, w, c = self._input.shape
-            return n, h, w, c
+            return n.value, h.value, w.value, c.value
 
     def get_filter_shape(self):
         if self._pack: # 6D
             tmp_chunk, ic_chunk, h, w, ic_vec, tmp = self._filter.shape
-            return tmp_chunk, ic_chunk, h, w, ic_vec, tmp
+            return tmp_chunk.value, ic_chunk.value, h.value, w.value, ic_vec.value, tmp.value
         else: # 4D
             h, w, ic, tmp = self._filter.shape # tmp represents either oc (normal conv) or channel multiplier (depthwise)
-            return h, w, ic, tmp
+            return h.value, w.value, ic.value, tmp.value
 
     def get_output_shape(self):
         if self._pack:
-            n, c_chunk, h, w, c_vec = self._input.shape
+            n, c_chunk, h, w, c_vec = self._output_shape
             return n, c_chunk, h, w, c_vec
         else:
             n, h, w, c = self._output_shape
@@ -113,7 +113,7 @@ class LayerConfig:
             FH, FW, _, _ = self.get_filter_shape()
 
         # Only pad when it's not 1x1
-        if FH.value > 1 and FW.value > 1:
+        if FH > 1 and FW > 1:
             # print('Padding is needed!')
             tmp = []
             pad_top, pad_left, pad_down, pad_right = self._filter_cfg.get_padding_shape()
@@ -158,12 +158,14 @@ class LayerConfig:
         if cfg is not None:
             # Assuming not final layer:
             if self._device != 'cuda': # Workaround: don't split HW here for CUDA; assume this won't be the last layer. TODO: Get rid of this.
-                # cfg.define_split('split_layer_{}_h'.format(self._layer_idx), OH.value, num_outputs=2, policy='verbose')
-                # cfg.define_split('split_layer_{}_w'.format(self._layer_idx), OW.value, num_outputs=2, policy='verbose')
-                cfg.define_split('split_layer_{}_c'.format(self._layer_idx), OC_chunk.value, num_outputs=2, policy='factors')
+                c_filter = lambda x: x.size[-1] >= -1 # dummy
+                # cfg.define_split('split_layer_{}_h'.format(self._layer_idx), OH, num_outputs=2, policy='verbose')
+                # cfg.define_split('split_layer_{}_w'.format(self._layer_idx), OW, num_outputs=2, policy='verbose')
+                cfg.define_split('split_layer_{}_c'.format(self._layer_idx), OC_chunk, num_outputs=2, policy='factors', filter=c_filter)
             else:
-                # cfg.define_split('split_layer_{}_c'.format(self._layer_idx), OC_chunk.value, num_outputs=(2 if (self._device == 'cuda' or not self._is_final_stage) else 3), policy='verbose')
-                cfg.define_split('split_layer_{}_c'.format(self._layer_idx), OC, num_outputs=3, policy='factors')
+                c_filter = lambda x: x.size[-1] in get_vlen(OC, self._device)
+                # cfg.define_split('split_layer_{}_c'.format(self._layer_idx), OC_chunk, num_outputs=(2 if (self._device == 'cuda' or not self._is_final_stage) else 3), policy='verbose')
+                cfg.define_split('split_layer_{}_c'.format(self._layer_idx), OC, num_outputs=3, policy='factors', filter=c_filter)
 
         if self._pack:
             Output = te.compute(self._output_shape,
@@ -222,6 +224,7 @@ class LayerConfig:
                 else:
                     H_num_outputs = 3
                     W_num_outputs = 3
+                c_filter = lambda x: x.size[-1] in get_vlen(OC, self._device)
             else:
                 if self._is_final_stage:
                     H_num_outputs = 3
@@ -229,6 +232,7 @@ class LayerConfig:
                 else:
                     H_num_outputs = 2
                     W_num_outputs = 2
+                c_filter = lambda x: x.size[-1] >= -1 # dummy
 
             cfg.define_split('split_layer_{}_h'.format(self._layer_idx), OH,
                                 num_outputs=H_num_outputs,
@@ -239,7 +243,7 @@ class LayerConfig:
             cfg.define_split('split_layer_{}_c'.format(self._layer_idx),
                                 OC_chunk if self._pack else OC,
                                 num_outputs=3 if self._device == 'cuda' else 2,
-                                policy='factors')
+                                policy='factors', filter=c_filter)
 
             if self._is_first_stage:
                 cfg.define_split('split_layer_0_rc',
