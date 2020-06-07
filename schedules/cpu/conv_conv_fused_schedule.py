@@ -32,23 +32,22 @@ def schedule_conv_conv_fused_nhwc(cfg, fusion_cfg, outs, stages, params):
     # --------------------
 
     ######## Input data, weights, BN, etc
-    # Beginning
-    if hasPaddedInput[0]:
-        s[stage_dict['PaddedInput_0']].compute_inline()
+    # if hasPaddedInput[0]:
+    #     s[stage_dict['PaddedInput_0']].compute_inline()
+    ConvLocalAccumulator = stage_dict['Output_0']
 
-    # Intermediate
-    if bn_relu[0]: 
+    if bn_relu[0] is not None:
         s[stage_dict['Output_0_ScaleShift']].compute_inline()
     if hasPaddedInput[1]:
         if bn_relu[0]:
             s[layer_output_dict['Layer_0']].compute_inline()
-        stage_dict['SharedInput_1'] = stage_dict['PaddedInput_1'] # For disambiguity: 'PaddedInput_1' won't be used in scheduling
-    else:
-        stage_dict['SharedInput_1'] = layer_output_dict['Layer_0'] # For disambiguity
+        # layer_output_dict['Layer_0'] = stage_dict['PaddedInput_1']
 
-    # End
-    if bn_relu[1]:
+    if bn_relu[1] is not None:
         s[stage_dict['Output_1_ScaleShift']].compute_inline()
+    #     OL = stage_dict['Output_1']
+    # else:
+    #     OL = s.cache_write(layer_output_dict['Layer_1'], 'local')
 
     ######## Global output
     n, oc_chunk, h, w, oc = s[layer_output_dict['Layer_1']].op.axis

@@ -12,27 +12,27 @@ def fused_convs(cfg, fusion_cfg, device='cuda', array_packing=False):
     depthwise_count = 0
     next_input = None # Output tensor of the previous stage
 
-    # # Get all common factors of HWC axes of all layers: fix thread nums for the entire fusion
-    # if device == 'cuda':
-    #     final_thx_can = None
-    #     final_thy_can = None
-    #     final_thz_can = None
-    #     for idx in range(fusion_cfg.layer_num):
-    #         output = fusion_cfg.get_output(idx)
-    #         thx_can = get_vlen(output.C, device=device, is_c=True)
-    #         thy_can = get_vlen(output.W, device=device, is_c=False)
-    #         thz_can = get_vlen(output.H, device=device, is_c=False)
-    #         if idx == 0:
-    #             final_thx_can = set(thx_can)
-    #             final_thy_can = set(thy_can)
-    #             final_thz_can = set(thz_can)
-    #         else:
-    #             final_thx_can = final_thx_can.intersection(thx_can)
-    #             final_thy_can = final_thy_can.intersection(thy_can)
-    #             final_thz_can = final_thz_can.intersection(thz_can)
-    #     cfg.define_knob('thread_x', list(final_thx_can))
-    #     cfg.define_knob('thread_y', list(final_thy_can))
-    #     cfg.define_knob('thread_z', list(final_thz_can))
+    # Get all common factors of HWC axes of all layers: fix thread nums for the entire fusion
+    if device == 'cuda':
+        final_thx_can = None
+        final_thy_can = None
+        final_thz_can = None
+        for idx in range(fusion_cfg.layer_num):
+            output = fusion_cfg.get_output(idx)
+            thx_can = get_vlen(output.C, device=device, is_c=True)
+            thy_can = get_vlen(output.W, device=device, is_c=False)
+            thz_can = get_vlen(output.H, device=device, is_c=False)
+            if idx == 0:
+                final_thx_can = set(thx_can)
+                final_thy_can = set(thy_can)
+                final_thz_can = set(thz_can)
+            else:
+                final_thx_can = final_thx_can.intersection(thx_can)
+                final_thy_can = final_thy_can.intersection(thy_can)
+                final_thz_can = final_thz_can.intersection(thz_can)
+        cfg.define_knob('thread_x', list(final_thx_can))
+        cfg.define_knob('thread_y', list(final_thy_can))
+        cfg.define_knob('thread_z', list(final_thz_can))
 
     for idx in range(fusion_cfg.layer_num):
         sc = LayerConfig(cfg, fusion_cfg, idx, next_input, device=device, pack=(device!='cuda'))
