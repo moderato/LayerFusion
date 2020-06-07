@@ -13,10 +13,23 @@ def schedule_conv_conv_fused_nhwc_auto(cfg, fusion_cfg, outs, stages, params, de
         get_stages_and_cfgs(fusion_cfg, stages, params)
     hasPaddedInput = [fusion_cfg.need_padding(idx) for idx in range(layer_num)]
 
-    s[stage_dict['Output_0']].set_scope('global')
-    for l in range(0, layer_num):
-        if bn_relu[l]:
-            s[stage_dict['Output_{}_ScaleShift'.format(l)]].compute_inline()
+    # Beginning
+    if hasPaddedInput[0]:
+        s[stage_dict['PaddedInput_0']].compute_inline()
+
+    # Intermediate
+    if bn_relu[0]: 
+        s[stage_dict['Output_0_ScaleShift']].compute_inline()
+    if hasPaddedInput[1]:
+        if bn_relu[0]:
+            s[layer_output_dict['Layer_0']].compute_inline()
+        stage_dict['SharedInput_1'] = stage_dict['PaddedInput_1'] # For disambiguity: 'PaddedInput_1' won't be used in scheduling
+    else:
+        stage_dict['SharedInput_1'] = layer_output_dict['Layer_0'] # For disambiguity
+
+    # End
+    if bn_relu[1]:
+        s[stage_dict['Output_1_ScaleShift']].compute_inline()
 
     n, oc_chunk, h, w, oc = s[layer_output_dict['Layer_1']].op.axis
     oc_chunk_o, oc_chunk_i = cfg['split_layer_1_c'].apply(s, layer_output_dict['Layer_1'], oc_chunk)
@@ -28,7 +41,11 @@ def schedule_conv_conv_fused_nhwc_auto(cfg, fusion_cfg, outs, stages, params, de
     fused_blx = s[layer_output_dict['Layer_1']].fuse(n, oc_chunk_o, ht, wt)
     s[layer_output_dict['Layer_1']].parallel(fused_blx)
 
-    cfg.define_reorder('reorder_layer_1_outer', [oc_chunk_i, ic_chunk_o, ho, wo], policy='all')
+    cfg.define_reorder('reorder_layer_1_outer', [oc_chunk_i, ic_chunk_o, ho, wo], policy='candidate',
+                        candidate=[[oc_chunk_i, ic_chunk_o, ho, wo], [oc_chunk_i, ho, ic_chunk_o, wo], [oc_chunk_i, ho, wo, ic_chunk_o],
+                                    [ho, oc_chunk_i, ic_chunk_o, wo], [ho, oc_chunk_i, wo, ic_chunk_o], [ho, wo, oc_chunk_i, ic_chunk_o],
+                                    [ic_chunk_o, oc_chunk_i, ho, wo], [ic_chunk_o, ho, oc_chunk_i, wo], [ic_chunk_o, ho, wo, oc_chunk_i],
+                                    [ho, ic_chunk_o, oc_chunk_i, wo], [ho, ic_chunk_o, wo, oc_chunk_i], [ho, wo, ic_chunk_o, oc_chunk_i]])
     cfg['reorder_layer_1_outer'].apply(s, layer_output_dict['Layer_1'], [oc_chunk_i, ic_chunk_o, ho, wo])
 
     # Temporary skip the case of 1x1 stride > 1
@@ -86,7 +103,11 @@ def schedule_conv_conv_fused_nhwc_auto(cfg, fusion_cfg, outs, stages, params, de
     ic_chunk_o, ic_chunk_i = cfg['split_layer_0_rc'].apply(s, layer_output_dict['Layer_0'], ic_chunk)
     s[layer_output_dict['Layer_0']].reorder(oc_chunk, ic_chunk_o, ho, wo, h, ic_chunk_i, ry, rx, w, oc, ic)
 
-    cfg.define_reorder('reorder_layer_0_outer', [oc_chunk, ic_chunk_o, ho, wo], policy='all')
+    cfg.define_reorder('reorder_layer_0_outer', [oc_chunk, ic_chunk_o, ho, wo], policy='candidate',
+                        candidate=[[oc_chunk_i, ic_chunk_o, ho, wo], [oc_chunk_i, ho, ic_chunk_o, wo], [oc_chunk_i, ho, wo, ic_chunk_o],
+                                    [ho, oc_chunk_i, ic_chunk_o, wo], [ho, oc_chunk_i, wo, ic_chunk_o], [ho, wo, oc_chunk_i, ic_chunk_o],
+                                    [ic_chunk_o, oc_chunk_i, ho, wo], [ic_chunk_o, ho, oc_chunk_i, wo], [ic_chunk_o, ho, wo, oc_chunk_i],
+                                    [ho, ic_chunk_o, oc_chunk_i, wo], [ho, ic_chunk_o, wo, oc_chunk_i], [ho, wo, ic_chunk_o, oc_chunk_i]])
     cfg['reorder_layer_0_outer'].apply(s, layer_output_dict['Layer_0'], [oc_chunk, ic_chunk_o, ho, wo])
 
     # Temporary skip the case of 1x1 stride > 1

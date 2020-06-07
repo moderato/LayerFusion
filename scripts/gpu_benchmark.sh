@@ -1,4 +1,11 @@
 #!/bin/bash
+REP_BENCH=20 # By default 20 * 2 = 40 iterations for flops and bandwidth measurements
+if [ "$#" == 1 ] ;
+then
+  REP_BENCH="$1"
+fi
+echo "$(( ${REP_BENCH} * 2 )) iterations for profiling."
+
 for input in "../workloads/depth_conv_workloads.csv"
 do
   line_count=0
@@ -21,7 +28,7 @@ do
       cudnn_runtime="$(cat /tmp/runtime_cudnn.txt | grep Fusion | awk '{ printf "%10s\n", $4 }')"
 
       # Repeatition=20 for arithmetic intensity
-      make KERNEL=../../generated_kernels/gpu/${workload_name}.cuh REPEATITION=20 >& /dev/null
+      make KERNEL=../../generated_kernels/gpu/${workload_name}.cuh REPEATITION=$(( ${REP_BENCH} * 2 )) >& /dev/null
 
       nvprof --metrics flop_count_sp \
               --metrics dram_read_transactions \
@@ -37,6 +44,14 @@ do
       generated_kernel_total_flop="$(cat /tmp/nvprof_generated.txt | grep flop_count_sp | awk '{ x=gensub("\t","","G",$9); printf x "+" } END{ print 0 }' | bc -l)"
       generated_kernel_dram_ai="$( echo "scale=4; $generated_kernel_total_flop * 1.0 / (($total_dram_read + $total_dram_write) * 32)" | bc)"
       generated_kernel_l2_ai="$( echo "scale=4; $generated_kernel_total_flop * 1.0 / (($total_l2_read + $total_l2_write) * 32)" | bc)"
+      # echo "------ Generated kernel details"
+      # echo "    Runtime: $generated_kernel_runtime"
+      # echo "    Flop: $generated_kernel_total_flop"
+      # echo "    DRAM bytes: $(( ${total_dram_read} + ${total_dram_write} ))"
+      # echo "    DRAM AI: $generated_kernel_dram_ai"
+      # echo "    L2 bytes: $(( ${total_l2_read} + ${total_l2_write} ))"
+      # echo "    L2 AI: $generated_kernel_l2_ai"
+
       nvprof --metrics flop_count_sp \
               --metrics dram_read_transactions \
               --metrics dram_write_transactions \
@@ -51,6 +66,13 @@ do
       cudnn_total_flop="$(cat /tmp/nvprof_cudnn.txt | grep flop_count_sp | awk '{ x=gensub("\t","","G",$9); printf x "+" } END{ print 0 }' | bc -l)"
       cudnn_dram_ai="$( echo "scale=4; $cudnn_total_flop * 1.0 / (($total_dram_read + $total_dram_write) * 32)" | bc)"
       cudnn_l2_ai="$( echo "scale=4; $cudnn_total_flop * 1.0 / (($total_l2_read + $total_l2_write) * 32)" | bc)"
+      # echo "------ CuDNN details"
+      # echo "    Runtime: $cudnn_runtime"
+      # echo "    Flop: $cudnn_total_flop"
+      # echo "    DRAM bytes: $(( ${total_dram_read} + ${total_dram_write} ))"
+      # echo "    DRAM AI: $cudnn_dram_ai"
+      # echo "    L2 bytes: $(( ${total_l2_read} + ${total_l2_write} ))"
+      # echo "    L2 AI: $cudnn_l2_ai"
 
       # Output results to files
       cd ../../

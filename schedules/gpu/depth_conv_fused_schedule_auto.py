@@ -13,9 +13,9 @@ def schedule_depth_conv_fused_nhwc_auto(cfg, fusion_cfg, outs, stages, params):
     hasPaddedInput = [fusion_cfg.need_padding(idx) for idx in range(layer_num)]
 
     from pprint import pprint
-    pprint(stage_dict)
-    pprint(layer_output_dict)
-    pprint(param_dict)
+    # pprint(stage_dict)
+    # pprint(layer_output_dict)
+    # pprint(param_dict)
 
     # ######## Input data, weights, BN, etc
     s[stage_dict['PaddedInput_0']].compute_inline()
