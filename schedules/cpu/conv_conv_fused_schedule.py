@@ -20,12 +20,16 @@ def schedule_conv_conv_fused_nhwc(cfg, fusion_cfg, outs, stages, params):
 
     ######## Searchable parameters
     # --------------------
-    output_step_tile_size_h = 2
-    output_step_tile_size_w = 2
-    step_num_h = 2
+    # ---
+    output_step_tile_size_h = 1
+    output_step_tile_size_w = 28
+    step_num_h = 28
     step_num_w = 2
-    reduce_split1 = 4
-    reduce_split2 = 4
+    output_tile_0_h = 14
+    output_tile_0_w = 2
+    c_split2 = 4
+    reduce_split1 = 2
+    reduce_split2 = 2
     # --------------------
     output_tile_size_h = output_step_tile_size_h * step_num_h
     output_tile_size_w = output_step_tile_size_w * step_num_w
@@ -52,7 +56,7 @@ def schedule_conv_conv_fused_nhwc(cfg, fusion_cfg, outs, stages, params):
 
     ######## Global output
     n, oc_chunk, h, w, oc = s[layer_output_dict['Layer_1']].op.axis
-    oc_chunk_o, oc_chunk_i = s[layer_output_dict['Layer_1']].split(oc_chunk, factor=2)
+    oc_chunk_o, oc_chunk_i = s[layer_output_dict['Layer_1']].split(oc_chunk, factor=c_split2)
     ic_chunk, ry, rx, ic = s[layer_output_dict['Layer_1']].op.reduce_axis
     ic_chunk_o, ic_chunk_i = s[layer_output_dict['Layer_1']].split(ic_chunk, factor=reduce_split2)
     ht, wt, h, w = s[layer_output_dict['Layer_1']].tile(h, w, x_factor=output_tile_size_h, y_factor=output_tile_size_w)
@@ -73,8 +77,8 @@ def schedule_conv_conv_fused_nhwc(cfg, fusion_cfg, outs, stages, params):
         block_output_height = 1
 
     libxsmm_tensorize = intrin_libxsmm_brgemm(
-                                                ic.dom.extent,              # n of brgemm   -> ic
-                                                oc.dom.extent,              # k of brgemm   -> oc
+                                                ic.dom.extent,              # k of brgemm   -> ic
+                                                oc.dom.extent,              # n of brgemm   -> oc
                                                 output_step_tile_size_w,    # m of brgemm   -> w
                                                 filters_cfg['Layer_1'].W,   #               -> rx
                                                 filters_cfg['Layer_1'].H,   #               -> ry
@@ -89,13 +93,15 @@ def schedule_conv_conv_fused_nhwc(cfg, fusion_cfg, outs, stages, params):
 
     s[layer_output_dict['Layer_1']].tensorize(tensorize_axis, libxsmm_tensorize)
 
-    s[layer_output_dict['Layer_0']].compute_at(s[layer_output_dict['Layer_1']], oc_chunk_i)
-    s[stage_dict['PaddedInput_0']].compute_at(s[layer_output_dict['Layer_1']], oc_chunk_i)
+    s[layer_output_dict['Layer_0']].compute_at(s[layer_output_dict['Layer_1']], wo)
+    s[stage_dict['PaddedInput_0']].compute_at(s[layer_output_dict['Layer_1']], wo)
+    n, oc_chunk, h, w, oc = s[stage_dict['PaddedInput_0']].op.axis
+    s[stage_dict['PaddedInput_0']].vectorize(oc)
 
     n, oc_chunk, h, w, oc = s[layer_output_dict['Layer_0']].op.axis
-    ho, wo, h, w = s[layer_output_dict['Layer_0']].tile(h, w, x_factor=output_step_tile_size_h, y_factor=output_step_tile_size_w)
+    ho, wo, h, w = s[layer_output_dict['Layer_0']].tile(h, w, x_factor=output_tile_0_h, y_factor=output_tile_0_w)
     ic_chunk, ry, rx, ic = s[layer_output_dict['Layer_0']].op.reduce_axis
-    ic_chunk_o, ic_chunk_i = s[layer_output_dict['Layer_0']].split(ic_chunk, factor=reduce_split2)
+    ic_chunk_o, ic_chunk_i = s[layer_output_dict['Layer_0']].split(ic_chunk, factor=reduce_split1)
     s[layer_output_dict['Layer_0']].reorder(oc_chunk, ic_chunk_o, ho, wo, h, ic_chunk_i, ry, rx, w, oc, ic)
 
     # TODO: Deal with this. Currently assuming the first layer is never 1x1
@@ -111,9 +117,9 @@ def schedule_conv_conv_fused_nhwc(cfg, fusion_cfg, outs, stages, params):
         block_output_height = 1
 
     libxsmm_tensorize = intrin_libxsmm_brgemm(
-                                                ic.dom.extent,              # n of brgemm   -> ic
-                                                oc.dom.extent,              # k of brgemm   -> oc
-                                                output_step_tile_size_w,    # m of brgemm   -> w
+                                                ic.dom.extent,              # k of brgemm   -> ic
+                                                oc.dom.extent,              # n of brgemm   -> oc
+                                                output_tile_0_w,            # m of brgemm   -> w
                                                 filters_cfg['Layer_0'].W,   #               -> rx
                                                 filters_cfg['Layer_0'].H,   #               -> ry
                                                 reduce_split1,              #               -> ic_chunk_i

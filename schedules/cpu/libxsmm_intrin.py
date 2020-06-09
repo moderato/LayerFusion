@@ -62,14 +62,14 @@ def intrin_libxsmm_brgemm(
         ifw1, ofw1, ofmblock1 = s1[C].op.axis
         s1[C].reorder(ifw1, rco1, ry1, rx1, ofw1, ofmblock1, rci1)
     else:
-        exit(1)
+        raise AssertionError('Output tensor dimension not correct!')
 
     xx_ptr = tvm.tir.decl_buffer(A.shape, A.dtype,
                         name='W', offset_factor=1,
                         data_alignment=alignment, buffer_type='auto_broadcast')
 
     yy_ptr = tvm.tir.decl_buffer(B.shape, B.dtype,
-                        name='X', offset_factor=1,
+                        name='B', offset_factor=1,
                         strides=[te.var('s1'), te.var('s0'), ifmblock, 1],
                         data_alignment=alignment, buffer_type='auto_broadcast')
 
@@ -109,7 +109,7 @@ def intrin_libxsmm_brgemm(
 
     return te.decl_tensor_intrin(C.op,
                                     intrin_func,
-                                    name='GEMM',
+                                    name='BRGEMM',
                                     binds={
                                             A: xx_ptr,
                                             B: yy_ptr,

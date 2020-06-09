@@ -37,15 +37,15 @@ class LayerConfig:
             if cfg is not None:
                 if idx == 0 and not self._filter_cfg.depthwise: # First layer is not depthwise: define input vlen
                     cfg.define_knob('vlen_input', get_vlen(IC, device))
-                cfg.define_knob('vlen_layer_{}'.format(idx), get_vlen(OC, device))
+                cfg.define_knob('vlen_layer_{}'.format(idx), get_vlen(OC, device)) # define output vlen
 
                 # TODO: What if depthwise in the middle?
                 if idx == 0 and not self._filter_cfg.depthwise:
-                    vlen_i = cfg['vlen_input'].val
+                    vlen_i = cfg['vlen_input'].val # input vlen = newly defined vlen
                 elif idx == 0:
-                    vlen_i = cfg['vlen_layer_{}'.format(idx)].val
+                    vlen_i = cfg['vlen_layer_{}'.format(idx)].val # input vlen = output vlen
                 else:
-                    vlen_i = cfg['vlen_layer_{}'.format(idx-1)].val
+                    vlen_i = cfg['vlen_layer_{}'.format(idx-1)].val # input vlen = previous output vlen
                 vlen_o = cfg['vlen_layer_{}'.format(idx)].val
             else:
                 vlen_i = 16

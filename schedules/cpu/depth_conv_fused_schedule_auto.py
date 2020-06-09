@@ -3,7 +3,6 @@ from tvm import te
 from schedule_utils import get_stages_and_cfgs
 from .libxsmm_intrin import intrin_libxsmm_brgemm
 
-########## gepm_var1 ##########
 def schedule_depth_conv_fused_nhwc_auto(cfg, fusion_cfg, outs, stages, params, device='llvm -mcpu=core-avx2'):
     outs = [outs] if isinstance(outs, te.tensor.Tensor) else outs
     s = te.create_schedule([x.op for x in outs])
@@ -50,8 +49,8 @@ def schedule_depth_conv_fused_nhwc_auto(cfg, fusion_cfg, outs, stages, params, d
         block_output_height = 1
 
     libxsmm_tensorize = intrin_libxsmm_brgemm(
-                                                ic.dom.extent,                      # n of brgemm   -> rci
-                                                oc.dom.extent,                      # k of brgemm   -> ki
+                                                ic.dom.extent,                      # k of brgemm   -> rci
+                                                oc.dom.extent,                      # n of brgemm   -> ki
                                                 cfg['split_layer_1_w'].size[-1],    # m of brgemm   -> wi
                                                 filters_cfg['Layer_1'].W,           #               -> rx
                                                 filters_cfg['Layer_1'].H,           #               -> ry

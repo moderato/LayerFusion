@@ -20,7 +20,7 @@ sh_1=${PARAM[7]}
 sw_1=${PARAM[7]}
 
 is_depthwise_1=${PARAM[8]}
-if [ $is_depthwise_1 ]
+if [ $is_depthwise_1 == 1 ]
 then
     g_1=${PARAM[4]}
     oc_1=$(( $ic_1 * ${PARAM[6]} ))

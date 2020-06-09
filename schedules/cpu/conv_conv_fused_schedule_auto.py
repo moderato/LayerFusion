@@ -23,7 +23,7 @@ def schedule_conv_conv_fused_nhwc_auto(cfg, fusion_cfg, outs, stages, params, de
     if hasPaddedInput[1]:
         if bn_relu[0]:
             s[layer_output_dict['Layer_0']].compute_inline()
-        stage_dict['SharedInput_1'] = stage_dict['PaddedInput_1'] # For disambiguity: 'PaddedInput_1' won't be used in scheduling
+        stage_dict['SharedInput_1'] = stage_dict['PaddedInput_1'] # For disambiguity: 'PaddedInput_1' wo_1n't be used in scheduling
     else:
         stage_dict['SharedInput_1'] = layer_output_dict['Layer_0'] # For disambiguity
 
@@ -32,21 +32,21 @@ def schedule_conv_conv_fused_nhwc_auto(cfg, fusion_cfg, outs, stages, params, de
         s[stage_dict['Output_1_ScaleShift']].compute_inline()
 
     n, oc_chunk, h, w, oc = s[layer_output_dict['Layer_1']].op.axis
-    oc_chunk_o, oc_chunk_i = cfg['split_layer_1_c'].apply(s, layer_output_dict['Layer_1'], oc_chunk)
+    oc_chunk_o, oc_chunk_i_1 = cfg['split_layer_1_c'].apply(s, layer_output_dict['Layer_1'], oc_chunk)
     ic_chunk, ry, rx, ic = s[layer_output_dict['Layer_1']].op.reduce_axis
-    ic_chunk_o, ic_chunk_i = cfg['split_layer_0_c'].apply(s, layer_output_dict['Layer_1'], ic_chunk)
-    ht, ho, h = cfg['split_layer_1_h'].apply(s, layer_output_dict['Layer_1'], h)
-    wt, wo, w = cfg['split_layer_1_w'].apply(s, layer_output_dict['Layer_1'], w)
-    s[layer_output_dict['Layer_1']].reorder(n, oc_chunk_o, ht, wt, oc_chunk_i, ic_chunk_o, ho, wo, h, ic_chunk_i, ry, rx, w, oc, ic)
+    ic_chunk_o_1, ic_chunk_i = cfg['split_layer_0_c'].apply(s, layer_output_dict['Layer_1'], ic_chunk)
+    ht, ho_1, h = cfg['split_layer_1_h'].apply(s, layer_output_dict['Layer_1'], h)
+    wt, wo_1, w = cfg['split_layer_1_w'].apply(s, layer_output_dict['Layer_1'], w)
+    s[layer_output_dict['Layer_1']].reorder(n, oc_chunk_o, ht, wt, oc_chunk_i_1, ic_chunk_o_1, ho_1, wo_1, h, ic_chunk_i, ry, rx, w, oc, ic)
     fused_blx = s[layer_output_dict['Layer_1']].fuse(n, oc_chunk_o, ht, wt)
     s[layer_output_dict['Layer_1']].parallel(fused_blx)
 
-    cfg.define_reorder('reorder_layer_1_outer', [oc_chunk_i, ic_chunk_o, ho, wo], policy='candidate',
-                        candidate=[[oc_chunk_i, ic_chunk_o, ho, wo], [oc_chunk_i, ho, ic_chunk_o, wo], [oc_chunk_i, ho, wo, ic_chunk_o],
-                                    [ho, oc_chunk_i, ic_chunk_o, wo], [ho, oc_chunk_i, wo, ic_chunk_o], [ho, wo, oc_chunk_i, ic_chunk_o],
-                                    [ic_chunk_o, oc_chunk_i, ho, wo], [ic_chunk_o, ho, oc_chunk_i, wo], [ic_chunk_o, ho, wo, oc_chunk_i],
-                                    [ho, ic_chunk_o, oc_chunk_i, wo], [ho, ic_chunk_o, wo, oc_chunk_i], [ho, wo, ic_chunk_o, oc_chunk_i]])
-    cfg['reorder_layer_1_outer'].apply(s, layer_output_dict['Layer_1'], [oc_chunk_i, ic_chunk_o, ho, wo])
+    cfg.define_reorder('reorder_layer_1_outer', [oc_chunk_i_1, ic_chunk_o_1, ho_1, wo_1], policy='candidate',
+                        candidate=[[oc_chunk_i_1, ic_chunk_o_1, ho_1, wo_1], [oc_chunk_i_1, ho_1, ic_chunk_o_1, wo_1], [oc_chunk_i_1, ho_1, wo_1, ic_chunk_o_1],
+                                    [ho_1, oc_chunk_i_1, ic_chunk_o_1, wo_1], [ho_1, oc_chunk_i_1, wo_1, ic_chunk_o_1], [ho_1, wo_1, oc_chunk_i_1, ic_chunk_o_1],
+                                    [ic_chunk_o_1, oc_chunk_i_1, ho_1, wo_1], [ic_chunk_o_1, ho_1, oc_chunk_i_1, wo_1], [ic_chunk_o_1, ho_1, wo_1, oc_chunk_i_1],
+                                    [ho_1, ic_chunk_o_1, oc_chunk_i_1, wo_1], [ho_1, ic_chunk_o_1, wo_1, oc_chunk_i_1], [ho_1, wo_1, ic_chunk_o_1, oc_chunk_i_1]])
+    cfg['reorder_layer_1_outer'].apply(s, layer_output_dict['Layer_1'], [oc_chunk_i_1, ic_chunk_o_1, ho_1, wo_1])
 
     # Temporary skip the case of 1x1 stride > 1
     if (((filters_cfg['Layer_1'].H == 1 and filters_cfg['Layer_1'].W == 1 and \
@@ -61,12 +61,13 @@ def schedule_conv_conv_fused_nhwc_auto(cfg, fusion_cfg, outs, stages, params, de
         block_output_height = 1
 
     libxsmm_tensorize = intrin_libxsmm_brgemm(
-                                                ic.dom.extent,                      # n of brgemm   -> rci
-                                                oc.dom.extent,                      # k of brgemm   -> ki
+                                                ic.dom.extent,                      # k of brgemm   -> rci
+                                                oc.dom.extent,                      # n of brgemm   -> ki
                                                 cfg['split_layer_1_w'].size[-1],    # m of brgemm   -> wi
                                                 filters_cfg['Layer_1'].W,           #               -> rx
                                                 filters_cfg['Layer_1'].H,           #               -> ry
-                                                cfg['split_layer_0_c'].size[-1],    #               -> rco_i
+                                                cfg['split_layer_0_c'].size[-1],    #               -> rco_i TODO: Not necessary so, can be further split, e.g. calculate 4 in the
+                                                                                    #                               first stage and calculate 2 twice in the second stage
 
                                                 block_output_height,                #               -> hi
 
@@ -93,8 +94,8 @@ def schedule_conv_conv_fused_nhwc_auto(cfg, fusion_cfg, outs, stages, params, de
     #                                         candidate=[[h, w, ry, rx], [h, ry, w, rx], [h, ry, rx, w], [ry, h, rx, w], [ry, rx, h, w]])
     # cfg['reorder_depthwise'].apply(s, layer_output_dict['Layer_0'], [h, ry, rx, w])
 
-    s[layer_output_dict['Layer_0']].compute_at(s[layer_output_dict['Layer_1']], oc_chunk_i)
-    s[stage_dict['PaddedInput_0']].compute_at(s[layer_output_dict['Layer_1']], oc_chunk_i)
+    s[layer_output_dict['Layer_0']].compute_at(s[layer_output_dict['Layer_1']], wo_1)
+    s[stage_dict['PaddedInput_0']].compute_at(s[layer_output_dict['Layer_1']], wo_1)
 
     n, oc_chunk, h, w, oc = s[layer_output_dict['Layer_0']].op.axis
     ho, h = cfg['split_layer_0_h'].apply(s, layer_output_dict['Layer_0'], h)
@@ -104,10 +105,10 @@ def schedule_conv_conv_fused_nhwc_auto(cfg, fusion_cfg, outs, stages, params, de
     s[layer_output_dict['Layer_0']].reorder(oc_chunk, ic_chunk_o, ho, wo, h, ic_chunk_i, ry, rx, w, oc, ic)
 
     cfg.define_reorder('reorder_layer_0_outer', [oc_chunk, ic_chunk_o, ho, wo], policy='candidate',
-                        candidate=[[oc_chunk_i, ic_chunk_o, ho, wo], [oc_chunk_i, ho, ic_chunk_o, wo], [oc_chunk_i, ho, wo, ic_chunk_o],
-                                    [ho, oc_chunk_i, ic_chunk_o, wo], [ho, oc_chunk_i, wo, ic_chunk_o], [ho, wo, oc_chunk_i, ic_chunk_o],
-                                    [ic_chunk_o, oc_chunk_i, ho, wo], [ic_chunk_o, ho, oc_chunk_i, wo], [ic_chunk_o, ho, wo, oc_chunk_i],
-                                    [ho, ic_chunk_o, oc_chunk_i, wo], [ho, ic_chunk_o, wo, oc_chunk_i], [ho, wo, ic_chunk_o, oc_chunk_i]])
+                        candidate=[[oc_chunk, ic_chunk_o, ho, wo], [oc_chunk, ho, ic_chunk_o, wo], [oc_chunk, ho, wo, ic_chunk_o],
+                                    [ho, oc_chunk, ic_chunk_o, wo], [ho, oc_chunk, wo, ic_chunk_o], [ho, wo, oc_chunk, ic_chunk_o],
+                                    [ic_chunk_o, oc_chunk, ho, wo], [ic_chunk_o, ho, oc_chunk, wo], [ic_chunk_o, ho, wo, oc_chunk],
+                                    [ho, ic_chunk_o, oc_chunk, wo], [ho, ic_chunk_o, wo, oc_chunk], [ho, wo, ic_chunk_o, oc_chunk]])
     cfg['reorder_layer_0_outer'].apply(s, layer_output_dict['Layer_0'], [oc_chunk, ic_chunk_o, ho, wo])
 
     # Temporary skip the case of 1x1 stride > 1
@@ -123,12 +124,12 @@ def schedule_conv_conv_fused_nhwc_auto(cfg, fusion_cfg, outs, stages, params, de
         block_output_height = 1
 
     libxsmm_tensorize = intrin_libxsmm_brgemm(
-                                                ic.dom.extent,                      # n of brgemm   -> ic
-                                                oc.dom.extent,                      # k of brgemm   -> oc
+                                                ic.dom.extent,                      # k of brgemm   -> ic
+                                                oc.dom.extent,                      # n of brgemm   -> oc
                                                 cfg['split_layer_0_w'].size[-1],    # m of brgemm   -> wi
                                                 filters_cfg['Layer_0'].W,           #               -> rx
                                                 filters_cfg['Layer_0'].H,           #               -> ry
-                                                cfg['split_layer_0_c'].size[-1],    #               -> rco_i
+                                                cfg['split_layer_0_rc'].size[-1],   #              -> rco_i
 
                                                 block_output_height,                #               -> hi
 

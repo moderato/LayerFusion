@@ -88,18 +88,18 @@ for device in devices:
             # print(data['AI_dram_generated'], data['AI_dram_library'], data['AI_L2_generated'], data['AI_L2_library'], \
             #         data['FLOPS_generated'], data['FLOPS_library'], labels)
 
-        fig = plt.figure(1, figsize=(22, 14))
-        plt.clf()
+        fig, axlist = plt.subplots(2, 3, figsize=(22, 14))
         ylabels = ['AI_dram',  'AI_cache', 'FLOPS', 'AI_dram', 'AI_cache', 'FLOPS']
 
-        for i in range(0, 6):
-            ax = plt.subplot(2, 3, i+1)
+        handles = []
+        for i, ax in enumerate(axlist.flatten()):
             ax.set_xscale('log')
             ax.set_xlabel('Iterations')
             ax.set_ylabel(ylabels[i])
-            keys = data[data_type[i]].keys()
-            for key in keys:
-                ax.plot(iterations, data[data_type[i]][key])
+            for workload_name in workloads:
+                l, = ax.plot(iterations, data[data_type[i]][workload_name])
+                handles.append(l)
             ax.set_title(data_type[i])
+        fig.legend(handles, workloads, loc='center right')
 
         plt.savefig('{}_{}.png'.format(device, w), bbox_inches="tight")
