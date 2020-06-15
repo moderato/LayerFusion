@@ -53,16 +53,20 @@ targets = {
 
 def verify_fused(workload_name,
                     parameters,
-                    dtype="float32",
-                    no_print_ir=False,
-                    print_src=False,
-                    dry_run=False,
-                    save_data=False,
-                    export_code=False,
-                    auto_tvm=False,
-                    auto_tvm_skip_training=False,
-                    auto_tvm_trials=32,
-                    name='depth_conv'):
+                    tuning_opt,
+                    name='depth_conv',
+                    dtype="float32",):
+
+    no_print_ir = tuning_opt.no_print_ir
+    print_src = tuning_opt.print_src
+    save_data = tuning_opt.save_data
+    dry_run = tuning_opt.dry_run
+    export_code = tuning_opt.export_code
+    auto_tvm = tuning_opt.auto_tvm
+    auto_tvm_skip_training = tuning_opt.auto_tvm_skip_training
+    auto_tvm_transfer_learning = tuning_opt.auto_tvm_transfer_learning
+    auto_tvm_trials = tuning_opt.auto_tvm_trials
+
     def check_target(target):
         if not tvm.runtime.enabled(target):
             print("Skip because %s is not enabled" % target)
@@ -76,7 +80,7 @@ def verify_fused(workload_name,
             device = "gpu"
 
         if auto_tvm:
-            log_name = 'logs/autotvm/{}/{}_fused_{}.log'.format(device, name, workload_name)
+            log_name = 'logs/autotvm/layer/{}/{}_fused_{}.log'.format(device, name, workload_name)
             print(log_name)
 
             # logging
@@ -104,7 +108,7 @@ def verify_fused(workload_name,
                 tuner = autotvm.tuner.XGBTuner(task, feature_type="curve")
 
                 # Transfer learning if the training log exists
-                if os.path.isfile(log_name):
+                if auto_tvm_transfer_learning and os.path.isfile(log_name):
                     tuner.load_history(autotvm.record.load_from_file(log_name))
 
                 tuner.tune(n_trial=auto_tvm_trials,
@@ -206,7 +210,8 @@ if __name__ == "__main__":
         parser.add_argument("-c", "--export_code", action="store_true", help="Export generated kernel code.")
         parser.add_argument("-a", "--auto_tvm", action="store_true", help="AutoTVM for auto tuning.")
         parser.add_argument("-k", "--auto_tvm_skip_training", action="store_true", help="Run AutoTVM tuned kernel.")
-        parser.add_argument("-t", "--auto_tvm_trials", type=int, default=32, help="Number of AutoTVM trials")
+        parser.add_argument("-l", "--auto_tvm_transfer_learning", action="store_true", help="Load existing tuning log.")
+        parser.add_argument("-t", "--auto_tvm_trials", type=int, default=32, help="Number of AutoTVM trials.")
         options = parser.parse_args()
         return options
 
@@ -219,12 +224,5 @@ if __name__ == "__main__":
             print(workload_name, parameters)
             verify_fused(workload_name,
                             parameters,
-                            no_print_ir=options.no_print_ir,
-                            print_src=options.print_src,
-                            save_data=options.save_data,
-                            dry_run=options.dry_run,
-                            export_code=options.export_code,
-                            auto_tvm=options.auto_tvm,
-                            auto_tvm_skip_training=options.auto_tvm_skip_training,
-                            auto_tvm_trials=options.auto_tvm_trials,
+                            options,
                             name=t)

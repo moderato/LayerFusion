@@ -7,8 +7,10 @@ export LIBXSMM_HOME=${HOME}/Documents/experimental/libxsmm
 # Make folders
 mkdir -p logs/arithmetic_intensity/cpu
 mkdir -p logs/arithmetic_intensity/gpu
-mkdir -p logs/autotvm/cpu
-mkdir -p logs/autotvm/gpu
+mkdir -p logs/autotvm/layer/cpu
+mkdir -p logs/autotvm/layer/gpu
+mkdir -p logs/autotvm/model/cpu
+mkdir -p logs/autotvm/model/gpu
 mkdir -p logs/gflops/cpu
 mkdir -p logs/gflops/gpu
 mkdir -p logs/runtime/cpu
