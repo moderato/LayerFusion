@@ -1,6 +1,6 @@
 import tvm
 from tvm import te
-from schedule_utils import get_stages_and_cfgs
+from ..schedule_utils import get_stages_and_cfgs
 
 def schedule_conv_conv_fused_nhwc_auto(cfg, fusion_cfg, outs, stages, params):
     outs = [outs] if isinstance(outs, te.tensor.Tensor) else outs

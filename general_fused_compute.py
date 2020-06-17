@@ -60,9 +60,9 @@ def get_schedule(parameters, auto_tvm=False, device='cuda', name='depth_conv'):
     output_stage = stages[-1][-1]
 
     if device == 'cuda':
-        from schedules.schedules import gpu_schedules as sch
+        from schedules.schedule_utils import gpu_schedules as sch
     else:
-        from schedules.schedules import cpu_schedules as sch
+        from schedules.schedule_utils import cpu_schedules as sch
 
     f = sch(name, auto_tvm)
     s = f(cfg, fusion_cfg, output_stage, stages, params)

@@ -1,6 +1,6 @@
 import tvm
 from tvm import te
-from schedule_utils import get_stages_and_cfgs
+from ..schedule_utils import get_stages_and_cfgs
 from .libxsmm_intrin import intrin_libxsmm_brgemm
 
 def schedule_depth_conv_fused_nhwc(cfg, fusion_cfg, outs, stages, params):

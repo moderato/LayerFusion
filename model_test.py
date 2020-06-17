@@ -6,6 +6,9 @@ import tvm.contrib.graph_runtime as runtime
 import os, argparse
 import numpy as np
 
+from general_fused_compute import get_schedule
+from helper import *
+
 targets = {
     "cuda": {
         "key": "1050ti",
@@ -36,9 +39,9 @@ targets = {
     }
 }
 
-def get_network(name, batch_size, dtype="float32"):
+def get_network(name, batch_size, dtype="float32", image_shape=(3, 224, 224)):
     """Get the symbol definition and random weight of a network"""
-    input_shape = (batch_size, 3, 224, 224)
+    input_shape = tuple([batch_size] + list(image_shape))
     output_shape = (batch_size, 1000)
 
     if "resnet" in name:
@@ -48,7 +51,7 @@ def get_network(name, batch_size, dtype="float32"):
         n_layer = int(name.split('-')[1])
         mod, params = relay.testing.vgg.get_workload(num_layers=n_layer, batch_size=batch_size, dtype=dtype)
     elif name == 'mobilenet':
-        mod, params = relay.testing.mobilenet.get_workload(batch_size=batch_size, dtype=dtype)
+        mod, params = relay.testing.mobilenet.get_workload(batch_size=batch_size, dtype=dtype, image_shape=(224, 224, 3), layout='NHWC')
     elif name == 'squeezenet_v1.1':
         mod, params = relay.testing.squeezenet.get_workload(batch_size=batch_size, version='1.1', dtype=dtype)
     elif name == 'inception_v3':
@@ -59,8 +62,26 @@ def get_network(name, batch_size, dtype="float32"):
 
     return mod, params, input_shape, output_shape
 
-def fuse_tasks(tasks):
-    pass
+def fuse_tasks(tasks, target="cuda"):
+    # Collect all fusable layers
+    tmp_tasks = []
+    previous_task = None
+    for idx, task in enumerate(reversed(tasks)):
+        tmp_tasks.append(task)
+        if idx != 0: # Skip the first round
+            if 'depthwise' not in task.name and 'depthwise' in previous_task.name:
+                # Pop the previous two tasks
+                tmp_tasks.pop()
+                tmp_tasks.pop()
+
+                # Append the fused task
+                parameters = get_fusion_parameters(previous_task, task)
+                sargs = autotvm.task.topi_integration.serialize_args([parameters, True, target, 'depth_conv'])
+                t = autotvm.task.create("fused", args=sargs, target=target)
+                tmp_tasks.append(t)
+        previous_task = task
+
+    return tmp_tasks
 
 def tune_tasks(tasks,
                tuning_opt,
@@ -72,6 +93,17 @@ def tune_tasks(tasks,
     auto_tvm_transfer_learning = tuning_opt.auto_tvm_transfer_learning
     auto_tvm_trials = tuning_opt.auto_tvm_trials
     auto_tvm_early_stopping = tuning_opt.auto_tvm_early_stopping
+
+    if not tvm.runtime.enabled(target):
+        print("Skip because %s is not enabled" % target)
+        return
+    print("Running on target: %s" % target)
+    if "llvm" in target:
+        ctx = tvm.cpu()
+        device = "cpu"
+    else: # cuda
+        ctx = tvm.gpu()
+        device = "gpu"
 
     # create tmp log file
     tmp_log_file = log_filename + ".tmp"
@@ -120,12 +152,13 @@ def tune_and_evaluate(tuning_opt, dtype="float32"):
 
     # extract workloads from relay program
     print("Extract tasks...")
-    mod, params, input_shape, out_shape = get_network(network, batch_size=1, dtype=dtype)
+    mod, params, input_shape, out_shape = get_network(network, batch_size=1, dtype=dtype, image_shape=(224, 224, 3))
     tasks = autotvm.task.extract_from_program(mod["main"], target=target,
                                               params=params,
                                               ops=(relay.op.get("nn.conv2d"),))
 
-    fuse_tasks(tasks)
+    # replace all fusable tasks to fused tasks
+    tasks = fuse_tasks(tasks, target=target)
 
     # run tuning tasks
     if not tuning_opt.auto_tvm_skip_training:

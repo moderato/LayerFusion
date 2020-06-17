@@ -29,6 +29,27 @@ def register_count(device=None):
         return 32
     return 0
 
+def get_fusion_parameters(task1, task2):
+    workload1 = task1.workload
+    workload2 = task2.workload
+
+    param = []
+    for x in workload1[1][1]: # Input tensor size
+        param.append(x)
+    param.append(workload1[2][1][0]) # 1st filter hw
+    param.append(workload1[2][1][3]) # 1st filter oc
+    param.append(workload1[3][0]) # 1st filter stride
+    param.append(True) # Depthwise
+    param.append(None) # TODO: Add support to bn+relu
+    param.append(workload2[2][1][0]) # 2nd filter hw
+    param.append(workload2[2][1][3]) # 2nd filter oc
+    param.append(workload2[3][0]) # 2nd filter stride
+    param.append(False) # Not depthwise
+    param.append(None) # TODO: Add support to bn+relu
+    param.append(False) # TODO: Add support to block
+
+    return param
+
 class FusionConfig:
     class InputConfig:
         def __init__(self, N, H, W, C):
@@ -160,7 +181,7 @@ def write_code(code, fname):
         f.write(code)
 
 # workload_types=['depth_conv', 'conv_conv', 'block']
-def get_workloads_from_file(workload_types=['depth_conv']):
+def get_workloads_from_file(workload_types=['depth_conv', 'conv_conv']):
     workloads = {}
     for w in workload_types:
         filename = 'workloads/'+ w + '_workloads.csv'
