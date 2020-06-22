@@ -1,6 +1,7 @@
 #include <string>
 #include <iostream>
 #include <cassert>
+#include "mkldnn_helper.h"
 #include "cpu_helper.h"
 
 #ifndef NONE
@@ -13,12 +14,8 @@
     #define RELU6 2
 #endif
 
-#ifndef BENCH_NCHW
-    #define BENCH_NCHW true
-#endif
-#ifndef BENCH_NHWC
-    #define BENCH_NHWC false
-#endif
+#define GENERATED_CPU 0
+#define MKLDNN 1
 
 // #define DEBUG 1
 
@@ -105,19 +102,29 @@ void benchmarkWithWorkloadString(std::string workload, int type) {
         idx++;
     }
 
-    benchmark_generated_cpu(workload_name,
-                            input_batch, input_height, input_width, input_channel,
-                            kernel_1, kernel_1_out_channel_or_multiplier, kernel_1_stride,
-                            is_f1_depthwise, f1_activation,
-                            kernel_2, kernel_2_out_channel, kernel_2_stride,
-                            is_f2_depthwise, f2_activation,
-                            true, BENCH_NHWC);
+    if (type == MKLDNN) {
+        benchmark_mkldnn(workload_name,
+                        input_batch, input_height, input_width, input_channel,
+                        kernel_1, kernel_1_out_channel_or_multiplier, kernel_1_stride,
+                        is_f1_depthwise, f1_activation,
+                        kernel_2, kernel_2_out_channel, kernel_2_stride,
+                        is_f2_depthwise, f2_activation,
+                        true, 0);
+    } else { // generated gpu kernel
+        benchmark_generated_cpu(workload_name,
+                                input_batch, input_height, input_width, input_channel,
+                                kernel_1, kernel_1_out_channel_or_multiplier, kernel_1_stride,
+                                is_f1_depthwise, f1_activation,
+                                kernel_2, kernel_2_out_channel, kernel_2_stride,
+                                is_f2_depthwise, f2_activation,
+                                true, 0);
+    }
 }
 
 int main(int argc, const char* argv[]) {
-    assert(argc >= 1);
+    assert(argc == 3);
 
     std::string workloadString(argv[1]);
-    int type = 0; // dummy
+    int type = std::stoi(argv[2]);
     benchmarkWithWorkloadString(workloadString, type);
 }

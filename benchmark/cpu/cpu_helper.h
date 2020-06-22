@@ -133,7 +133,7 @@ void benchmark_generated_cpu(std::string workload_name,
     std::cout << "npy_input_shape: (" << input_shape_tuple[0] << ", " << input_shape_tuple[1] << ", " << input_shape_tuple[2] << ", " << input_shape_tuple[3] << ", " << input_shape_tuple[4] << ")" << std::endl;
     std::cout << "npy_kernel_1_shape: (" << filter_1_shape_tuple[0] << ", " << filter_1_shape_tuple[1] << ", " << filter_1_shape_tuple[2] << ", " << filter_1_shape_tuple[3] << ", " << filter_1_shape_tuple[4] << ", " << filter_1_shape_tuple[5] << ")" << std::endl;
     std::cout << "npy_kernel_2_shape: (" << filter_2_shape_tuple[0] << ", " << filter_2_shape_tuple[1] << ", " << filter_2_shape_tuple[2] << ", " << filter_2_shape_tuple[3] << ", " << filter_2_shape_tuple[4] << ", " << filter_2_shape_tuple[5] << ")" << std::endl;
-    std::cout << "npy_output_shape: (" << output_npy.shape[0] << ", " << output_npy.shape[1] << ", " << output_npy.shape[2] << ", " << output_npy.shape[3] << ", " << output_shape_tuple[4] << ")" << std::endl;
+    std::cout << "npy_output_shape: (" << output_shape_tuple[0] << ", " << output_shape_tuple[1] << ", " << output_shape_tuple[2] << ", " << output_shape_tuple[3] << ", " << output_shape_tuple[4] << ")" << std::endl;
 #endif
 
     // Timing
