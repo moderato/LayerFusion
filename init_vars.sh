@@ -2,7 +2,8 @@
 export LF_HOME=`pwd`
 export DMLC_CORE=${TVM_HOME}/3rdparty/dmlc-core
 export VTUNE_HOME=${HOME}/intel/vtune_profiler
-export LIBXSMM_HOME=${HOME}/Documents/experimental/libxsmm
+export LIBXSMM_HOME=${HOME}/Documents/libxsmm
+export MKLDNN_HOME=${HOME}/Documents/mkl-dnn
 
 # Make folders
 mkdir -p logs/arithmetic_intensity/cpu

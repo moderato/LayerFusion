@@ -14,7 +14,7 @@ LDFLAGS := \
 	-L${VTUNE_HOME}/lib64 \
 	-littnotify -ldl -pthread -lcnpy -lz -lmkldnn
 ASFLAGS := -march=corei7+fma+avx+avx2+sse3
-KERNEL ?= ../../generated_kernels/cpu/mv1_3.asm
+KERNEL ?= ../../generated_kernels/cpu/mv1_1.asm
 REPEATITION ?= 1000
 
 all: $(TARGET).cpp

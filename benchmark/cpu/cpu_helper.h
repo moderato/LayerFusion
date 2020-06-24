@@ -136,28 +136,30 @@ void benchmark_generated_cpu(std::string workload_name,
     std::cout << "npy_output_shape: (" << output_shape_tuple[0] << ", " << output_shape_tuple[1] << ", " << output_shape_tuple[2] << ", " << output_shape_tuple[3] << ", " << output_shape_tuple[4] << ")" << std::endl;
 #endif
 
-    // Timing
+    // Benchmark
     float runtime_us = 0.0f, runtime_1_us = 0.0f;
     int output_shape = output_batch * output_height * output_width * output_channel;
 
-    __SSC_MARK(0x111);
-    __itt_resume();
     for (int i = 0; i < REPEATITION * 2; i++) {
         // memset(output->data, 0, output_shape * sizeof(float));
         if (i == REPEATITION) {
             runtime_1_us = runtime_us;
         }
+
+        __SSC_MARK(0x111);
+        __itt_resume();
         auto start = std::chrono::high_resolution_clock::now();
 
         // asm function call here
         fused_2(input, filter_1, filter_2, output);
 
         auto elapsed = std::chrono::high_resolution_clock::now() - start;
+        __itt_pause();
+        __SSC_MARK(0x222);
+
         long long ns = std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count();
         runtime_us += ns / 1000.0f / REPEATITION;
     }
-    __itt_pause();
-    __SSC_MARK(0x222);
 
     printf("Fusion runtime is %f us.\n", runtime_us - runtime_1_us);
 
