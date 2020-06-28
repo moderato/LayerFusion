@@ -9,18 +9,13 @@
 #include <mkldnn.hpp>
 #include "cnpy.h"
 
-#ifndef NONE
-    #define NONE 0
-#endif
-#ifndef RELU
-    #define RELU  1
-#endif
-#ifndef RELU6
-    #define RELU6 2
-#endif
-
 #ifndef REPEATITION
   #define REPEATITION 1000
+#endif
+
+// i7_7700K L3 cache size = 12 MB
+#ifndef BIGGER_THAN_CACHESIZE
+#define BIGGER_THAN_CACHESIZE 13 * 1024 * 1024
 #endif
 
 // For SDE benchmarking purpose
@@ -119,6 +114,7 @@ void benchmark_mkldnn(std::string workload_name,
     std::vector<dnnl::primitive> primitives;
     std::vector<std::unordered_map<int, dnnl::memory>> pr_args;
     int stage_1_pr_index, stage_2_pr_index, inter_reorder_pr_index = -1;
+    int *flush_cache = new int[BIGGER_THAN_CACHESIZE]; // For flushing
 
     // Dims.
     dnnl::memory::dims input_dims = {input_batch, input_channel, input_height, input_width};
@@ -226,7 +222,6 @@ void benchmark_mkldnn(std::string workload_name,
     auto conv_inter_mem = inter_mem;
     auto conv_filter_2_mem = filter_2_mem;
     auto conv_output_mem = output_mem;
-    // dnnl::memory tmp_mem;
 
     // Reorder the data if necessary
     if (conv_pd_1.src_desc() != input_mem.get_desc()) {
@@ -295,32 +290,30 @@ void benchmark_mkldnn(std::string workload_name,
     float runtime_us = 0.0f, runtime_1_us = 0.0f;
     assert(primitives.size() == pr_args.size() && "something is missing");
 
-    for (int i = 0; i < REPEATITION * 2; i++) {
-        // memset(output->data, 0, output_shape * sizeof(float));
+    for (int i = 0; i < 1000; i++) {
         if (i == REPEATITION) {
             runtime_1_us = runtime_us;
         }
 
-        __SSC_MARK(0x111);
-        __itt_resume();
+        // Initialize time point
         auto start = std::chrono::high_resolution_clock::now();
         auto elapsed = std::chrono::high_resolution_clock::now() - std::chrono::high_resolution_clock::now();
-
         // Execute primitives
         for (size_t j = 0; j < primitives.size(); ++j) {
-            if (j == stage_1_pr_index || j == stage_2_pr_index || j == inter_reorder_pr_index)
+            if (j == stage_1_pr_index || j == stage_2_pr_index || j == inter_reorder_pr_index) {
+                
                 start = std::chrono::high_resolution_clock::now();
-#ifdef PROFILE
-    __SSC_MARK(0x111);
-    __itt_resume();
-#endif
+                    __SSC_MARK(0x111);
+                    __itt_resume();
+            }
+
             primitives.at(j).execute(engine_stream, pr_args.at(j));
-#ifdef PROFILE
-    __itt_pause();
-    __SSC_MARK(0x222);
-#endif
-            if (j == stage_1_pr_index || j == stage_2_pr_index || j == inter_reorder_pr_index)
+
+            if (j == stage_1_pr_index || j == stage_2_pr_index || j == inter_reorder_pr_index) {
+                    __itt_pause();
+                    __SSC_MARK(0x222);
                 elapsed += std::chrono::high_resolution_clock::now() - start;
+            }
         }
 
         long long ns = std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count();

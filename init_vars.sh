@@ -21,6 +21,9 @@ mkdir -p logs/runtime/gpu
 sudo sh -c 'echo 0 >/proc/sys/kernel/perf_event_paranoid' 
 sudo sh -c 'echo 0 >/proc/sys/kernel/kptr_restrict'
 
+# For SDE benchmark
+sudo sh -c 'echo 0 > /proc/sys/kernel/yama/ptrace_scope'
+
 # For CPU better performance
 export KMP_BLOCKTIME=1
 export KMP_AFFINITY=verbose,granularity=fine,compact,1,0 # "verbose" for printing
@@ -37,6 +40,6 @@ done
 
 # For Libxsmm wrapper
 cd libxsmm_wrapper
-make
-export LD_PRELOAD="${LD_PRELOAD}:`pwd`/libxsmm_wrapper.so"
+make clean && make
+export LD_PRELOAD="${LD_PRELOAD}:${LF_HOME}/libxsmm_wrapper/libxsmm_wrapper.so"
 cd ..

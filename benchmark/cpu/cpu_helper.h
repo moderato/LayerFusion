@@ -16,6 +16,11 @@
   #define REPEATITION 1000
 #endif
 
+// i7_7700K L3 cache size = 12 MB
+#ifndef BIGGER_THAN_CACHESIZE
+#define BIGGER_THAN_CACHESIZE 13 * 1024 * 1024
+#endif
+
 // For SDE benchmarking purpose
 #ifndef __SSC_MARK
 #define __SSC_MARK(tag)                                                        \
@@ -101,6 +106,9 @@ void benchmark_generated_cpu(std::string workload_name,
     cnpy::NpyArray output_npy = cnpy::npy_load(output_name);
     float *tmp = output_npy.data<float>();
 
+    // For cache flushing
+    int *flush_cache = new int[BIGGER_THAN_CACHESIZE];
+
     // DLTensor initialization
     tvm::runtime::Module mod = tvm::runtime::Module::LoadFromFile("kernel.so");
     tvm::runtime::PackedFunc fused_2 = mod.GetFunction("fused_2");
@@ -141,10 +149,12 @@ void benchmark_generated_cpu(std::string workload_name,
     int output_shape = output_batch * output_height * output_width * output_channel;
 
     for (int i = 0; i < REPEATITION * 2; i++) {
-        // memset(output->data, 0, output_shape * sizeof(float));
         if (i == REPEATITION) {
             runtime_1_us = runtime_us;
         }
+
+        // // Flush the cache
+        // memset(flush_cache, i, BIGGER_THAN_CACHESIZE * sizeof(int));
 
         __SSC_MARK(0x111);
         __itt_resume();
