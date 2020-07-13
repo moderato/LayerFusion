@@ -5,20 +5,24 @@
 #include <cstdio>
 #include <chrono>
 #include <math.h>
-#include <ittnotify.h>
 #include <dlpack/dlpack.h>
 #include <tvm/runtime/module.h>
 #include <tvm/runtime/registry.h>
 #include <tvm/runtime/packed_func.h>
 #include "cnpy.h"
+#include "cpucounters.h"
 
 #ifndef REPEATITION
   #define REPEATITION 1000
 #endif
 
-// i7_7700K L3 cache size = 12 MB
+// i7_7700K L3 cache size = 12 MB. Should be < 200 MB.
 #ifndef BIGGER_THAN_CACHESIZE
-#define BIGGER_THAN_CACHESIZE 13 * 1024 * 1024
+    #define BIGGER_THAN_CACHESIZE 3 * 1024 * 1024
+#endif
+
+#ifndef ENABLE_PCM
+  #define ENABLE_PCM 0
 #endif
 
 // For SDE benchmarking purpose
@@ -148,30 +152,46 @@ void benchmark_generated_cpu(std::string workload_name,
     float runtime_us = 0.0f, runtime_1_us = 0.0f;
     int output_shape = output_batch * output_height * output_width * output_channel;
 
+    // Instantiate Intel PCM singleton
+    PCM *m = PCM::getInstance();
+    unsigned long dram_bytes = 0;
+
     for (int i = 0; i < REPEATITION * 2; i++) {
         if (i == REPEATITION) {
             runtime_1_us = runtime_us;
         }
 
-        // // Flush the cache
-        // memset(flush_cache, i, BIGGER_THAN_CACHESIZE * sizeof(int));
+        // Flush the cache
+#if ENABLE_PCM == 1
+        memset(flush_cache, i, BIGGER_THAN_CACHESIZE * sizeof(int));
+#endif
 
         __SSC_MARK(0x111);
-        __itt_resume();
+#if ENABLE_PCM == 1
+        SystemCounterState before_sstate = getSystemCounterState();
+#endif
         auto start = std::chrono::high_resolution_clock::now();
 
         // asm function call here
         fused_2(input, filter_1, filter_2, output);
 
         auto elapsed = std::chrono::high_resolution_clock::now() - start;
-        __itt_pause();
+#if ENABLE_PCM == 1
+        SystemCounterState after_sstate = getSystemCounterState();
+#endif
         __SSC_MARK(0x222);
 
         long long ns = std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count();
         runtime_us += ns / 1000.0f / REPEATITION;
+
+#if ENABLE_PCM == 1
+        dram_bytes += getBytesReadFromMC(before_sstate, after_sstate);
+#endif
     }
 
+    printf("DRAM bytes: %lu.\n", dram_bytes / REPEATITION / 2);
     printf("Fusion runtime is %f us.\n", runtime_us - runtime_1_us);
+    m->cleanup();
 
     // Verification
     int count = 0;

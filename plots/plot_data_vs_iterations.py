@@ -13,7 +13,7 @@ colors = ['b','g','r','y','m','c']
 styles = ['o','s','v','^','D','>','<','*','h','H','+','1','2','3','4','8','p','d','|','_','.',',']
 devices = ['cpu']
 workload_types = ['depth_conv']
-iterations = [2, 4, 10, 20, 40, 100, 200, 400, 1000, 2000, 4000, 10000, 20000, 40000]
+iterations = [4, 10, 20, 40, 100, 200, 400, 1000, 2000, 4000, 10000]
 device_empirical = {
     'cpu': '/home/zhongyilin/Documents/experimental/cs-roofline-toolkit/Empirical_Roofline_Tool-1.1.0/Results.i7-7700K/Run.001/roofline.json',
     'gpu': '/home/zhongyilin/Documents/experimental/cs-roofline-toolkit/Empirical_Roofline_Tool-1.1.0/Results.1050Ti-cuda-fp32.01/Run.001/roofline.json'

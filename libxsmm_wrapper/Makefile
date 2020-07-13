@@ -10,6 +10,6 @@ LIBS = $(LIBXSMM_HOME)/lib/libxsmm.a $(LIBXSMM_HOME)/lib/libxsmmext.a \
 TARGET= libxsmm_wrapper.so
 
 all:
-	$(CC) $(INC) $(CFLAGS) -fPIC $(SOURCES) $(LIBS)  -o $(TARGET) $(LDFLAGS)
+	$(CC) $(INC) $(CFLAGS) -fPIC $(SOURCES) $(LIBS) -o $(TARGET) $(LDFLAGS)
 clean:
-	rm -f $(TARGET)
+	rm $(TARGET)

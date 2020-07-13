@@ -31,22 +31,24 @@ do
       numactl -l -C 0-3 ./cpu_bench "$line" 0 &> /tmp/runtime_generated.txt
       numactl -l -C 0-3 ./cpu_bench "$line" 1 &> /tmp/runtime_mkldnn.txt
       generated_kernel_runtime="$(cat /tmp/runtime_generated.txt | grep Fusion | awk '{ printf  "%10s\n", $4 }')"
-      mkldnn_runtime="$(cat /tmp/runtime_mkldnn.txt | grep Fusion | awk '{ printf  "%10s\n", $4 }')"
+      mkldnn_runtime="$(cat /tmp/runtime_mkldnn.txt | grep 'MKLDNN runtime' | awk '{ printf  "%10s\n", $4 }')"
 
       # Flexible repeatition for flops and memory transaction measurement
-      make KERNEL=../../generated_kernels/cpu/${workload_name}.asm REPEATITION=${REP_BENCH} >& /dev/null
+      make KERNEL=../../generated_kernels/cpu/${workload_name}.asm REPEATITION=${REP_BENCH} ENABLE_PCM=1 >& /dev/null
       # Generated kernel
+      numactl -l -C 0-3 ./cpu_bench "$line" 0 >& /tmp/dram_generated.txt
       rm -rf /tmp/sde_generated.out*
       sde -knl -d -iform 1 -omix /tmp/sde_generated.out -i -global_region -start_ssc_mark 111:repeat -stop_ssc_mark 222:repeat -- numactl -l -C 0-3 ./cpu_bench "$line" 0 >& /dev/null
-      rm -rf /tmp/vtune_report
-      vtune -r /tmp/vtune_report -q -collect memory-access -finalization-mode=none -data-limit=0 -- numactl -l -C 0-3 ./cpu_bench "$line" 0 >& /dev/null
-      vtune -report hw-events -report-knob show-issues=false -r /tmp/vtune_report -q -group-by=package -format=csv -column=UNC_IMC_DRAM_DATA_READS,UNC_IMC_DRAM_DATA_WRITES -csv-delimiter=comma > /tmp/cpu_bench_report_generated.summary
+      # rm -rf /tmp/vtune_report_generated /tmp/cpu_bench_report_generated.summary /tmp/vtune_generated.txt
+      # vtune -mrte-mode=native -start-paused -r /tmp/vtune_report_generated -start-paused -q -collect memory-access -finalization-mode=none -data-limit=0 -- numactl -l -C 0-3 ./cpu_bench "$line" 0 >& /dev/null
+      # vtune -report hw-events -report-knob show-issues=false -r /tmp/vtune_report_generated -q -group-by=package -format=csv -column=UNC_IMC_DRAM_DATA_READS,UNC_IMC_DRAM_DATA_WRITES -csv-delimiter=comma > /tmp/cpu_bench_report_generated.summary
       # MKLDNN
+      numactl -l -C 0-3 ./cpu_bench "$line" 1 >& /tmp/dram_mkldnn.txt
       rm -rf /tmp/sde_mkldnn.out*
-      PROFILE=1 sde -knl -d -iform 1 -omix /tmp/sde_mkldnn.out -i -global_region -start_ssc_mark 111:repeat -stop_ssc_mark 222:repeat -- numactl -l -C 0-3 ./cpu_bench "$line" 1 >& /dev/null
-      rm -rf /tmp/vtune_report
-      PROFILE=1 vtune -r /tmp/vtune_report -q -collect memory-access -finalization-mode=none -data-limit=0 -- numactl -l -C 0-3 ./cpu_bench "$line" 1 >& /dev/null
-      vtune -report hw-events -report-knob show-issues=false -r /tmp/vtune_report -q -group-by=package -format=csv -column=UNC_IMC_DRAM_DATA_READS,UNC_IMC_DRAM_DATA_WRITES -csv-delimiter=comma > /tmp/cpu_bench_report_mkldnn.summary
+      sde -knl -d -iform 1 -omix /tmp/sde_mkldnn.out -i -global_region -start_ssc_mark 111:repeat -stop_ssc_mark 222:repeat -- numactl -l -C 0-3 ./cpu_bench "$line" 1 >& /dev/null
+      # rm -rf /tmp/vtune_report_mkldnn /tmp/cpu_bench_report_mkldnn.summary > /tmp/vtune_mkldnn.txt
+      # vtune -mrte-mode=native -start-paused -r /tmp/vtune_report_mkldnn -start-paused -q -collect memory-access -finalization-mode=none -data-limit=0 -- numactl -l -C 0-3 ./cpu_bench "$line" 1 >& /dev/null
+      # vtune -report hw-events -report-knob show-issues=false -r /tmp/vtune_report_mkldnn -q -group-by=package -format=csv -column=UNC_IMC_DRAM_DATA_READS,UNC_IMC_DRAM_DATA_WRITES -csv-delimiter=comma > /tmp/cpu_bench_report_mkldnn.summary
 
       # Parse the above results
       cd ../../scripts
@@ -56,43 +58,45 @@ do
       generated_kernel_flop="$( echo "scale=4; $generated_kernel_flop / (${REP_BENCH} * 2)" | bc )"
       generated_l1_bytes="$(cat /tmp/sde_generated.txt | grep -e 'Total Bytes =' | awk '{ printf "%s\n", $4 }')"
       generated_l1_bytes="$( echo "scale=4; $generated_l1_bytes / (${REP_BENCH} * 2)" | bc )" # Per iteration
-      ./parse_vtune.sh -v /tmp/cpu_bench_report_generated.summary > /tmp/vtune_generated.txt
-      generated_dram_transactions="$(cat /tmp/vtune_generated.txt | grep -e 'Total transactions' | awk '{ printf "%s\n", $4 }')"
-      generated_dram_bytes="$( echo "scale=4; $generated_dram_transactions * 64 / (${REP_BENCH} * 2)" | bc )" # Per iteration
+      generated_dram_bytes="$(cat /tmp/dram_generated.txt | grep 'DRAM bytes' | awk '{ printf  "%10s\n", $3 }')"
+      # ./parse_vtune.sh -v /tmp/cpu_bench_report_generated.summary > /tmp/vtune_generated.txt
+      # generated_dram_transactions="$(cat /tmp/vtune_generated.txt | grep -e 'Total transactions' | awk '{ printf "%s\n", $4 }')"
+      # generated_dram_bytes="$( echo "scale=4; $generated_dram_transactions * 64 / (${REP_BENCH} * 2)" | bc )" # Per iteration
 
       ./parse_sde.sh /tmp/sde_mkldnn.out* > /tmp/sde_mkldnn.txt
       mkldnn_flop="$(cat /tmp/sde_mkldnn.txt | grep -e 'Total single-precision FLOPs' | awk '{ printf "%s\n", $5 }')"
       mkldnn_flop="$( echo "scale=4; $mkldnn_flop / (${REP_BENCH} * 2)" | bc )"
       mkldnn_l1_bytes="$(cat /tmp/sde_mkldnn.txt | grep -e 'Total Bytes =' | awk '{ printf "%s\n", $4 }')"
       mkldnn_l1_bytes="$( echo "scale=4; $mkldnn_l1_bytes / (${REP_BENCH} * 2)" | bc )" # Per iteration
-      ./parse_vtune.sh -v /tmp/cpu_bench_report_mkldnn.summary > /tmp/vtune_mkldnn.txt
-      mkldnn_dram_transactions="$(cat /tmp/vtune_mkldnn.txt | grep -e 'Total transactions' | awk '{ printf "%s\n", $4 }')"
-      mkldnn_dram_bytes="$( echo "scale=4; $mkldnn_dram_transactions * 64 / (${REP_BENCH} * 2)" | bc )" # Per iteration
+      mkldnn_dram_bytes="$(cat /tmp/dram_mkldnn.txt | grep 'DRAM bytes' | awk '{ printf  "%10s\n", $3 }')"
+      # ./parse_vtune.sh -v /tmp/cpu_bench_report_mkldnn.summary > /tmp/vtune_mkldnn.txt
+      # mkldnn_dram_transactions="$(cat /tmp/vtune_mkldnn.txt | grep -e 'Total transactions' | awk '{ printf "%s\n", $4 }')"
+      # mkldnn_dram_bytes="$( echo "scale=4; $mkldnn_dram_transactions * 64 / (${REP_BENCH} * 2)" | bc )" # Per iteration
 
       # GFLOPS and AI
       generated_kernel_gflops="$( echo "scale=4; $generated_kernel_flop / $generated_kernel_runtime * 1000000 / 1000000000" | bc )"
       generated_kernel_l1_ai="$( echo "scale=4; $generated_kernel_flop / $generated_l1_bytes" | bc )"
       generated_kernel_dram_ai="$( echo "scale=4; $generated_kernel_flop / $generated_dram_bytes" | bc )"
-      echo "------ Generated kernel details"
-      echo "    Runtime: $generated_kernel_runtime"
-      echo "    Flop: $generated_kernel_flop"
-      echo "    GFLOPS: $generated_kernel_gflops"
-      echo "    DRAM bytes: $generated_dram_bytes"
-      echo "    DRAM AI: $generated_kernel_dram_ai"
-      echo "    L1 bytes: $generated_l1_bytes"
-      echo "    L1 AI: $generated_kernel_l1_ai"
+      # echo "------ Generated kernel details"
+      # echo "    Runtime: $generated_kernel_runtime"
+      # echo "    Flop: $generated_kernel_flop"
+      # echo "    GFLOPS: $generated_kernel_gflops"
+      # echo "    DRAM bytes: $generated_dram_bytes"
+      # echo "    DRAM AI: $generated_kernel_dram_ai"
+      # echo "    L1 bytes: $generated_l1_bytes"
+      # echo "    L1 AI: $generated_kernel_l1_ai"
 
       mkldnn_gflops="$( echo "scale=4; $mkldnn_flop / $mkldnn_runtime * 1000000 / 1000000000" | bc )"
       mkldnn_l1_ai="$( echo "scale=4; $mkldnn_flop / $mkldnn_l1_bytes" | bc )"
       mkldnn_dram_ai="$( echo "scale=4; $mkldnn_flop / $mkldnn_dram_bytes" | bc )"
-      echo "------ MKLDNN details"
-      echo "    Runtime: $mkldnn_runtime"
-      echo "    Flop: $mkldnn_flop"
-      echo "    GFLOPS: $mkldnn_gflops"
-      echo "    DRAM bytes: $mkldnn_dram_bytes"
-      echo "    DRAM AI: $mkldnn_dram_ai"
-      echo "    L1 bytes: $mkldnn_l1_bytes"
-      echo "    L1 AI: $mkldnn_l1_ai"
+      # echo "------ MKLDNN details"
+      # echo "    Runtime: $mkldnn_runtime"
+      # echo "    Flop: $mkldnn_flop"
+      # echo "    GFLOPS: $mkldnn_gflops"
+      # echo "    DRAM bytes: $mkldnn_dram_bytes"
+      # echo "    DRAM AI: $mkldnn_dram_ai"
+      # echo "    L1 bytes: $mkldnn_l1_bytes"
+      # echo "    L1 AI: $mkldnn_l1_ai"
 
       # #### MKLDNN ####
       # # Runtime and flops measurement

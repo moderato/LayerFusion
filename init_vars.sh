@@ -1,9 +1,12 @@
 #!/bin/bash
 export LF_HOME=`pwd`
+export TVM_HOME=${HOME}/Documents/incubator-tvm
 export DMLC_CORE=${TVM_HOME}/3rdparty/dmlc-core
-export VTUNE_HOME=${HOME}/intel/vtune_profiler
+# export VTUNE_HOME=${HOME}/intel/vtune_profiler
 export LIBXSMM_HOME=${HOME}/Documents/libxsmm
 export MKLDNN_HOME=${HOME}/Documents/mkl-dnn
+export PCM_HOME=${HOME}/Documents/pcm
+export LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${TVM_HOME}/build"
 
 # Make folders
 mkdir -p logs/arithmetic_intensity/cpu
@@ -17,12 +20,20 @@ mkdir -p logs/gflops/gpu
 mkdir -p logs/runtime/cpu
 mkdir -p logs/runtime/gpu
 
-# For VTune benchmark
-sudo sh -c 'echo 0 >/proc/sys/kernel/perf_event_paranoid' 
-sudo sh -c 'echo 0 >/proc/sys/kernel/kptr_restrict'
+# # For VTune benchmark
+# sudo ln -sf ${VTUNE_HOME}/bin64/vtune /usr/bin/vtune 
+# sudo sh -c 'echo 0 >/proc/sys/kernel/perf_event_paranoid' 
+# sudo sh -c 'echo 0 >/proc/sys/kernel/kptr_restrict'
+# export INTEL_LIBITTNOTIFY32=${VTUNE_HOME}/lib32/runtime/libittnotify_collector.so
+# export INTEL_LIBITTNOTIFY64=${VTUNE_HOME}/lib64/runtime/libittnotify_collector.so
 
 # For SDE benchmark
 sudo sh -c 'echo 0 > /proc/sys/kernel/yama/ptrace_scope'
+
+# For PCM
+sudo modprobe msr
+sudo chown -R $USER /dev/cpu/*/msr
+sudo chmod -R go+rw /dev/cpu/*/msr
 
 # For CPU better performance
 export KMP_BLOCKTIME=1
@@ -40,6 +51,10 @@ done
 
 # For Libxsmm wrapper
 cd libxsmm_wrapper
-make clean && make
-export LD_PRELOAD="${LD_PRELOAD}:${LF_HOME}/libxsmm_wrapper/libxsmm_wrapper.so"
+make
+if [ "$LIBXSMM_PRELOADED" != "1" ];
+then
+  export LD_PRELOAD="${LD_PRELOAD}:${LF_HOME}/libxsmm_wrapper/libxsmm_wrapper.so"
+fi
+export LIBXSMM_PRELOADED=1
 cd ..
