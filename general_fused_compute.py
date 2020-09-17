@@ -4,38 +4,13 @@ from tvm import te, autotvm
 from helper import *
 from layer_config import LayerConfig
 
-def fused_convs(cfg, fusion_cfg, device='cuda', array_packing=False):
-    is_block = fusion_cfg.is_block
+def fused_convs(cfg, fusion_cfg, device='cuda', array_packing=False, constraints_idx=-1):
     stages = []
     params = []
-    conv_count = 0
-    depthwise_count = 0
     next_input = None # Output tensor of the previous stage
 
-    # # Get all common factors of HWC axes of all layers: fix thread nums for the entire fusion
-    # if device == 'cuda':
-    #     final_thx_can = None
-    #     final_thy_can = None
-    #     final_thz_can = None
-    #     for idx in range(fusion_cfg.layer_num):
-    #         output = fusion_cfg.get_output(idx)
-    #         thx_can = get_vlen(output.C, device=device, is_c=True)
-    #         thy_can = get_vlen(output.W, device=device, is_c=False)
-    #         thz_can = get_vlen(output.H, device=device, is_c=False)
-    #         if idx == 0:
-    #             final_thx_can = set(thx_can)
-    #             final_thy_can = set(thy_can)
-    #             final_thz_can = set(thz_can)
-    #         else:
-    #             final_thx_can = final_thx_can.intersection(thx_can)
-    #             final_thy_can = final_thy_can.intersection(thy_can)
-    #             final_thz_can = final_thz_can.intersection(thz_can)
-    #     cfg.define_knob('thread_x', list(final_thx_can))
-    #     cfg.define_knob('thread_y', list(final_thy_can))
-    #     cfg.define_knob('thread_z', list(final_thz_can))
-
     for idx in range(fusion_cfg.layer_num):
-        sc = LayerConfig(cfg, fusion_cfg, idx, next_input, device=device, pack=(device!='cuda'))
+        sc = LayerConfig(cfg, fusion_cfg, idx, next_input, device=device, pack=(device!='cuda'), constraints_idx=constraints_idx)
         sc.make_output(cfg)
 
         stages.extend(sc.get_stages())
@@ -47,7 +22,7 @@ def fused_convs(cfg, fusion_cfg, device='cuda', array_packing=False):
     return stages, params
 
 @autotvm.template('fused')
-def get_schedule(parameters, auto_tvm=False, device='cuda', name='depth_conv'):
+def get_schedule(parameters, auto_tvm=False, device='cuda', name='depth_conv', constraints_idx=-1):
     fusion_cfg = FusionConfig(parameters)
     cfg = autotvm.get_config() if auto_tvm else None
     if cfg is not None:
@@ -56,7 +31,7 @@ def get_schedule(parameters, auto_tvm=False, device='cuda', name='depth_conv'):
     # Get the graph
     # stages: all output stages in the graph
     # params: inputs & outputs of the graph, including filters, BNs, etc
-    stages, params = fused_convs(cfg, fusion_cfg, device=device, array_packing=(device != 'cuda'))
+    stages, params = fused_convs(cfg, fusion_cfg, device=device, array_packing=(device!='cuda'), constraints_idx=constraints_idx)
     output_stage = stages[-1][-1]
 
     if device == 'cuda':
@@ -67,6 +42,13 @@ def get_schedule(parameters, auto_tvm=False, device='cuda', name='depth_conv'):
     f = sch(name, auto_tvm)
     s = f(cfg, fusion_cfg, output_stage, stages, params)
     return s, flatten_list(params)
+
+def get_all_possible_schedules(parameters, auto_tvm=False, device='cuda', name='depth_conv'):
+    fusion_cfg = FusionConfig(parameters)
+    schs = []
+    for idx in len(fusion_cfg.get_constraints()):
+        schs.append(get_schedule(parameters, auto_tvm=auto_tvm, device=device, name=name, constraints_idx=idx))
+    return schs
 
 def test_get_schedule():
     parameters = (1, 56, 56, 128, 3, 1, 1, True, None, 1, 128, 1, False, None, False)

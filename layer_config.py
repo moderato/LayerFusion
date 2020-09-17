@@ -1,14 +1,14 @@
 import tvm
-from topi.nn.dilate import dilate
-from topi.nn.pad import pad
-from topi.nn.util import get_pad_tuple
-from topi.util import simplify, get_const_tuple
+from tvm.topi.nn.dilate import dilate
+from tvm.topi.nn.pad import pad
+from tvm.topi.nn.util import get_pad_tuple
+from tvm.topi.util import simplify, get_const_tuple
 from tvm import autotvm, te
 from helper import get_vlen, register_count
 import math
 
 class LayerConfig:
-    def __init__(self, cfg, fusion_cfg, idx, Input=None, device='cuda', pack=False, dtype='float32'):
+    def __init__(self, cfg, fusion_cfg, idx, Input=None, device='cuda', pack=False, dtype='float32', constraints_idx=-1):
         self._input_cfg = fusion_cfg.get_input(idx)
         self._filter_cfg = fusion_cfg.get_filter(idx)
         self._output_cfg = fusion_cfg.get_output(idx)

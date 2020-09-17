@@ -1,16 +1,15 @@
 import numpy as np
-import topi, topi.testing
-from topi.util import simplify, get_const_tuple
-from topi.nn.util import get_pad_tuple
+import tvm
+from tvm.topi import testing
+from tvm.topi.util import simplify, get_const_tuple
+from tvm.topi.nn.util import get_pad_tuple
 from tvm import autotvm, te
+from tvm.autotvm.task.space import FallbackConfigEntity
 import os, math
 
-def get_vlen(axis_length, device=None, is_c=True):
+def get_vlen(axis_length, device=None):
     if device == 'cuda':
-        if is_c:
-            candidates = [16, 32, 64, 128]
-        else:
-            candidates = [1, 2, 3, 5, 7]
+        candidates = [16, 32, 64, 128]
     elif device == 'llvm -mcpu=core-avx2' or device == 'llvm -mcpu=skylake-avx512':
         candidates = [8, 16, 24, 32, 64] # Non-c axes don't matter
     vlens = []
@@ -19,6 +18,22 @@ def get_vlen(axis_length, device=None, is_c=True):
             vlens.append(i)
     assert vlens != []
     return vlens
+
+def get_factors(x):
+    r = []
+    for i in range(1, int(math.sqrt(x)) + 1):
+        if x % i == 0:
+            r.append(i)
+            r.append(x // i)
+    r.sort()
+    return r
+
+def flatten_list(lst):
+    return sum(([x] if not isinstance(x, list) else flatten_list(x) for x in lst), [])
+
+def write_code(code, fname):
+    with open(fname, 'w') as f:
+        f.write(code)
 
 def register_count(device=None):
     if device == 'llvm -mcpu=corei7-avx':
@@ -158,8 +173,34 @@ class FusionConfig:
             print('Input_{} size: {}'.format(i, DATA.get_shape()))
             print('Filter_{} size: {}, depthwise: {}, bn_relu: {}'.format(i, KERNEL.get_shape(), KERNEL.bn_relu))
             print('Is a block: {}'.format(self.is_block))
-        OUTPUT = self.layers[-1][0]
+        # OUTPUT = self.layers[-1][0]
         print('Output size: {}'.format(DATA.get_shape()))
+
+    def get_constraints(self, device='cuda'):
+        import itertools
+        c_factors = None
+        w_factors = None
+        h_factors = None
+        for idx in range(self.layer_num):
+            output = self.get_output(idx)
+            c = get_vlen(output.C, device=device)
+            w = get_factors(output.W)
+            h = get_factors(output.H)
+            if idx == 0:
+                c_factors = set(c)
+                w_factors = set(w)
+                h_factors = set(h)
+            else:
+                c_factors = c_factors.intersection(c)
+                w_factors = w_factors.intersection(w)
+                h_factors = h_factors.intersection(h)
+
+            # print(c, w, h)
+            # print(c_factors, w_factors, h_factors)
+            # print("***")
+
+        factors = [list(c_factors), list(w_factors), list(h_factors)]
+        return list(itertools.product(*factors))
 
     def get_FLOP(self):
         flop = 0
@@ -172,13 +213,6 @@ class FusionConfig:
             else:
                 flop += 2 * (ocfg.N * ocfg.H * ocfg.W * ocfg.C) * (fcfg.H * fcfg.W * fcfg.I)
         return flop
-
-def flatten_list(lst):
-    return sum(([x] if not isinstance(x, list) else flatten_list(x) for x in lst), [])
-
-def write_code(code, fname):
-    with open(fname, 'w') as f:
-        f.write(code)
 
 # workload_types=['depth_conv', 'conv_conv', 'block']
 def get_workloads_from_file(workload_types=['depth_conv', 'conv_conv']):
@@ -305,6 +339,8 @@ def export_kernel_launch_config(workload_name, output_shape, best_config, target
 def get_CPU_vlen(best_config=None, cfg_key=''):
     if best_config is None:
         return 16
+    if isinstance(best_config, FallbackConfigEntity):
+        raise Exception("Best config is a FallbackConfigEntity! Probably not tuned appropriately.")
     config_dict = best_config.to_json_dict()
     if cfg_key != 'all':
         for e in config_dict['entity']:
@@ -377,10 +413,10 @@ def get_ref_data(workload_name,
         input_data = np.copy(output_data)
 
         if f.depthwise:
-            output_data = topi.testing.depthwise_conv2d_python_nhwc(input_data, filter_data, stride=[f.stride_h, f.stride_w], padding=f.padding).astype(dtype)
+            output_data = testing.depthwise_conv2d_python_nhwc(input_data, filter_data, stride=[f.stride_h, f.stride_w], padding=f.padding).astype(dtype)
             params_name.append('filter_{}_d'.format(idx+1)) # Mark depthwise filter
         else: # Normal convolution
-            output_data = topi.testing.conv2d_nhwc_python(input_data, filter_data, f.stride_h, f.padding).astype(dtype)
+            output_data = testing.conv2d_nhwc_python(input_data, filter_data, f.stride_h, f.padding).astype(dtype)
             params_name.append('filter_{}'.format(idx+1))
 
         if f.bn_relu is not None:

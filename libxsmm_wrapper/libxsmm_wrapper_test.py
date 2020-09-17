@@ -14,11 +14,10 @@ import logging
 import sys
 import numpy as np
 import tvm
-import topi
+from tvm import topi as topi
 import time
-from topi.util import get_const_tuple
+from tvm.topi.util import get_const_tuple
 import math
-import topi.testing
 import xlwt
 import argparse
 
