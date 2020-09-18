@@ -37,7 +37,7 @@ def schedule_depth_conv_fused_nhwc_auto(cfg, fusion_cfg, outs, stages, params):
         s[stage_dict['Output_1_ScaleShift']].compute_inline()
         s[stage_dict['Output_1']].set_scope('local')
         ScaleL_2 = s.cache_read(param_dict['Scale_1'], 'local', [stage_dict['Output_1_ScaleShift']])
-        ShiftL_2 = s.cache_read(param_dict['Scale_1'], 'local', [stage_dict['Output_1_ScaleShift']])
+        ShiftL_2 = s.cache_read(param_dict['Shift_1'], 'local', [stage_dict['Output_1_ScaleShift']])
         OL = stage_dict['Output_1']
     else:
         OL = s.cache_write(layer_output_dict['Layer_1'], 'local')
