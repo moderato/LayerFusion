@@ -27,8 +27,7 @@ class LayerConfig:
             if Input is None:
                 Input = te.placeholder((N, IH, IW, IC), name='Input')
             Filter = te.placeholder((FH, FW, IC, tmp),
-                                    name='Layer_{}_{}Filter'.format(idx,
-                                                                    'Depthwise' if self._filter_cfg.depthwise else 'Conv2d'))
+                                    name='Filter_{}'.format(idx))
             self._layout = 'NHWC'
             self._output_shape = (N, OH, OW, OC)
 
@@ -58,8 +57,7 @@ class LayerConfig:
             filter_shape = (OC_chunk, IC_chunk, FH, FW, vlen_i, vlen_o) if not self._filter_cfg.depthwise else \
                             (1, IC_chunk, FH, FW, vlen_i, 1)
             Filter = te.placeholder(filter_shape,
-                                    name='Layer_{}_{}Filter'.format(idx,
-                                                                    'Depthwise' if self._filter_cfg.depthwise else 'Conv2d'))
+                                    name='Filter_{}'.format(idx))
             self._layout = 'NCHWc'
             self._output_shape = (N, OC_chunk, OH, OW, vlen_o)
 
@@ -127,7 +125,7 @@ class LayerConfig:
                 pad_before = [0, pad_top, pad_left, 0]
                 pad_after = [0, pad_down, pad_right, 0]
 
-            PaddedInput = pad(self._input, pad_before, pad_after, name='Layer_{}_PaddedInput'.format(self._layer_idx))
+            PaddedInput = pad(self._input, pad_before, pad_after, name='PaddedInput_{}'.format(self._layer_idx))
             tmp.append(PaddedInput)
             self._stages.append(tmp)
 
@@ -177,7 +175,7 @@ class LayerConfig:
                                                                 c_vec])
                                                 .astype(self._output_dtype),
                                                 axis=[ry, rx]),
-                                            name='Layer_{}_DepthwiseConv2dOutput'.format(self._layer_idx),
+                                            name='DepthwiseConv2dOutput_{}'.format(self._layer_idx),
                                             tag='depthwise_nchw{}c'.format(OC_vec))
         else:
             Output = te.compute(self._output_shape,
@@ -189,7 +187,7 @@ class LayerConfig:
                                                             c])
                                                 .astype(self._output_dtype),
                                                 axis=[ry, rx]),
-                                            name='Layer_{}_DepthwiseConv2dOutput'.format(self._layer_idx),
+                                            name='DepthwiseConv2dOutput_{}'.format(self._layer_idx),
                                             tag='depthwise_nhwc')
         self._output = Output
 
@@ -261,7 +259,7 @@ class LayerConfig:
                                                                 rci])
                                                     .astype(self._output_dtype),
                                                     axis=[rco, ry, rx, rci]),
-                                                name='Layer_{}_Conv2dOutput'.format(self._layer_idx),
+                                                name='Conv2dOutput_{}'.format(self._layer_idx),
                                                 tag='conv2d_nchw{}c'.format(OC_vec))
         else:
             Output = te.compute(self._output_shape,
@@ -273,7 +271,7 @@ class LayerConfig:
                                                                 rc])
                                                     .astype(self._output_dtype),
                                                     axis=[rc, ry, rx]),
-                                                name='Layer_{}_Conv2dOutput'.format(self._layer_idx),
+                                                name='Conv2dOutput_{}'.format(self._layer_idx),
                                                 tag='conv2d_nhwc')
         self._output = Output
 
@@ -286,17 +284,16 @@ class LayerConfig:
             _, _, _, OC = self._output_shape
             tag_suffix = 'nhwc'
         Scale = te.placeholder((OC,),
-                                name='Layer_{}_Scale_{}'.format(self._layer_idx, 'DepthwiseConv2d' if self._filter_cfg.depthwise else 'Conv2d'))
+                                name='Scale_{}'.format(self._layer_idx))
         Shift = te.placeholder((OC,),
-                                name='Layer_{}_Shift_{}'.format(self._layer_idx, 'DepthwiseConv2d' if self._filter_cfg.depthwise else 'Conv2d'))
+                                name='Shift_{}'.format(self._layer_idx))
         if self._pack:
             ScaleShift =  te.compute(self._output_shape, lambda n, c_chunk, h, w, c_vec: self._output[n, c_chunk, h, w, c_vec] * Scale[c_chunk * OC_vec + c_vec] + Shift[c_chunk * OC_vec + c_vec],
-                                name='Layer_{}_ScaleShift_{}'.format(
-                                    self._layer_idx, 'DepthwiseConv2d' if self._filter_cfg.depthwise else 'Conv2d'),
+                                name='ScaleShift_{}'.format(self._layer_idx),
                                 tag='scaleshift_{}'.format(tag_suffix))
         else:
             ScaleShift =  te.compute(self._output_shape, lambda n, h, w, c: self._output[n, h, w, c] * Scale[c] + Shift[c],
-                                name='Layer_{}_ScaleShift_{}'.format(self._layer_idx, 'DepthwiseConv2d' if self._filter_cfg.depthwise else 'Conv2d'),
+                                name='ScaleShift_{}'.format(self._layer_idx),
                                 tag='scaleshift_{}'.format(tag_suffix))
         self._params[-1].append(Scale)
         self._params[-1].append(Shift)
@@ -311,12 +308,12 @@ class LayerConfig:
             if self._pack:
                 Output = te.compute(self._output_shape,
                                     lambda n, c_chunk, h, w, c_vec: (First[n, c_chunk, h, w, c_vec] + (Last[n, c_chunk, h, w, c_vec])),
-                                    name='Layer_{}_ElementwiseAddOutput'.format(self._layer_idx),
+                                    name='ElementwiseAddOutput_{}'.format(self._layer_idx),
                                     tag='elem_{}'.format(tag_suffix))
             else:
                 Output = te.compute(self._output_shape,
                                     lambda n, h, w, c: (First[n, h, w, c] + (Last[n, h, w, c])),
-                                    name='Layer_{}_ElementwiseAddOutput'.format(self._layer_idx),
+                                    name='ElementwiseAddOutput_{}'.format(self._layer_idx),
                                     tag='elem_{}'.format(tag_suffix))
             self._stages[-1].append(Output)
 
@@ -324,14 +321,12 @@ class LayerConfig:
         if self._filter_cfg.bn_relu == 'relu':
             ReLU = te.compute(Last.shape,
                             lambda *i: te.max(Last(*i), tvm.runtime.const(0, Last.dtype)),
-                            name='Layer_{}_ReLU_{}'.format(
-                                self._layer_idx, 'DepthwiseConv2d' if self._filter_cfg.depthwise else 'Conv2d'),
+                            name='ReLU_{}'.format(self._layer_idx),
                             tag='relu_{}'.format(tag_suffix))
         else: # 'relu6'
             ReLU = te.compute(Last.shape,
                             lambda *i: te.min(te.max(Last(*i), te.const(0, Last.dtype)), tvm.runtime.const(6, Last.dtype)),
-                            name='Layer_{}_ReLU6_{}'.format(
-                                self._layer_idx, 'DepthwiseConv2d' if self._filter_cfg.depthwise else 'Conv2d'),
+                            name='ReLU6_{}'.format(self._layer_idx),
                             tag='relu6_{}'.format(tag_suffix))
         self._stages[-1].append(ReLU)
 

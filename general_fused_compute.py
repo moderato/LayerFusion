@@ -42,7 +42,7 @@ def get_schedule(parameters, auto_tvm=False, device='cuda', name='depth_conv', c
         from schedules.schedule_utils import cpu_schedules as sch
 
     f = sch(name, auto_tvm)
-    s = f(cfg, fusion_cfg, output_stage, stages, params)
+    s = f(cfg, fusion_cfg, output_stage)
     return s, flatten_list(params)
 
 def get_all_possible_schedules(parameters, auto_tvm=False, device='cuda', name='depth_conv'):

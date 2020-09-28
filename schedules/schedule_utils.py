@@ -1,3 +1,5 @@
+from tvm import te
+
 def cpu_schedules(name, is_autotvm=True):
     # TODO: Don't use workload name to select the schedule
     if is_autotvm:
@@ -34,41 +36,40 @@ def gpu_schedules(name, is_autotvm=True):
             from .gpu.block_fused_schedule import schedule_block_fused_nhwc as f
     return f
 
-def get_stages_and_cfgs(fusion_cfg, stages, params):
-    layer_num = fusion_cfg.layer_num
-    bn_relu = fusion_cfg.get_bn_relu()
-
+def get_stages_and_cfgs(outs, layer_num):
     stage_dict = {}
-    layer_output_dict = {} # A dict for the synonym of the output of each layer
+    layer_output_dict = {}
     param_dict = {}
-    inputs_cfg = {}
-    filters_cfg = {}
-    outputs_cfg = {}
-    stage_pt = 1 # Skip input
-    param_pt = 1 # Skip input
+    def get_tensors(outs):
+        def traverse(tensors):
+            for t in tensors:
+                op = t.op
+                name = op.name
+                if 'PaddedInput' in name:
+                    stage_dict[name] = t
+                elif 'ScaleShift' in name or 'ReLU' in name:
+                    n, i = name.split('_')
+                    stage_dict['Output_{}_{}'.format(i, n)] = t
+                elif 'Scale' in name or 'Shift' in name or 'Filter' in name:
+                    param_dict[name] = t
+                elif 'Conv2dOutput' in name:
+                    _, i = name.split('_')
+                    stage_dict['Output_{}'.format(i)] = t
+                elif 'Input' in name:
+                    if 'PaddedInput_0' not in stage_dict.keys():
+                        stage_dict[name] = t
+                else:
+                    print(name)
+                    raise Exception("Unknown tensor type!")
+                traverse(op.input_tensors)
+        outs = [outs] if isinstance(outs, te.tensor.Tensor) else outs
+        traverse(outs)
 
-    for l in range(0, layer_num):
-        if fusion_cfg.need_padding(l):
-            stage_dict['PaddedInput_{}'.format(l)] = stages[stage_pt][0]
-            stage_pt += 1
-        if bn_relu[l]:
-            stage_dict['Output_{}'.format(l)], \
-                stage_dict['Output_{}_ScaleShift'.format(l)], \
-                    stage_dict['Output_{}_ReLU'.format(l)] = stages[stage_pt]
-            layer_output_dict['Layer_{}'.format(l)] = stage_dict['Output_{}_ReLU'.format(l)]
-            param_dict['Filter_{}'.format(l)], \
-                param_dict['Scale_{}'.format(l)], \
-                    param_dict['Shift_{}'.format(l)] = params[param_pt]
+    get_tensors(outs)
+    for idx in range(layer_num):
+        if 'Output_{}_ReLU'.format(idx) in stage_dict.keys():
+            layer_output_dict['Layer_{}'.format(idx)] = stage_dict['Output_{}_ReLU'.format(idx)]
         else:
-            stage_dict['Output_{}'.format(l)] = stages[stage_pt][0]
-            layer_output_dict['Layer_{}'.format(l)] = stage_dict['Output_{}'.format(l)]
-            param_dict['Filter_{}'.format(l)] = params[param_pt][0]
+            layer_output_dict['Layer_{}'.format(idx)] = stage_dict['Output_{}'.format(idx)]
 
-        inputs_cfg['Layer_{}'.format(l)] = fusion_cfg.get_input(l)
-        filters_cfg['Layer_{}'.format(l)] = fusion_cfg.get_filter(l)
-        outputs_cfg['Layer_{}'.format(l)] = fusion_cfg.get_output(l)
-
-        stage_pt += 1
-        param_pt += 1
-
-    return stage_dict, layer_output_dict, param_dict, inputs_cfg, filters_cfg, outputs_cfg
+    return stage_dict, layer_output_dict, param_dict

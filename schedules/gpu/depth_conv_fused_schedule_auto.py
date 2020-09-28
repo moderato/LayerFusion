@@ -3,20 +3,19 @@ from ..schedule_utils import get_stages_and_cfgs
 from tvm import te, autotvm
 
 # @autotvm.register_topi_schedule('schedule_depth_conv_fused_nhwc.gpu')
-def schedule_depth_conv_fused_nhwc_auto(cfg, fusion_cfg, outs, stages, params):
+def schedule_depth_conv_fused_nhwc_auto(cfg, fusion_cfg, outs):
     outs = [outs] if isinstance(outs, te.tensor.Tensor) else outs
     s = te.create_schedule([x.op for x in outs])
     layer_num = fusion_cfg.layer_num
     bn_relu = fusion_cfg.get_bn_relu()
-
-    stage_dict, layer_output_dict, param_dict, inputs_cfg, filters_cfg, outputs_cfg = \
-        get_stages_and_cfgs(fusion_cfg, stages, params)
+    stage_dict, layer_output_dict, param_dict = get_stages_and_cfgs(outs, layer_num)
     hasPaddedInput = [fusion_cfg.need_padding(idx) for idx in range(layer_num)]
 
     # from pprint import pprint
     # pprint(stage_dict)
     # pprint(layer_output_dict)
     # pprint(param_dict)
+    # print("******")
 
     # ######## Input data, weights, BN, etc
     s[stage_dict['PaddedInput_0']].compute_inline()

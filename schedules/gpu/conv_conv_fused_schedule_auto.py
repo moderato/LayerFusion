@@ -2,7 +2,7 @@ import tvm
 from tvm import te
 from ..schedule_utils import get_stages_and_cfgs
 
-def schedule_conv_conv_fused_nhwc_auto(cfg, fusion_cfg, outs, stages, params):
+def schedule_conv_conv_fused_nhwc_auto(cfg, fusion_cfg, outs):
     outs = [outs] if isinstance(outs, te.tensor.Tensor) else outs
     s = te.create_schedule([x.op for x in outs])
     layer_num = fusion_cfg.layer_num
@@ -13,8 +13,7 @@ def schedule_conv_conv_fused_nhwc_auto(cfg, fusion_cfg, outs, stages, params):
     # print('&&&')
     # pprint(params)
 
-    stage_dict, layer_output_dict, param_dict, inputs_cfg, filters_cfg, outputs_cfg = \
-        get_stages_and_cfgs(fusion_cfg, stages, params)
+    stage_dict, layer_output_dict, param_dict = get_stages_and_cfgs(outs, layer_num)
     hasPaddedInput = [fusion_cfg.need_padding(idx) for idx in range(layer_num)]
 
     ######## Input data, weights, BN, etc
