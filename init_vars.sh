@@ -56,5 +56,5 @@ if [ "$LIBXSMM_PRELOADED" != "1" ];
 then
   export LD_PRELOAD="${LD_PRELOAD}:${LF_HOME}/libxsmm_wrapper/libxsmm_wrapper.so"
 fi
-export LIBXSMM_PRELOADED=1
+# export LIBXSMM_PRELOADED=1
 cd ..

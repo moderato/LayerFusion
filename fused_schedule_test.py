@@ -9,6 +9,7 @@ from tvm import autotvm
 
 from general_fused_compute import get_schedule
 from helper import *
+from fusion_cfg import FusionConfig
 
 np.random.seed(42)
 targets = {
@@ -117,6 +118,7 @@ def verify_fused(workload_name,
                                         autotvm.callback.log_to_file(log_name)])
 
             # inspect the best config
+            # autotvm.record.pick_best(log_name, "logs/autotvm/model/gpu/test.log")
             dispatch_context = autotvm.apply_history_best(log_name)
             best_config = dispatch_context.query(task.target, task.workload)
             print("\nBest config:")

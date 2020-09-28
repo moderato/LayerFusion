@@ -2,6 +2,7 @@ from __future__ import absolute_import as _abs
 import tvm
 from tvm import te, autotvm
 from helper import *
+from fusion_cfg import FusionConfig
 from layer_config import LayerConfig
 
 def fused_convs(cfg, fusion_cfg, device='cuda', array_packing=False, constraints_idx=-1):
@@ -9,6 +10,7 @@ def fused_convs(cfg, fusion_cfg, device='cuda', array_packing=False, constraints
     params = []
     next_input = None # Output tensor of the previous stage
 
+    # TODO: Need to change LayerConfig so that the compute can be easily returned.
     for idx in range(fusion_cfg.layer_num):
         sc = LayerConfig(cfg, fusion_cfg, idx, next_input, device=device, pack=(device!='cuda'), constraints_idx=constraints_idx)
         sc.make_output(cfg)
