@@ -7,9 +7,8 @@ from tvm.topi.util import get_const_tuple
 from tvm.contrib.pickle_memoize import memoize
 from tvm import autotvm
 
-from general_fused_compute import get_schedule
 from helper import *
-from fusion_cfg import FusionConfig
+from fusion_composer import *
 
 np.random.seed(42)
 targets = {

@@ -3,14 +3,21 @@ from tvm import te
 from ..schedule_utils import get_stages_and_cfgs
 from .libxsmm_intrin import intrin_libxsmm_brgemm
 
-def schedule_conv_conv_fused_nhwc(cfg, fusion_cfg, outs):
+def schedule_conv_conv_fused_nhwc(cfg, fc, outs):
     outs = [outs] if isinstance(outs, te.tensor.Tensor) else outs
     s = te.create_schedule([x.op for x in outs])
-    layer_num = fusion_cfg.layer_num
-    bn_relu = fusion_cfg.get_bn_relu()
+    layer_num = fc.layer_num
+    bn_relu = [fc.get_bn_relu(idx) for idx in range(layer_num)]
+    stage_dict, layer_output_dict, _ = get_stages_and_cfgs(outs, layer_num)
+    hasPaddedInput = [fc.need_padding(idx) for idx in range(layer_num)]
 
-    stage_dict, layer_output_dict, param_dict = get_stages_and_cfgs(outs, layer_num)
-    hasPaddedInput = [fusion_cfg.need_padding(idx) for idx in range(layer_num)]
+    inputs_cfg = {}
+    filters_cfg = {}
+    outputs_cfg = {}
+    for l in range(layer_num):
+        inputs_cfg['Layer_{}'.format(l)] = fc.get_input_cfg(l)
+        filters_cfg['Layer_{}'.format(l)] = fc.get_filter_cfg(l)
+        outputs_cfg['Layer_{}'.format(l)] = fc.get_output_cfg(l)
 
     # from pprint import pprint
     # pprint(stages)

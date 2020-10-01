@@ -2,20 +2,17 @@ import tvm
 from tvm import te
 from ..schedule_utils import get_stages_and_cfgs
 
-def schedule_conv_conv_fused_nhwc(cfg, fusion_cfg, outs):
+def schedule_conv_conv_fused_nhwc(cfg, fc, outs):
     outs = [outs] if isinstance(outs, te.tensor.Tensor) else outs
     s = te.create_schedule([x.op for x in outs])
-    layer_num = fusion_cfg.layer_num
-    bn_relu = fusion_cfg.get_bn_relu()
-
+    layer_num = fc.layer_num
+    bn_relu = [fc.get_bn_relu(idx) for idx in range(layer_num)]
+    stage_dict, layer_output_dict, param_dict = get_stages_and_cfgs(outs, layer_num)
+    hasPaddedInput = [fc.need_padding[idx] for idx in range(layer_num)]
     # from pprint import pprint
     # pprint(stages)
     # print('&&&')
     # pprint(params)
-
-    stage_dict, layer_output_dict, param_dict = get_stages_and_cfgs(outs, layer_num)
-    hasPaddedInput = [fusion_cfg.need_padding(idx) for idx in range(layer_num)]
- 
     ######## Searchable parameters
     # --------------------
     output_step_tile_size_h = 2

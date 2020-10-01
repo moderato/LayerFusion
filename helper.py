@@ -6,12 +6,12 @@ from tvm.topi.util import get_const_tuple
 from tvm.topi.nn.util import get_pad_tuple
 from tvm import autotvm, te
 from tvm.autotvm.task.space import FallbackConfigEntity
-from fusion_cfg import FusionConfig
+# from fusion_composer import FusionComposer
 
 def get_vlen(axis_length, device=None):
     if device == 'cuda':
         candidates = [16, 32, 64, 128]
-    elif device == 'llvm -mcpu=core-avx2' or device == 'llvm -mcpu=skylake-avx512':
+    elif device == 'llvm' or device == 'llvm -mcpu=core-avx2' or device == 'llvm -mcpu=skylake-avx512':
         candidates = [8, 16, 24, 32, 64] # Non-c axes don't matter
     vlens = []
     for i in candidates:
@@ -237,115 +237,3 @@ def get_CPU_vlen(best_config=None, cfg_key=''):
         for k in sorted (vlens_dict.keys()):
             vlens.append(vlens_dict[k])
         return vlens
-
-def NHWC_to_NCHWc_data(nhwc, vlen):
-    n, h, w, c = get_const_tuple(nhwc.shape)
-    c_chunk = math.ceil(c / vlen)
-    nchwc = nhwc.reshape(n, h, w, c_chunk, vlen)
-    return np.array(nchwc.transpose(0, 3, 1, 2, 4), order='C')
-
-def NHWC_to_NCHWc_kernel(hwio, vlen_i, vlen_o, depthwise=False):
-    h, w, i, o = get_const_tuple(hwio.shape)
-    i_chunk = math.ceil(i / vlen_i)
-    oihwio = hwio.reshape(h, w, i_chunk, vlen_i, math.ceil(o / vlen_o), vlen_o) if not depthwise else \
-                hwio.reshape(h, w, i_chunk, vlen_i, 1, 1)
-    return np.array(oihwio.transpose(4, 2, 0, 1, 3, 5), order='C')
-
-def tensor_transformation(data, idx, pack, best_config, fusion_cfg, tensor_type):
-    if tensor_type == "data":
-        if pack:
-            vlen_o = get_CPU_vlen(best_config, 'vlen_input' if (idx == 0 and not fusion_cfg.get_filter(idx).depthwise) else 'vlen_layer_{}'.format(idx))
-            return NHWC_to_NCHWc_data(data, vlen_o)
-        return data
-    else: # kernel:
-        if pack:
-            # if first layer and not depthwise -> vlen_input
-            # if first layer and depthwise -> vlen_layer_0
-            # otherwise -> vlen_layer_{idx-1}
-            cfg_key = 'vlen_input' if (idx == 0 and not fusion_cfg.get_filter(idx).depthwise) else\
-                        ('vlen_layer_0' if idx == 0 else\
-                        'vlen_layer_{}'.format(idx-1))
-            vlen_i = get_CPU_vlen(best_config, cfg_key)
-            vlen_o = get_CPU_vlen(best_config, 'vlen_layer_{}'.format(idx))
-            return NHWC_to_NCHWc_kernel(data, vlen_i, vlen_o, fusion_cfg.get_filter(idx).depthwise)
-        return data
-
-def get_ref_data(workload_name,
-                    parameters,
-                    target,
-                    best_config=None,
-                    dtype='float32',
-                    save_data=False,
-                    name='depth_conv'):
-    fusion_cfg = FusionConfig(parameters)
-    assert(target is not None)
-    pack = (target != 'cuda')
-    ref_data = []
-
-    # Pretending the input_data is some output_data from stage -1
-    output_data = np.random.uniform(0.0, 0.1, size=fusion_cfg.layers[0][0].get_shape()).astype(dtype)
-    ref_data.append(tensor_transformation(output_data, 0, pack, best_config, fusion_cfg, 'data'))
-    # params names for saving data
-    params_name = ['input']
-    
-    for idx in range(fusion_cfg.layer_num):
-        f = fusion_cfg.get_filter(idx)
-        filter_data = np.random.uniform(0.0, 0.1, size=get_const_tuple(f.get_shape())).astype(dtype)
-        ref_data.append(tensor_transformation(filter_data, idx, pack, best_config, fusion_cfg, 'kernel'))
-        input_data = np.copy(output_data)
-
-        if f.depthwise:
-            output_data = testing.depthwise_conv2d_python_nhwc(input_data, filter_data, stride=[f.stride_h, f.stride_w], padding=f.padding).astype(dtype)
-            params_name.append('filter_{}_d'.format(idx+1)) # Mark depthwise filter
-        else: # Normal convolution
-            output_data = testing.conv2d_nhwc_python(input_data, filter_data, f.stride_h, f.padding).astype(dtype)
-            params_name.append('filter_{}'.format(idx+1))
-
-        if f.bn_relu is not None:
-            n, h, w, oc = output_data.shape
-            scale_np = np.random.uniform(0.0, 0.1, size=(oc,)).astype(dtype)
-            shift_np = np.random.uniform(0.0, 0.1, size=(oc,)).astype(dtype)
-            ref_data.append(scale_np)
-            ref_data.append(shift_np)
-
-            scale_shift_scipy = np.zeros(shape=(n, h, w, oc))
-            relu_scipy = np.zeros(shape=(n, h, w, oc))
-            for c in range(oc):
-                scale_shift_scipy[:,:,:,c] = output_data[:,:,:,c] * scale_np[c] + shift_np[c]
-
-                # For ResNet / DenseNet blocks, etc
-                if fusion_cfg.is_block:
-                    scale_shift_scipy[:,:,:,c] = scale_shift_scipy[:,:,:,c] + input_data[:,:,:,c]
-
-                relu_scipy[:,:,:,c] = np.maximum(scale_shift_scipy[:,:,:,c], 0)
-                if f.bn_relu == 'relu6':
-                    relu_scipy[:,:,:,c] = np.minimum(relu_scipy[:,:,:,c], 6).astype(dtype)
-            output_data = relu_scipy
-            params_name.extend(['scale_{}'.format(idx+1), 'shift_{}'.format(idx+1)])
-
-        if idx == fusion_cfg.layer_num - 1: # At the last stage, append output_data as the final output for reference
-            ref_data.append(tensor_transformation(output_data, idx, pack, best_config, fusion_cfg, 'data'))
-    params_name.append('output')
-
-    if save_data:
-        # Save ref data
-        for i in range(0, len(ref_data)):
-            filename = 'npy/{}/'.format(workload_name)
-            if not os.path.exists(filename):
-                os.mkdir(filename)
-            filename += params_name[i]
-            # Transpose filter for cudnn: should be non-fortran order
-            if target == 'cuda':
-                np.save(filename, ref_data[i])
-                if 'filter' in filename:
-                    if '_d' in filename:
-                        np.save(filename+'_transposed', np.array(ref_data[i].transpose(2, 3, 0, 1), order='C'))
-                    else:
-                        np.save(filename+'_transposed', np.array(ref_data[i].transpose(3, 2, 0, 1), order='C'))
-                else:
-                    if len(ref_data[i].shape) == 4: # Don't need to save NCHW format scale and shift data
-                        np.save(filename+'_NCHW', np.array(ref_data[i].transpose(0, 3, 1, 2), order='C'))
-            else:
-                np.save(filename+'_NCHWc', ref_data[i])
-
-    return ref_data
