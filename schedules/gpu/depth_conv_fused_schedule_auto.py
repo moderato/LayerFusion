@@ -10,12 +10,12 @@ def schedule_depth_conv_fused_nhwc_auto(cfg, fc, outs):
     bn_relu = [fc.get_bn_relu(idx) for idx in range(layer_num)]
     stage_dict, layer_output_dict, param_dict = get_stages_and_cfgs(outs, layer_num)
 
-    from pprint import pprint
-    print("******")
-    pprint(stage_dict)
-    pprint(layer_output_dict)
-    pprint(param_dict)
-    print("******")
+    # from pprint import pprint
+    # print("******")
+    # pprint(stage_dict)
+    # pprint(layer_output_dict)
+    # pprint(param_dict)
+    # print("******")
 
     # ######## Input data, weights, BN, etc
     s[stage_dict['PaddedInput_0']].compute_inline()

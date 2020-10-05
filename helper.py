@@ -1,12 +1,10 @@
 import numpy as np
 import tvm
 import os, math
-from tvm.topi import testing
 from tvm.topi.util import get_const_tuple
 from tvm.topi.nn.util import get_pad_tuple
 from tvm import autotvm, te
 from tvm.autotvm.task.space import FallbackConfigEntity
-# from fusion_composer import FusionComposer
 
 def get_vlen(axis_length, device=None):
     if device == 'cuda':
@@ -213,12 +211,12 @@ def export_kernel_launch_config(workload_name, output_shape, best_config, target
         with open('generated_kernels/gpu/kernel_launch_config/{}_config.csv'.format(workload_name), 'w') as f:
             f.write('{},{},{},{}'.format(thx, thy, thz, blx))
     else:
-        vlens = get_CPU_vlen(best_config, 'all')
+        vlens = get_CPU_vlen_from_config(best_config, 'all')
         vlens = [str(v) for v in vlens]
         with open('generated_kernels/cpu/kernel_launch_config/{}_config.csv'.format(workload_name), 'w') as f:
             f.write(','.join(vlens))
 
-def get_CPU_vlen(best_config=None, cfg_key=''):
+def get_CPU_vlen_from_config(best_config=None, cfg_key=''):
     if best_config is None:
         return 16
     if isinstance(best_config, FallbackConfigEntity):
