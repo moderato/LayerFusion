@@ -54,12 +54,12 @@ def get_fusion_parameters(task1, task2):
     param.append(workload1[2][1][3]) # 1st filter oc
     param.append(workload1[3][0]) # 1st filter stride
     param.append(True) # Depthwise
-    param.append(None) # TODO: Add support to bn+relu
+    param.append('relu') # TODO: Add support to bn+relu
     param.append(workload2[2][1][0]) # 2nd filter hw
     param.append(workload2[2][1][3]) # 2nd filter oc
     param.append(workload2[3][0]) # 2nd filter stride
     param.append(False) # Not depthwise
-    param.append(None) # TODO: Add support to bn+relu
+    param.append('relu') # TODO: Add support to bn+relu
     param.append(False) # TODO: Add support to block
 
     return param

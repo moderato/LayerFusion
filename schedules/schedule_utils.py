@@ -41,8 +41,8 @@ def get_stages_and_cfgs(outs):
     layer_output_dict = {}
     param_dict = {}
     def get_tensors(outs):
-        def traverse(tensors):
-            for t in tensors:
+        def traverse(prev_op_name, tensors):
+            for idx, t in enumerate(tensors):
                 op = t.op
                 name = op.name
                 if 'PaddedInput' in name:
@@ -58,12 +58,20 @@ def get_stages_and_cfgs(outs):
                 elif 'Input' in name:
                     if 'PaddedInput_0' not in stage_dict.keys():
                         stage_dict[name] = t
+                elif 'placeholder' in name:
+                    i = prev_op_name.split('_')[-1]
+                    if 'Conv2d' in prev_op_name: # Filter
+                        param_dict['Filter_{}'.format(i)] = t
+                    elif 'ScaleShift' in prev_op_name: # ScaleShift
+                        param_dict['{}_{}'.format('Scale' if idx == 1 else 'Shift', i)] = t
+                    else:
+                        continue
                 else:
                     print(name)
                     raise Exception("Unknown tensor type!")
-                traverse(op.input_tensors)
+                traverse(name, op.input_tensors)
         outs = [outs] if isinstance(outs, te.tensor.Tensor) else outs
-        traverse(outs)
+        traverse(None, outs)
 
     get_tensors(outs)
     layer_num = 0

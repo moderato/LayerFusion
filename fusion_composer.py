@@ -135,7 +135,7 @@ class FusionComposer:
                     if FILTER.depthwise:
                         c_filter = lambda x: x.size[-1] in get_vlen(OC, self.device)
                         # cfg.define_split('split_layer_{}_c'.format(idx), OC_chunk, num_outputs=(2 if (self.device == 'cuda' or not self.is_final_stage) else 3), policy='verbose')
-                        self.cfg.define_split('split_layer_{}_c'.format(idx), OC, num_outputs=3, policy='factors', filter=c_filter)
+                        self.cfg.define_split('split_layer_{}_c'.format(idx), self.cfg.axis(int(OC)), num_outputs=3, policy='factors', filter=c_filter)
                     else:
                         if is_final_stage:
                             H_num_outputs = 4
@@ -144,19 +144,19 @@ class FusionComposer:
                             H_num_outputs = 3
                             W_num_outputs = 3
 
-                        self.cfg.define_split('split_layer_{}_c'.format(idx), OC,
+                        self.cfg.define_split('split_layer_{}_c'.format(idx), self.cfg.axis(int(OC)),
                                         num_outputs=3,
                                         policy='factors', filter=c_filter)
 
                         if is_first_stage:
-                            self.cfg.define_split('split_layer_0_rc', OC,
+                            self.cfg.define_split('split_layer_0_rc', self.cfg.axis(int(OC)),
                                             num_outputs=2,
                                             policy='factors')
 
-                        self.cfg.define_split('split_layer_{}_h'.format(idx), OH,
+                        self.cfg.define_split('split_layer_{}_h'.format(idx), self.cfg.axis(int(OH)),
                                             num_outputs=H_num_outputs,
                                             policy='factors')
-                        self.cfg.define_split('split_layer_{}_w'.format(idx), OW,
+                        self.cfg.define_split('split_layer_{}_w'.format(idx), self.cfg.axis(int(OW)),
                                             num_outputs=W_num_outputs,
                                             policy='factors')
                 else:
@@ -166,7 +166,7 @@ class FusionComposer:
                         c_filter = lambda x: x.size[-1] >= -1 # dummy
                         # cfg.define_split('split_layer_{}_h'.format(idx), OH, num_outputs=2, policy='verbose')
                         # cfg.define_split('split_layer_{}_w'.format(idx), OW, num_outputs=2, policy='verbose')
-                        self.cfg.define_split('split_layer_{}_c'.format(idx), OC_chunk, num_outputs=2, policy='factors', filter=c_filter)
+                        self.cfg.define_split('split_layer_{}_c'.format(idx), self.cfg.axis(int(OC_chunk)), num_outputs=2, policy='factors', filter=c_filter)
                     else:
                         if is_final_stage:
                             H_num_outputs = 3
@@ -175,19 +175,19 @@ class FusionComposer:
                             H_num_outputs = 2
                             W_num_outputs = 2
 
-                        self.cfg.define_split('split_layer_{}_c'.format(idx), OC_chunk,
+                        self.cfg.define_split('split_layer_{}_c'.format(idx), self.cfg.axis(int(OC_chunk)),
                                         num_outputs=2,
                                         policy='factors', filter=c_filter)
 
                         if is_first_stage:
-                            self.cfg.define_split('split_layer_0_rc', OC_chunk,
+                            self.cfg.define_split('split_layer_0_rc', self.cfg.axis(int(OC_chunk)),
                                             num_outputs=2,
                                             policy='factors')
 
-                        self.cfg.define_split('split_layer_{}_h'.format(idx), OH,
+                        self.cfg.define_split('split_layer_{}_h'.format(idx), self.cfg.axis(int(OH)),
                                             num_outputs=H_num_outputs,
                                             policy='factors')
-                        self.cfg.define_split('split_layer_{}_w'.format(idx), OW,
+                        self.cfg.define_split('split_layer_{}_w'.format(idx), self.cfg.axis(int(OW)),
                                             num_outputs=W_num_outputs,
                                             policy='factors')
 
