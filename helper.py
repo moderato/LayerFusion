@@ -64,36 +64,6 @@ def get_fusion_parameters(task1, task2):
 
     return param
 
-def attrs_list_to_parameters(input_shape, attrs_list):
-    param = []
-    for x in input_shape:
-        param.append(x)
-
-    idx = 0
-    while 1:
-        attrs = attrs_list[idx]
-        if attrs == "multiply" or attrs == "add":
-            idx += 1
-            continue
-        else: # Assuming conv2dattrs here. TODO: Fix that.
-            H, _ = get_const_tuple(attrs.kernel_size)
-            stride_h, _ = get_const_tuple(attrs.strides)
-            is_depthwise = not (attrs.groups == 1)
-            bn_relu = "relu" if idx < len(attrs_list) - 1 and attrs_list[idx+1] == "nn.relu" else None
-
-            param.append(H) # Filter hw
-            param.append(1 if is_depthwise else attrs.channels) # Filter oc
-            param.append(stride_h) # Filter stride
-            param.append(is_depthwise)
-            param.append(bn_relu)
-
-            if bn_relu:
-                idx += 2
-            else:
-                idx += 1
-        if idx >= len(attrs_list):
-            break
-
 # workload_types=['depth_conv', 'conv_conv', 'block']
 def get_workloads_from_file(workload_types=['depth_conv', 'conv_conv']):
     workloads = {}

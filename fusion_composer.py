@@ -90,21 +90,45 @@ class FusionComposer:
 
             if self.get_bn_relu(idx):
                 output_cfg = self.get_output_cfg(idx)
-                self.placeholders.append(te.placeholder((output_cfg.C,), name='Scale_{}'.format(idx)))
-                self.placeholders.append(te.placeholder((output_cfg.C,), name='Shift_{}'.format(idx)))
+                self.placeholders.append(te.placeholder((1, 1, 1, output_cfg.C), name='Scale_{}'.format(idx)))
+                self.placeholders.append(te.placeholder((1, 1, 1, output_cfg.C), name='Shift_{}'.format(idx)))
 
     def get_placeholders(self):
         return self.placeholders
 
     def define_search_space(self):
-        if self.cfg is not None:
-            for idx in range(self.layer_num):
-                is_first_stage = (idx == 0)
-                is_final_stage = (idx == self.layer_num - 1)
+        for idx in range(self.layer_num):
+            is_first_stage = (idx == 0)
+            is_final_stage = (idx == self.layer_num - 1)
 
-                OUTPUT = self.get_output_cfg(idx)
-                FILTER = self.get_filter_cfg(idx)
+            DATA = self.get_input_cfg(idx)
+            FILTER = self.get_filter_cfg(idx)
+            OUTPUT = self.get_output_cfg(idx)
 
+            # Vector length
+            if self.pack:
+                if self.cfg is not None:
+                    if idx == 0 and not FILTER.depthwise: # First layer is not depthwise: define input vlen
+                        self.cfg.define_knob('vlen_input', get_vlen(FILTER.I, self.device))
+                    self.cfg.define_knob('vlen_layer_{}'.format(idx), get_vlen(OUTPUT.C, self.device)) # define output vlen
+
+                    # TODO: What if depthwise in the middle?
+                    if idx == 0 and not FILTER.depthwise:
+                        vlen_i = self.cfg['vlen_input'].val # input vlen = newly defined vlen
+                    elif idx == 0:
+                        vlen_i = self.cfg['vlen_layer_{}'.format(idx)].val # input vlen = output vlen
+                    else:
+                        vlen_i = self.cfg['vlen_layer_{}'.format(idx-1)].val # input vlen = previous output vlen
+                    vlen_o = self.cfg['vlen_layer_{}'.format(idx)].val
+                else:
+                    vlen_i = 16
+                    vlen_o = 16
+                DATA.update_shape(vlen_i)
+                FILTER.update_shape(vlen_i, vlen_o)
+                OUTPUT.update_shape(vlen_o) # Actually overlapped with the input of next layer
+
+            # Split axes, etc
+            if self.cfg is not None:
                 if self.device == 'cuda':
                     _, OH, OW, OC = OUTPUT.get_shape()
 
@@ -167,6 +191,10 @@ class FusionComposer:
                                             num_outputs=W_num_outputs,
                                             policy='factors')
 
+        # Add flop
+        if self.cfg:
+            self.cfg.add_flop(self.get_FLOP())
+
     def get_FLOP(self):
         flop = 0
         for l in range(0, self.layer_num):
@@ -179,14 +207,13 @@ class FusionComposer:
                 flop += 2 * (ocfg.N * ocfg.H * ocfg.W * ocfg.C) * (fcfg.H * fcfg.W * fcfg.I)
         return flop
 
-    def __init__(self, cfg, p, device='cuda', dtype='float32', constraints_idx=-1):
-        self.cfg = cfg
+    def __init__(self, p, auto_tvm=True, device='cuda', dtype='float32', constraints_idx=-1):
+        self.cfg = autotvm.get_config() if auto_tvm else None
         self.device = device
-        self.pack = (device != "cuda")
+        self.pack = (device != 'cuda')
         self.output_dtype=dtype
         self.is_block = False
         self.layers = []
-        self.padded_input_HWs = []
         self.placeholders = []
 
         idx = 0
@@ -216,59 +243,29 @@ class FusionComposer:
             if FILTER.padding_shape is None:
                 FILTER.padding_shape = (pad_top, pad_left, pad_down, pad_right)
 
+            # Make output
             ON = DATA.N
             OH = simplify((DATA.H - dilated_kernel_h + pad_top + pad_down) // FILTER.stride_h + 1)
             OW = simplify((DATA.W - dilated_kernel_w + pad_left + pad_right) // FILTER.stride_w + 1)
             OC = FILTER.I * FILTER.O if FILTER.depthwise else FILTER.O
             OUTPUT = self.FeatureConfig(ON, OH, OW, OC)
 
-            if not self.pack: # 'NHWC': 4D input 4D filter
-                self.layout = 'NHWC'
-            else: # 'NCHWc': 5D input 6D filter
-                self.layout = 'NCHWc'
-                # Vector length
-                if self.cfg is not None:
-                    if layer_idx == 0 and not FILTER.depthwise: # First layer is not depthwise: define input vlen
-                        self.cfg.define_knob('vlen_input', get_vlen(FILTER.I, device))
-                    self.cfg.define_knob('vlen_layer_{}'.format(layer_idx), get_vlen(OUTPUT.C, device)) # define output vlen
-
-                    # TODO: What if depthwise in the middle?
-                    if layer_idx == 0 and not FILTER.depthwise:
-                        vlen_i = self.cfg['vlen_input'].val # input vlen = newly defined vlen
-                    elif layer_idx == 0:
-                        vlen_i = self.cfg['vlen_layer_{}'.format(layer_idx)].val # input vlen = output vlen
-                    else:
-                        vlen_i = self.cfg['vlen_layer_{}'.format(layer_idx-1)].val # input vlen = previous output vlen
-                    vlen_o = self.cfg['vlen_layer_{}'.format(layer_idx)].val
-                else:
-                    vlen_i = 16
-                    vlen_o = 16
-                DATA.update_shape(vlen_i)
-                FILTER.update_shape(vlen_i, vlen_o)
-
             layer_idx += 1
 
         self.layers.append((OUTPUT,))
-        if self.pack:
-            OUTPUT.update_shape(vlen_o)
         self.layer_num = len(self.layers) - 1 # Excluding input
         self.need_padding = [False] * self.layer_num
-        self.stages = []
-        self.params = []
 
-        # 
+        # Define search space
         self.define_search_space()
-        if self.cfg is not None:
-            self.cfg.add_flop(self.get_FLOP())
 
-        # 
+        # Make placeholders for testing purpose
         self.make_placeholders()
 
         # Temporary variables for composing compute
         self.filter_cfg = None
         self.output_cfg = None
         self.layer_idx = -1
-
 
     def padding(self, Input, Filter):
         if self.pack:
@@ -293,10 +290,9 @@ class FusionComposer:
                 pad_after = [0, pad_down, pad_right, 0]
 
             PaddedInput = pad(Input, pad_before, pad_after, name='PaddedInput_{}'.format(self.layer_idx))
-            self.stages.append([PaddedInput])
+            # self.stages.append([PaddedInput])
             return PaddedInput
         return Input
-
 
     def make_depthwise_output(self, Input, Filter):
         # Pad if necessary
@@ -394,11 +390,11 @@ class FusionComposer:
     def process_relu(self, Input, Scale, Shift):
         if self.pack:
             _, _, _, _, OC_vec = Input.shape
-            ScaleShift =  te.compute(Input.shape, lambda n, c_chunk, h, w, c_vec: Input[n, c_chunk, h, w, c_vec] * Scale[c_chunk * OC_vec + c_vec] + Shift[c_chunk * OC_vec + c_vec],
+            ScaleShift =  te.compute(Input.shape, lambda n, c_chunk, h, w, c_vec: Input[n, c_chunk, h, w, c_vec] * Scale[0, 0, 0, c_chunk * OC_vec + c_vec] + Shift[0, 0, 0, c_chunk * OC_vec + c_vec],
                                 name='ScaleShift_{}'.format(self.layer_idx),
                                 tag='scaleshift')
         else:
-            ScaleShift =  te.compute(Input.shape, lambda n, h, w, c: Input[n, h, w, c] * Scale[c] + Shift[c],
+            ScaleShift =  te.compute(Input.shape, lambda n, h, w, c: Input[n, h, w, c] * Scale[0, 0, 0, c] + Shift[0, 0, 0, c],
                                 name='ScaleShift_{}'.format(self.layer_idx),
                                 tag='scaleshift')
 
@@ -439,18 +435,6 @@ class FusionComposer:
         return Last
 
     def get_compute(self):
-
-        # is_depthwise = []
-        # for idx in range(self.fusion_cfg.layer_num):
-        #     filter_cfg = self.fusion_cfg.get_filter(idx)
-        #     is_depthwise.append(filter_cfg.depthwise)
-        # def compute(a):
-        #     print(tmp)
-        #     print(a)
-        #     tmp.append(3)
-        #     print(tmp)
-        #     print(tmp[0]+a)
-
         def compute(input_tensors):
             Feature = input_tensors[0]
             tensor_idx = 1
@@ -481,11 +465,34 @@ class FusionComposer:
         self.layer_idx = -1
         return compute
 
-    def get_stages(self):
-        return self.stages
-
-    def get_params(self):
-        return self.params
+    def get_schedule(self, pattern='depth_conv'):
+        def wrapper(outs):
+            def raw_schedule():
+                if self.device == 'cuda':
+                    from schedules.schedule_utils import gpu_schedules as sch
+                else:
+                    from schedules.schedule_utils import cpu_schedules as sch
+                return sch(pattern, (self.cfg is not None))
+            f = raw_schedule()
+            if self.pack:
+                inputs_cfg = {}
+                filters_cfg = {}
+                outputs_cfg = {}
+                for l in range(self.layer_num):
+                    inputs_cfg['Layer_{}'.format(l)] = self.get_input_cfg(l)
+                    filters_cfg['Layer_{}'.format(l)] = self.get_filter_cfg(l)
+                    outputs_cfg['Layer_{}'.format(l)] = self.get_output_cfg(l)
+                if self.cfg is not None:
+                    ret = f(self.cfg, outs, inputs_cfg=inputs_cfg, filters_cfg=filters_cfg, outputs_cfg=outputs_cfg)
+                else:
+                    ret = f(outs, inputs_cfg=inputs_cfg, filters_cfg=filters_cfg, outputs_cfg=outputs_cfg)
+            else: # CUDA
+                if self.cfg is not None:
+                    ret = f(self.cfg, outs)
+                else:
+                    ret = f(outs)
+            return ret
+        return wrapper
 
     def print_info(self):
         for i in range(self.layer_num):
@@ -511,7 +518,7 @@ class FusionComposer:
 
     def tensor_transformation(self, data, idx, best_config, tensor_type):
         is_depthwise = self.get_filter_cfg(idx).depthwise
-        if tensor_type == "data":
+        if tensor_type == 'data':
             if self.pack:
                 cfg_key = 'vlen_input' if (idx == 0 and not is_depthwise) else 'vlen_layer_{}'.format(idx)
                 vlen_o = get_CPU_vlen_from_config(best_config, cfg_key)
@@ -550,7 +557,7 @@ class FusionComposer:
             input_data = np.copy(output_data)
 
             if f.depthwise:
-                output_data = testing.depthwise_conv2d_python_nhwc(input_data, filter_data, stride=[f.stride_h, f.stride_w], padding="SAME").astype(self.output_dtype)
+                output_data = testing.depthwise_conv2d_python_nhwc(input_data, filter_data, stride=[f.stride_h, f.stride_w], padding='SAME').astype(self.output_dtype)
                 params_name.append('filter_{}_d'.format(idx+1)) # Mark depthwise filter
             else: # Normal convolution
                 output_data = testing.conv2d_nhwc_python(input_data, filter_data, f.stride_h, padding=f.padding).astype(self.output_dtype)
@@ -558,15 +565,15 @@ class FusionComposer:
 
             if f.bn_relu is not None:
                 n, h, w, oc = output_data.shape
-                scale_np = np.random.uniform(0.0, 0.1, size=(oc,)).astype(self.output_dtype)
-                shift_np = np.random.uniform(0.0, 0.1, size=(oc,)).astype(self.output_dtype)
+                scale_np = np.random.uniform(0.0, 0.1, size=(1, 1, 1, oc)).astype(self.output_dtype)
+                shift_np = np.random.uniform(0.0, 0.1, size=(1, 1, 1, oc)).astype(self.output_dtype)
                 ref_data.append(scale_np)
                 ref_data.append(shift_np)
 
                 scale_shift_scipy = np.zeros(shape=(n, h, w, oc))
                 relu_scipy = np.zeros(shape=(n, h, w, oc))
                 for c in range(oc):
-                    scale_shift_scipy[:,:,:,c] = output_data[:,:,:,c] * scale_np[c] + shift_np[c]
+                    scale_shift_scipy[:,:,:,c] = output_data[:,:,:,c] * scale_np[0,0,0,c] + shift_np[0,0,0,c]
 
                     # For ResNet / DenseNet blocks, etc
                     if self.is_block:
@@ -606,48 +613,41 @@ class FusionComposer:
         return ref_data
 
 @autotvm.template('fused')
-def get_schedule(parameters, auto_tvm=False, device='cuda', name='depth_conv', constraints_idx=-1):
-    # Get cfg
-    cfg = autotvm.get_config() if auto_tvm else None
+def get_schedule_results(parameters, auto_tvm=True, device='cuda', pattern='depth_conv', constraints_idx=-1):
+    fc = FusionComposer(parameters, auto_tvm=auto_tvm, device=device)
 
     # Get compute
-    fc = FusionComposer(cfg, parameters, device=device)
-    f = fc.get_compute()
+    compute = fc.get_compute()
     input_tensors = fc.get_placeholders()
-    output_tensor = f(input_tensors)
+    output_tensor = compute(input_tensors)
     all_tensors = input_tensors + [output_tensor]
 
-    if device == 'cuda':
-        from schedules.schedule_utils import gpu_schedules as sch
-    else:
-        from schedules.schedule_utils import cpu_schedules as sch
+    # Get schedule
+    schedule = fc.get_schedule(pattern)
 
-    f = sch(name, auto_tvm)
-    s = f(cfg, fc, output_tensor)
+    s = schedule(output_tensor)
     return s, all_tensors
 
 def test_compute():
-    cfg = autotvm.get_config()
     parameters = (1, 56, 56, 128, 3, 1, 1, True, 'relu', 1, 64, 1, False, 'relu', False)
-    device = 'llvm'
-    fc = FusionComposer(cfg, parameters, device=device)
+    device = 'cuda'
+    fc = FusionComposer(parameters, auto_tvm=True, device=device)
     f = fc.get_compute()
-    all_tensors = fc.get_placeholders()
+    input_tensors = fc.get_placeholders()
     from pprint import pprint
-    pprint(all_tensors)
-    print(f(all_tensors[:-1]))
+    pprint(input_tensors)
+    print(f(input_tensors))
     print(fc.cfg)
 
 def test_schedule():
     parameters = (1, 56, 56, 128, 3, 1, 1, True, 'relu', 1, 64, 1, False, 'relu', False)
-    auto_tvm = True
-    device = 'llvm'
-    name = 'depth_conv'
+    device = 'cuda'
+    pattern = 'depth_conv'
     with tvm.target.create(device):
-        s, flatten_params = get_schedule(parameters, auto_tvm, device, name)
+        s, flatten_params = get_schedule_results(parameters, True, device, pattern)
     print(tvm.lower(s, flatten_params, simple_mode=True))
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     test_compute()
     test_schedule()
 
@@ -672,7 +672,7 @@ if __name__ == "__main__":
 
 #             # print(c, w, h)
 #             # print(c_factors, w_factors, h_factors)
-#             # print("***")
+#             # print('***')
 
 #         factors = [list(c_factors), list(w_factors), list(h_factors)]
 #         return list(itertools.product(*factors))

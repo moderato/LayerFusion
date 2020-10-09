@@ -79,6 +79,7 @@ def verify_fused(workload_name,
             ctx = tvm.gpu()
             device = "gpu"
 
+        fc = FusionComposer(parameters, auto_tvm=auto_tvm, device=target)
         if auto_tvm:
             log_name = 'logs/autotvm/layer/{}/{}_fused_{}.log'.format(device, name, workload_name)
             print(log_name)
@@ -126,11 +127,11 @@ def verify_fused(workload_name,
             # apply history best from log file
             with dispatch_context:
                 with tvm.target.create(target):
-                    s, flatten_params = get_schedule(parameters, auto_tvm, target, name)
+                    s, flatten_params = get_schedule_results(parameters, auto_tvm, target, name)
         else:
+            best_config = None
             with tvm.target.create(target):
-                s, flatten_params = get_schedule(parameters, auto_tvm, target, name)
-                best_config = None
+                s, flatten_params = get_schedule_results(parameters, auto_tvm, target, name)
 
         if not no_print_ir:
             print(tvm.lower(s, flatten_params, simple_mode=True))
@@ -155,7 +156,7 @@ def verify_fused(workload_name,
                 # func_sys.save("benchmark/cpu/kernel_sys.o")
 
         # Prepare data
-        ref_data = get_ref_data(workload_name, parameters, target, best_config, dtype=dtype, save_data=save_data, name=name)
+        ref_data = fc.get_ref_data(workload_name, best_config, save_data=save_data)
 
         # export kernel launch config, e.g. thxyz, blxy, vlen, etc
         output_shape = ref_data[-1].shape
@@ -189,7 +190,7 @@ def verify_fused(workload_name,
             print(np.where(d))
         # print("Error rate: {:.2f}%".format((len(d) / len(ref_data[-1]) * 100)))
         print("{}_fused of {} ({}): average running time is {:.2f} us.".format(name, workload_name, "NHWC" if target == "cuda" else "NCHWc", tcost_d * 1e6))
-        FLOP = FusionConfig(parameters).get_FLOP()
+        FLOP = fc.get_FLOP()
         print("FLOP: {}, GFLOPS: {:.2f}.".format(FLOP, FLOP / tcost_d / 1e9))
 
     for target in ["llvm -mcpu=core-avx2"]:

@@ -36,7 +36,7 @@ def gpu_schedules(name, is_autotvm=True):
             from .gpu.block_fused_schedule import schedule_block_fused_nhwc as f
     return f
 
-def get_stages_and_cfgs(outs, layer_num):
+def get_stages_and_cfgs(outs):
     stage_dict = {}
     layer_output_dict = {}
     param_dict = {}
@@ -66,10 +66,24 @@ def get_stages_and_cfgs(outs, layer_num):
         traverse(outs)
 
     get_tensors(outs)
+    layer_num = 0
+    bn_relu = []
+    padded = []
+    while 1:
+        if 'Output_{}'.format(layer_num) not in stage_dict.keys():
+            break
+        layer_num += 1
     for idx in range(layer_num):
         if 'Output_{}_ReLU'.format(idx) in stage_dict.keys():
+            bn_relu.append(True)
             layer_output_dict['Layer_{}'.format(idx)] = stage_dict['Output_{}_ReLU'.format(idx)]
         else:
+            bn_relu.append(False)
             layer_output_dict['Layer_{}'.format(idx)] = stage_dict['Output_{}'.format(idx)]
 
-    return stage_dict, layer_output_dict, param_dict
+        if 'PaddedInput_{}'.format(idx) in stage_dict.keys():
+            padded.append(True)
+        else:
+            padded.append(False)
+
+    return stage_dict, layer_output_dict, param_dict, layer_num, bn_relu, padded

@@ -2,12 +2,10 @@ import tvm
 from tvm import te
 from ..schedule_utils import get_stages_and_cfgs
 
-def schedule_depth_conv_fused_nhwc(cfg, fc, outs):
+def schedule_depth_conv_fused_nhwc(outs):
     outs = [outs] if isinstance(outs, te.tensor.Tensor) else outs
     s = te.create_schedule([x.op for x in outs])
-    layer_num = fc.layer_num
-    bn_relu = [fc.get_bn_relu(idx) for idx in range(layer_num)]
-    stage_dict, layer_output_dict, param_dict = get_stages_and_cfgs(outs, layer_num)
+    stage_dict, layer_output_dict, param_dict, _, bn_relu, _ = get_stages_and_cfgs(outs)
 
     # Searchable parameters
     # --------------------

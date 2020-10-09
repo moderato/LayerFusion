@@ -3,12 +3,10 @@ from ..schedule_utils import get_stages_and_cfgs
 from tvm import te, autotvm
 
 # @autotvm.register_topi_schedule('schedule_depth_conv_fused_nhwc.gpu')
-def schedule_depth_conv_fused_nhwc_auto(cfg, fc, outs):
+def schedule_depth_conv_fused_nhwc_auto(cfg, outs):
     outs = [outs] if isinstance(outs, te.tensor.Tensor) else outs
     s = te.create_schedule([x.op for x in outs])
-    layer_num = fc.layer_num
-    bn_relu = [fc.get_bn_relu(idx) for idx in range(layer_num)]
-    stage_dict, layer_output_dict, param_dict = get_stages_and_cfgs(outs, layer_num)
+    stage_dict, layer_output_dict, param_dict, _, bn_relu, _ = get_stages_and_cfgs(outs)
 
     # from pprint import pprint
     # print("******")
