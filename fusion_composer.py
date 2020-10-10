@@ -109,8 +109,8 @@ class FusionComposer:
             if self.pack:
                 if self.cfg is not None:
                     if idx == 0 and not FILTER.depthwise: # First layer is not depthwise: define input vlen
-                        self.cfg.define_knob('vlen_input', get_vlen(FILTER.I, self.device))
-                    self.cfg.define_knob('vlen_layer_{}'.format(idx), get_vlen(OUTPUT.C, self.device)) # define output vlen
+                        self.cfg.define_knob('vlen_input', get_vlen(FILTER.I, self.target.kind.name))
+                    self.cfg.define_knob('vlen_layer_{}'.format(idx), get_vlen(OUTPUT.C, self.target.kind.name)) # define output vlen
 
                     # TODO: What if depthwise in the middle?
                     if idx == 0 and not FILTER.depthwise:
@@ -129,12 +129,12 @@ class FusionComposer:
 
             # Split axes, etc
             if self.cfg is not None:
-                if self.device == 'cuda':
+                if self.target.kind.name == 'cuda':
                     _, OH, OW, OC = OUTPUT.get_shape()
 
                     if FILTER.depthwise:
-                        c_filter = lambda x: x.size[-1] in get_vlen(OC, self.device)
-                        # cfg.define_split('split_layer_{}_c'.format(idx), OC_chunk, num_outputs=(2 if (self.device == 'cuda' or not self.is_final_stage) else 3), policy='verbose')
+                        c_filter = lambda x: x.size[-1] in get_vlen(OC, self.target.kind.name)
+                        # cfg.define_split('split_layer_{}_c'.format(idx), OC_chunk, num_outputs=(2 if (self.target.kind.name == 'cuda' or not self.is_final_stage) else 3), policy='verbose')
                         self.cfg.define_split('split_layer_{}_c'.format(idx), self.cfg.axis(int(OC)), num_outputs=3, policy='factors', filter=c_filter)
                     else:
                         if is_final_stage:
@@ -207,10 +207,11 @@ class FusionComposer:
                 flop += 2 * (ocfg.N * ocfg.H * ocfg.W * ocfg.C) * (fcfg.H * fcfg.W * fcfg.I)
         return flop
 
-    def __init__(self, p, auto_tvm=True, device='cuda', dtype='float32', constraints_idx=-1):
+    def __init__(self, p, auto_tvm=True, target=None, dtype='float32', constraints_idx=-1):
         self.cfg = autotvm.get_config() if auto_tvm else None
-        self.device = device
-        self.pack = (device != 'cuda')
+        self.parameters = p
+        self.target = target
+        self.pack = (target.kind.name != 'cuda')
         self.output_dtype=dtype
         self.is_block = False
         self.layers = []
@@ -465,14 +466,22 @@ class FusionComposer:
         self.layer_idx = -1
         return compute
 
-    def get_schedule(self, pattern='depth_conv'):
+    def get_schedule(self, pattern='depth_conv', tuning=True):
         def wrapper(outs):
+            if tuning:
+                cfg = self.cfg
+            else:
+                workload = ("fused",) + autotvm.task.topi_integration.serialize_args([self.parameters, True, self.target.kind.name, pattern])
+                dispatch_ctx = autotvm.task.DispatchContext.current
+                cfg = dispatch_ctx.query(self.target, workload)
+                if cfg.is_fallback:
+                    raise Exception("AutoTVM cfg not found!")
             def raw_schedule():
-                if self.device == 'cuda':
+                if self.target.kind.name == 'cuda':
                     from schedules.schedule_utils import gpu_schedules as sch
                 else:
                     from schedules.schedule_utils import cpu_schedules as sch
-                return sch(pattern, (self.cfg is not None))
+                return sch(pattern, (cfg is not None))
             f = raw_schedule()
             if self.pack:
                 inputs_cfg = {}
@@ -483,12 +492,12 @@ class FusionComposer:
                     filters_cfg['Layer_{}'.format(l)] = self.get_filter_cfg(l)
                     outputs_cfg['Layer_{}'.format(l)] = self.get_output_cfg(l)
                 if self.cfg is not None:
-                    ret = f(self.cfg, outs, inputs_cfg=inputs_cfg, filters_cfg=filters_cfg, outputs_cfg=outputs_cfg)
+                    ret = f(cfg, outs, inputs_cfg=inputs_cfg, filters_cfg=filters_cfg, outputs_cfg=outputs_cfg)
                 else:
                     ret = f(outs, inputs_cfg=inputs_cfg, filters_cfg=filters_cfg, outputs_cfg=outputs_cfg)
             else: # CUDA
                 if self.cfg is not None:
-                    ret = f(self.cfg, outs)
+                    ret = f(cfg, outs)
                 else:
                     ret = f(outs)
             return ret
@@ -597,7 +606,7 @@ class FusionComposer:
                     os.mkdir(filename)
                 filename += params_name[i]
                 # Transpose filter for cudnn: should be non-fortran order
-                if self.device == 'cuda':
+                if self.target.kind.name == 'cuda':
                     np.save(filename, ref_data[i])
                     if 'filter' in filename:
                         if '_d' in filename: # HWIO/HWOI myth
@@ -614,7 +623,8 @@ class FusionComposer:
 
 @autotvm.template('fused')
 def get_schedule_results(parameters, auto_tvm=True, device='cuda', pattern='depth_conv', constraints_idx=-1):
-    fc = FusionComposer(parameters, auto_tvm=auto_tvm, device=device)
+    target = tvm.target.create(device)
+    fc = FusionComposer(parameters, auto_tvm=auto_tvm, target=target)
 
     # Get compute
     compute = fc.get_compute()
@@ -630,8 +640,9 @@ def get_schedule_results(parameters, auto_tvm=True, device='cuda', pattern='dept
 
 def test_compute():
     parameters = (1, 56, 56, 128, 3, 1, 1, True, 'relu', 1, 64, 1, False, 'relu', False)
-    device = 'cuda'
-    fc = FusionComposer(parameters, auto_tvm=True, device=device)
+    target = tvm.target.create('cuda')
+    print(target)
+    fc = FusionComposer(parameters, auto_tvm=True, target=target)
     f = fc.get_compute()
     input_tensors = fc.get_placeholders()
     from pprint import pprint

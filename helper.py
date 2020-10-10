@@ -6,9 +6,53 @@ from tvm.topi.nn.util import get_pad_tuple
 from tvm import autotvm, te
 from tvm.autotvm.task.space import FallbackConfigEntity
 
+np.random.seed(42)
+TARGETS = {
+    "cuda": {
+        "key": "1050ti",
+        "config_params": {
+            "number": 100, # Number of runs for runtime averaging
+            "repeat": 3, # (number of runs) = 1 repeats
+            # Suggested min_repeat_ms = 150 on GPUs
+            "min_repeat_ms": 300, # Dynamically adjust number of runs, i.e. time of one repeat = min(min_repeat_ms, number * kernel_runtime)
+            "timeout": { # Timeout of a compilation
+                "general": 10,
+                "depth_conv": 10,
+                "conv_conv": 500
+            }
+        }
+    },
+    "llvm -mcpu=core-avx2": {
+        "key": "i7_7700K",
+        "config_params": {
+            "number": 20,
+            "repeat": 3,
+            "min_repeat_ms": 0,
+            "timeout": {
+                "general": 500,
+                "depth_conv": 500,
+                "conv_conv": 10000
+            }
+        }
+    },
+    "llvm -mcpu=corei7-avx": {
+        "key": "xeon_E5",
+        "config_params": {
+            "number": 20,
+            "repeat": 3,
+            "min_repeat_ms": 0,
+            "timeout": {
+                "general": 1000,
+                "depth_conv": 500,
+                "conv_conv": 10000
+            }
+        }
+    }
+}
+
 def get_vlen(axis_length, device=None):
     if device == 'cuda':
-        candidates = [16, 32, 64, 128]
+        candidates = [16, 24, 32, 64, 128]
     elif device == 'llvm' or device == 'llvm -mcpu=core-avx2' or device == 'llvm -mcpu=skylake-avx512':
         candidates = [8, 16, 24, 32, 64] # Non-c axes don't matter
     vlens = []
@@ -205,3 +249,9 @@ def get_CPU_vlen_from_config(best_config=None, cfg_key=''):
         for k in sorted (vlens_dict.keys()):
             vlens.append(vlens_dict[k])
         return vlens
+
+# Print IR utility function. To be specified.
+def print_ir(mod, info, is_before=True):
+    """Print the name of the pass, the IR, only before passes execute."""
+    if is_before:
+        pass
