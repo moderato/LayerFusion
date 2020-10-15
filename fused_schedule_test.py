@@ -34,13 +34,15 @@ def verify_fused(workload_name,
         if "llvm" in target_str:
             ctx = tvm.cpu()
             target = tvm.target.create(target_str)
+            device = 'cpu'
         else: # cuda
             ctx = tvm.gpu()
             target = tvm.target.create(target_str)
+            device = 'gpu'
 
         fc = FusionComposer(parameters, auto_tvm=auto_tvm, target=target)
         if auto_tvm:
-            log_name = 'logs/autotvm/layer/{}/{}_fused_{}.log'.format(target_str, name, workload_name)
+            log_name = 'logs/autotvm/layer/{}/{}_fused_{}.log'.format(device, name, workload_name)
             print(log_name)
 
             # logging

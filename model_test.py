@@ -4,6 +4,7 @@ import os, argparse
 import numpy as np
 from tvm import te, autotvm, relay
 from tvm.autotvm.tuner import XGBTuner
+from tvm.autotvm.graph_tuner import DPTuner, PBQPTuner
 from tvm.contrib.util import tempdir
 from tvm.contrib.debugger import debug_runtime
 
@@ -24,8 +25,10 @@ def get_network(name, batch_size, dtype="float32", image_shape=(3, 224, 224), la
     elif "vgg" in name:
         n_layer = int(name.split('-')[1])
         mod, params = relay.testing.vgg.get_workload(num_layers=n_layer, batch_size=batch_size, dtype=dtype)
-    elif name == 'mobilenet':
-        mod, params = relay.testing.mobilenet.get_workload(batch_size=batch_size, dtype=dtype, image_shape=image_shape, layout=layout)
+    elif name == 'mobilenet_v1':
+        mod, params = relay.testing.mobilenet.get_workload(batch_size=batch_size, dtype=dtype, image_shape=image_shape, version='v1', layout=layout)
+    elif name == 'mobilenet_v2':
+        mod, params = relay.testing.mobilenet.get_workload(batch_size=batch_size, dtype=dtype, image_shape=image_shape, version='v2', layout=layout)
     elif name == 'squeezenet_v1.1':
         mod, params = relay.testing.squeezenet.get_workload(batch_size=batch_size, version='1.1', dtype=dtype)
     elif name == 'inception_v3':
@@ -63,9 +66,6 @@ def tune_tasks(tasks,
                tuning_opt,
                target_str="cuda",
                log_filename='tuning.log'):
-    if tuning_opt.auto_tvm_skip_training:
-        return
-
     print("Tuning...")
 
     # create tmp log file
@@ -78,7 +78,7 @@ def tune_tasks(tasks,
         print(task.config_space)
         print(task.workload)
 
-        # autotvm setting
+        # AutoTVM setting
         measure_option = autotvm.measure_option(
             builder=autotvm.LocalBuilder(),
             runner=autotvm.RPCRunner(
@@ -103,32 +103,38 @@ def tune_tasks(tasks,
                         autotvm.callback.log_to_file(tmp_log_file)
                     ])
 
-    # pick best records to a cache file
+    # Pick best records to a cache file
     autotvm.record.pick_best(tmp_log_file, log_filename)
     os.remove(tmp_log_file)
 
-def tune_and_evaluate(tuning_opt, dtype="float32"):
-    ### target
-    target_str = 'cuda'
-    ###
-    # target_str = "llvm -mcpu=core-avx2"
-    ###
+# Use graph tuner to achieve graph level optimal schedules
+# Set use_DP=False if it takes too long to finish.
+def tune_graph(graph, dshape, target_str, records, opt_sch_file, use_DP=True):
+    target = tvm.target.create(target_str)
+    target_op = [relay.op.get("nn.conv2d"),]
+    Tuner = DPTuner if use_DP else PBQPTuner
+    executor = Tuner(graph, {'data': dshape}, records, target_op, target)
+    executor.benchmark_layout_transform(min_exec_num=2000)
+    executor.run()
+    executor.write_opt_sch2record_file(opt_sch_file)
 
-    # network
-    network = 'mobilenet'
-
-    # extract workloads from relay program
-    print("Extract tasks...")
-    if tuning_opt.use_nchw:
-        image_shape, layout = (3, 224, 224), "NCHW"
-        log_filename = 'logs/autotvm/model/{}/{}_nchw.log'.format('gpu' if target_str == 'cuda' else target_str, network)
-    else: # NHWC
+def tune_and_evaluate(tuning_opt, target_str, network='mobilenet_v1', dtype='float32'):
+    # Extract workloads from relay program
+    print('Extract tasks...')
+    if 'llvm' in target_str: # CPU & NCHWC, use NCHW to get the network though
+        image_shape, layout = (3, 224, 224), 'NCHW'
+        log_filename = 'logs/autotvm/model/cpu/{}_nchwc.log'.format(network)
+    elif tuning_opt.use_nchw: # GPU & NCHW
+        image_shape, layout = (3, 224, 224), 'NCHW'
+        log_filename = 'logs/autotvm/model/gpu/{}_nchw.log'.format(network)
+    else: # GPU & NHWC
         image_shape, layout = (224, 224, 3), "NHWC"
-        log_filename = 'logs/autotvm/model/{}/{}_nhwc.log'.format('gpu' if target_str == 'cuda' else target_str, network)
+        log_filename = 'logs/autotvm/model/gpu/{}_nhwc.log'.format(network)
+    graph_opt_sch_file = 'logs/autotvm/model/cpu/%s_graph_opt.log' % network
     mod, params, input_shape, _ = get_network(network, batch_size=1, dtype=dtype, image_shape=image_shape, layout=layout)
-    tasks = autotvm.task.extract_from_program(mod["main"], target=target_str, params=params, ops=(relay.op.get("nn.conv2d"),))
+    tasks = autotvm.task.extract_from_program(mod['main'], target=target_str, params=params, ops=(relay.op.get('nn.conv2d'),))
 
-    # replace all fusable tasks to fused tasks
+    # Replace all fusable tasks to fused tasks
     # print("\n### Before replacement")
     # pprint(tasks)
     tasks = fuse_tasks(tasks, tuning_opt, target_str=target_str)
@@ -137,34 +143,37 @@ def tune_and_evaluate(tuning_opt, dtype="float32"):
     # pprint(tasks)
     # print("\n")
 
-    # run tuning tasks
-    tune_tasks(tasks, tuning_opt, target_str=target_str, log_filename=log_filename)
+    # Run tuning tasks
+    if not tuning_opt.auto_tvm_skip_training:
+        tune_tasks(tasks, tuning_opt, target_str=target_str, log_filename=log_filename)
+        if 'llvm' in target_str: # Tune graph for CPU
+            tune_graph(mod["main"], input_shape, target_str, log_filename, graph_opt_sch_file)
 
-    # compile kernels with history best records
-    with autotvm.apply_history_best(log_filename):
-        print("Compile...")
+    # Compile kernels with history best records
+    with (autotvm.apply_history_best(log_filename) if 'cuda' in target_str else autotvm.apply_graph_best(graph_opt_sch_file)):
+        print('Compile...')
         with tvm.transform.PassContext(opt_level=opt_level, trace=print_ir, disabled_pass=['ForwardFoldScaleAxis','BackwardFoldScaleAxis']):
             # """
             # build = optimize + generate_code
             # build / generate_code: return mod
             # optimize: return mod and params
             # """
-            # # merged
+            # # Merged
             # graph_factory = relay.build_module.build(mod, target=target_str, params=params)
-            # splitted
+            # Splitted
             mod, params = relay.build_module.optimize(mod, target=target_str, params=params) # This step finish processing the relay graph
             graph_factory = relay.build_module.generate_code(mod, target=target_str, params=params)
         graph, lib, params = graph_factory.graph_json, graph_factory.lib, graph_factory.params
 
-        # export library
+        # Export library
         tmp = tempdir()
-        filename = "{}.tar".format(network)
+        filename = '{}.tar'.format(network)
         lib.export_library(tmp.relpath(filename))
 
-        # load parameters
+        # Load parameters
         ctx = tvm.context(target_str, 0)
         if tuning_opt.enable_debugger:
-            module = debug_runtime.create(graph, lib, ctx, dump_root="/tmp/tvmdbg")
+            module = debug_runtime.create(graph, lib, ctx, dump_root='/tmp/tvmdbg')
         else:
             module = runtime.create(graph, lib, ctx)
         data_tvm = tvm.nd.array((np.random.uniform(size=input_shape)).astype(dtype))
@@ -172,13 +181,13 @@ def tune_and_evaluate(tuning_opt, dtype="float32"):
         module.set_input(**params)
         module.run()
 
-        # evaluate
-        print("Evaluate inference time cost...")
-        ftimer = module.module.time_evaluator("run", ctx, number=1, repeat=600)
+        # Evaluate
+        print('Evaluate inference time cost...')
+        ftimer = module.module.time_evaluator('run', ctx, number=1, repeat=600)
         prof_res = np.array(ftimer().results) * 1000  # convert to millisecond
-        print("Mean inference time (std dev): %.2f ms (%.2f ms)" % (np.mean(prof_res), np.std(prof_res)))
+        print('Mean inference time (std dev): %.2f ms (%.2f ms)' % (np.mean(prof_res), np.std(prof_res)))
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     # For AutoTVM:
     # terminal 1: python -m tvm.exec.rpc_tracker --host=0.0.0.0 --port=9190
     # terminal 2: python -m tvm.exec.rpc_server --tracker=0.0.0.0:9190 --key=1050ti
@@ -188,7 +197,7 @@ if __name__ == "__main__":
         parser = argparse.ArgumentParser(description="Parses command.")
         parser.add_argument("-c", "--use_nchw", action="store_true", help="Use NCHW as the layout for baseline.")
         parser.add_argument("-d", "--enable_debugger", action="store_true", help="Enable debugger.")
-        parser.add_argument("-e", "--auto_tvm_early_stopping", type=int, default=1500, help="Number of AutoTVM early stopping trials")
+        parser.add_argument("-e", "--auto_tvm_early_stopping", type=int, default=800, help="Number of AutoTVM early stopping trials")
         parser.add_argument("-k", "--auto_tvm_skip_training", action="store_true", help="Run AutoTVM tuned kernel.")
         parser.add_argument("-l", "--auto_tvm_transfer_learning", action="store_true", help="Load existing tuning log.")
         parser.add_argument("-n", "--no_fusion", action="store_true", help="No fusion.")
@@ -197,4 +206,5 @@ if __name__ == "__main__":
         return options
 
     options = get_options()
-    tune_and_evaluate(options)
+    ### target: 'cuda', 'llvm -mcpu=core-avx2'
+    tune_and_evaluate(options, target_str='cuda', network='mobilenet_v2')
