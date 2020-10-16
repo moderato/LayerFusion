@@ -213,7 +213,6 @@ def export_kernel_launch_config(workload_name, output_shape, best_config, target
                     wo = (wo + ee - 1) // ee
                     # print('wo: {}', wo)
             elif e[0] == 'split_layer_1_c':
-                reuse = e[2][1]
                 thx = e[2][2]
                 for ee in e[2][1:]:
                     recompute = (recompute + ee - 1) // ee

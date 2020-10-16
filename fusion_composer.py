@@ -80,18 +80,17 @@ class FusionComposer:
         return self.layers[idx][1].bn_relu
 
     def make_placeholders(self):
-        if self.placeholders:
-            return self.placeholders
-
-        self.placeholders.append(te.placeholder(self.get_input_cfg(0).get_shape(), name='Input'))
+        placeholders = []
+        placeholders.append(te.placeholder(self.get_input_cfg(0).get_shape(), name='Input'))
         for idx in range(self.layer_num):
             filter_cfg = self.get_filter_cfg(idx)
-            self.placeholders.append(te.placeholder(filter_cfg.get_shape(), name='Filter_{}'.format(idx)))
+            placeholders.append(te.placeholder(filter_cfg.get_shape(), name='Filter_{}'.format(idx)))
 
             if self.get_bn_relu(idx):
                 output_cfg = self.get_output_cfg(idx)
-                self.placeholders.append(te.placeholder((1, 1, 1, output_cfg.C), name='Scale_{}'.format(idx)))
-                self.placeholders.append(te.placeholder((1, 1, 1, output_cfg.C), name='Shift_{}'.format(idx)))
+                placeholders.append(te.placeholder((1, 1, 1, output_cfg.C), name='Scale_{}'.format(idx)))
+                placeholders.append(te.placeholder((1, 1, 1, output_cfg.C), name='Shift_{}'.format(idx)))
+        return placeholders
 
     def get_placeholders(self):
         return self.placeholders
@@ -195,6 +194,27 @@ class FusionComposer:
         if self.cfg:
             self.cfg.add_flop(self.get_FLOP())
 
+    def update_all_shapes_from_best_cfg(self, best_config):
+        if self.pack:
+            for idx in range(self.layer_num):
+                DATA = self.get_input_cfg(idx)
+                FILTER = self.get_filter_cfg(idx)
+                OUTPUT = self.get_output_cfg(idx)
+
+                # if first layer and not depthwise -> vlen_input
+                # if first layer and depthwise -> vlen_layer_0
+                # otherwise -> vlen_layer_{idx-1}
+                cfg_key = 'vlen_input' if (idx == 0 and not FILTER.depthwise) else\
+                            ('vlen_layer_0' if idx == 0 else\
+                            'vlen_layer_{}'.format(idx-1))
+                vlen_i = get_CPU_vlen_from_config(best_config, cfg_key)
+                vlen_o = get_CPU_vlen_from_config(best_config, 'vlen_layer_{}'.format(idx))
+
+                DATA.update_shape(vlen_i)
+                FILTER.update_shape(vlen_i, vlen_o)
+                OUTPUT.update_shape(vlen_o) # Actually overlapped with the input of next layer
+            self.placeholders = self.make_placeholders()
+
     def get_FLOP(self):
         flop = 0
         for l in range(0, self.layer_num):
@@ -205,6 +225,9 @@ class FusionComposer:
                 flop += 2 * (ocfg.N * ocfg.H * ocfg.W * ocfg.C) * (fcfg.H * fcfg.W)
             else:
                 flop += 2 * (ocfg.N * ocfg.H * ocfg.W * ocfg.C) * (fcfg.H * fcfg.W * fcfg.I)
+
+            if fcfg.bn_relu:
+                flop += 2 * (ocfg.N * ocfg.H * ocfg.W * ocfg.C)
         return flop
 
     def __init__(self, p, auto_tvm=True, target=None, dtype='float32', constraints_idx=-1):
@@ -261,7 +284,7 @@ class FusionComposer:
         self.define_search_space()
 
         # Make placeholders for testing purpose
-        self.make_placeholders()
+        self.placeholders = self.make_placeholders()
 
         # Temporary variables for composing compute
         self.filter_cfg = None
@@ -466,22 +489,30 @@ class FusionComposer:
         self.layer_idx = -1
         return compute
 
-    def get_schedule(self, pattern='depth_conv', tuning=True):
+    def get_schedule(self, pattern='depth_conv', tuning=False):
+        if tuning:
+            cfg = self.cfg
+        else:
+            if self.target.kind.name == 'cuda':
+                target_str = self.target.kind.name
+            else: # LLVM
+                target_str = "{} -mcpu={}".format(self.target.kind.name, self.target.mcpu)
+            workload = ("fused",) + autotvm.task.topi_integration.serialize_args([self.parameters, True, target_str, pattern])
+            dispatch_ctx = autotvm.task.DispatchContext.current
+            cfg = dispatch_ctx.query(self.target, workload)
+            if cfg.is_fallback:
+                raise Exception("AutoTVM cfg not found!")
+
+            # Update the tensor shapes with the best config
+            self.update_all_shapes_from_best_cfg(cfg)
+
         def wrapper(outs):
-            if tuning:
-                cfg = self.cfg
-            else:
-                workload = ("fused",) + autotvm.task.topi_integration.serialize_args([self.parameters, True, self.target.kind.name, pattern])
-                dispatch_ctx = autotvm.task.DispatchContext.current
-                cfg = dispatch_ctx.query(self.target, workload)
-                if cfg.is_fallback:
-                    raise Exception("AutoTVM cfg not found!")
             def raw_schedule():
                 if self.target.kind.name == 'cuda':
                     from schedules.schedule_utils import gpu_schedules as sch
                 else:
                     from schedules.schedule_utils import cpu_schedules as sch
-                return sch(pattern, (cfg is not None))
+                return sch(pattern, (cfg is not None), tuning)
             f = raw_schedule()
             if self.pack:
                 inputs_cfg = {}
@@ -491,12 +522,12 @@ class FusionComposer:
                     inputs_cfg['Layer_{}'.format(l)] = self.get_input_cfg(l)
                     filters_cfg['Layer_{}'.format(l)] = self.get_filter_cfg(l)
                     outputs_cfg['Layer_{}'.format(l)] = self.get_output_cfg(l)
-                if self.cfg is not None:
+                if cfg is not None:
                     ret = f(cfg, outs, inputs_cfg=inputs_cfg, filters_cfg=filters_cfg, outputs_cfg=outputs_cfg)
                 else:
                     ret = f(outs, inputs_cfg=inputs_cfg, filters_cfg=filters_cfg, outputs_cfg=outputs_cfg)
             else: # CUDA
-                if self.cfg is not None:
+                if cfg is not None:
                     ret = f(cfg, outs)
                 else:
                     ret = f(outs)
@@ -512,57 +543,37 @@ class FusionComposer:
         # OUTPUT = self.layers[-1][0]
         print('Output size: {}'.format(DATA.get_shape()))
 
-    def NHWC_to_NCHWc_data(self, nhwc, vlen):
-        n, h, w, c = get_const_tuple(nhwc.shape)
-        c_chunk = math.ceil(c / vlen)
-        nchwc = nhwc.reshape(n, h, w, c_chunk, vlen)
-        return np.array(nchwc.transpose(0, 3, 1, 2, 4), order='C')
-
-    def NHWC_to_NCHWc_kernel(self, hwio, vlen_i, vlen_o, depthwise=False):
-        h, w, i, o = get_const_tuple(hwio.shape)
-        i_chunk = math.ceil(i / vlen_i)
-        oihwio = hwio.reshape(h, w, i_chunk, vlen_i, math.ceil(o / vlen_o), vlen_o) if not depthwise else \
-                    hwio.reshape(h, w, i_chunk, vlen_i, 1, 1)
-        return np.array(oihwio.transpose(4, 2, 0, 1, 3, 5), order='C')
-
-    def tensor_transformation(self, data, idx, best_config, tensor_type):
-        is_depthwise = self.get_filter_cfg(idx).depthwise
-        if tensor_type == 'data':
-            if self.pack:
-                cfg_key = 'vlen_input' if (idx == 0 and not is_depthwise) else 'vlen_layer_{}'.format(idx)
-                vlen_o = get_CPU_vlen_from_config(best_config, cfg_key)
-                return self.NHWC_to_NCHWc_data(data, vlen_o)
-            return data
-        else: # kernel:
-            if self.pack:
-                # if first layer and not depthwise -> vlen_input
-                # if first layer and depthwise -> vlen_layer_0
-                # otherwise -> vlen_layer_{idx-1}
-                cfg_key = 'vlen_input' if (idx == 0 and not is_depthwise) else\
-                            ('vlen_layer_0' if idx == 0 else\
-                            'vlen_layer_{}'.format(idx-1))
-                vlen_i = get_CPU_vlen_from_config(best_config, cfg_key)
-                vlen_o = get_CPU_vlen_from_config(best_config, 'vlen_layer_{}'.format(idx))
-                return self.NHWC_to_NCHWc_kernel(data, vlen_i, vlen_o, is_depthwise)
-            return data
+    def tensor_transformation(self, data, tensor_cfg, tensor_type):
+        if self.pack:
+            if tensor_type == 'data': # NHWC -> NCHWc
+                n, c_chunk, h, w, vlen = tensor_cfg.get_shape()
+                nchwc = data.reshape(n, h, w, c_chunk, vlen)
+                return np.array(nchwc.transpose(0, 3, 1, 2, 4), order='C')
+            else: # kernel: HWIO -> OIHWio
+                o_chunk, i_chunk, h, w, vlen_i, vlen_o = tensor_cfg.get_shape()
+                oihwio = data.reshape(h, w, i_chunk, vlen_i, o_chunk, vlen_o)
+                return np.array(oihwio.transpose(4, 2, 0, 1, 3, 5), order='C')
+        return data
 
     def get_ref_data(self,
                         workload_name,
                         best_config=None,
                         save_data=False):
+        if best_config:
+            self.update_all_shapes_from_best_cfg(best_config)
         ref_data = []
 
         # Pretending the input_data is some output_data from stage -1
-        first_layer = self.layers[0][0]
-        output_data = np.random.uniform(0.0, 0.1, size=(first_layer.N, first_layer.H, first_layer.W, first_layer.C)).astype(self.output_dtype)
-        ref_data.append(self.tensor_transformation(output_data, 0, best_config, 'data'))
+        input_cfg = self.get_input_cfg(0)
+        output_data = np.random.uniform(0.0, 0.1, size=(input_cfg.N, input_cfg.H, input_cfg.W, input_cfg.C)).astype(self.output_dtype)
+        ref_data.append(self.tensor_transformation(output_data, input_cfg, 'data'))
         # params names for saving data
         params_name = ['input']
 
         for idx in range(self.layer_num):
             f = self.get_filter_cfg(idx)
             filter_data = np.random.uniform(0.0, 0.1, size=(f.H, f.W, f.I, f.O)).astype(self.output_dtype)
-            ref_data.append(self.tensor_transformation(filter_data, idx, best_config, 'kernel'))
+            ref_data.append(self.tensor_transformation(filter_data, f, 'kernel'))
             input_data = np.copy(output_data)
 
             if f.depthwise:
@@ -595,7 +606,8 @@ class FusionComposer:
                 params_name.extend(['scale_{}'.format(idx+1), 'shift_{}'.format(idx+1)])
 
             if idx == self.layer_num - 1: # At the last stage, append output_data as the final output for reference
-                ref_data.append(self.tensor_transformation(output_data, idx, best_config, 'data'))
+                output_cfg = self.get_output_cfg(idx)
+                ref_data.append(self.tensor_transformation(output_data, output_cfg, 'data'))
         params_name.append('output')
 
         if save_data:
@@ -622,9 +634,22 @@ class FusionComposer:
         return ref_data
 
 @autotvm.template('fused')
-def get_schedule_results(parameters, auto_tvm=True, device='cuda', pattern='depth_conv', constraints_idx=-1):
+def get_schedule_tuning(parameters, auto_tvm=True, device='cuda', pattern='depth_conv', constraints_idx=-1):
     target = tvm.target.create(device)
+
+    # A workaround for CPU autotuning
+    if device != 'cuda':
+        tmp = []
+        for idx in range(len(parameters)):
+            if parameters[idx] == 'relu' or parameters[idx] == 'relu6':
+                tmp.append(None)
+            else:
+                tmp.append(parameters[idx])
+        parameters = tmp
     fc = FusionComposer(parameters, auto_tvm=auto_tvm, target=target)
+
+    # Get schedule
+    schedule = fc.get_schedule(pattern, tuning=True)
 
     # Get compute
     compute = fc.get_compute()
@@ -632,8 +657,21 @@ def get_schedule_results(parameters, auto_tvm=True, device='cuda', pattern='dept
     output_tensor = compute(input_tensors)
     all_tensors = input_tensors + [output_tensor]
 
-    # Get schedule
+    s = schedule(output_tensor)
+    return s, all_tensors
+
+def get_schedule_inference(parameters, auto_tvm=True, device='cuda', pattern='depth_conv', constraints_idx=-1):
+    target = tvm.target.create(device)
+    fc = FusionComposer(parameters, auto_tvm=auto_tvm, target=target)
+
+    # Get schedule (comes first as tensor shapes need to be updated)
     schedule = fc.get_schedule(pattern)
+
+    # Get compute
+    compute = fc.get_compute()
+    input_tensors = fc.get_placeholders()
+    output_tensor = compute(input_tensors)
+    all_tensors = input_tensors + [output_tensor]
 
     s = schedule(output_tensor)
     return s, all_tensors
@@ -655,7 +693,7 @@ def test_schedule():
     device = 'cuda'
     pattern = 'depth_conv'
     with tvm.target.create(device):
-        s, flatten_params = get_schedule_results(parameters, True, device, pattern)
+        s, flatten_params = get_schedule_tuning(parameters, True, device, pattern)
     print(tvm.lower(s, flatten_params, simple_mode=True))
 
 if __name__ == '__main__':

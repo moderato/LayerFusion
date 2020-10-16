@@ -3,7 +3,7 @@ from tvm import te
 from ..schedule_utils import get_stages_and_cfgs
 from .libxsmm_intrin import intrin_libxsmm_brgemm
 
-def schedule_depth_conv_fused_nhwc(outs, *args, **kwargs):
+def schedule_depth_conv_fused_nchwc(outs, *args, **kwargs):
     outs = [outs] if isinstance(outs, te.tensor.Tensor) else outs
     s = te.create_schedule([x.op for x in outs])
     stage_dict, layer_output_dict, _, _, bn_relu, _ = get_stages_and_cfgs(outs)

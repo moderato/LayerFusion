@@ -1,10 +1,13 @@
 from tvm import te
 
-def cpu_schedules(name, is_autotvm=True):
+def cpu_schedules(name, is_autotvm=True, tuning=False):
     # TODO: Don't use workload name to select the schedule
     if is_autotvm:
         if name == 'depth_conv':
-            from .cpu.depth_conv_fused_schedule_auto import schedule_depth_conv_fused_nhwc_auto as f
+            if tuning:
+                from .cpu.depth_conv_fused_schedule_auto import schedule_depth_conv_fused_nchwc_auto_search as f
+            else:
+                from .cpu.depth_conv_fused_schedule_auto import schedule_depth_conv_fused_nchwc_auto_inference as f
         elif name == 'conv_conv':
             from .cpu.conv_conv_fused_schedule_auto import schedule_conv_conv_fused_nhwc_auto as f
         else: # resnet block, etc
@@ -18,7 +21,7 @@ def cpu_schedules(name, is_autotvm=True):
             from .cpu.block_fused_schedule import schedule_block_fused_nhwc as f
     return f
 
-def gpu_schedules(name, is_autotvm=True):
+def gpu_schedules(name, is_autotvm=True, tuning=None):
     # TODO: Don't use workload name to select the schedule
     if is_autotvm:
         if name == 'depth_conv':
