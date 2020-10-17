@@ -1,11 +1,9 @@
-import tvm, topi
-import topi.testing
-import os, logging, sys, argparse
+import tvm, os, logging, sys, argparse
+import tvm.topi.testing
 import tvm.topi.tag as tag
-from scipy import signal
+from tvm import autotvm
 from tvm.topi.util import get_const_tuple
 from tvm.contrib.pickle_memoize import memoize
-from tvm import autotvm
 
 from helper import *
 from fusion_composer import *

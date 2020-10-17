@@ -4,10 +4,15 @@ RUN apt-get update
 # General
 RUN apt-get install -y wget nano gcc make git lsb-release software-properties-common
 RUN apt-get install -y python3 python3-dev python3-setuptools python3-pip
-RUN apt-get install -y gcc libtinfo-dev zlib1g-dev build-essential cmake libedit-dev libxml2-dev libopenblas-dev
+RUN apt-get install -y gcc libtinfo-dev zlib1g-dev build-essential cmake libedit-dev libxml2-dev tmux
+
+# Tmux
+RUN echo 'set -g mouse on\n' \
+            'set-option -g history-limit 50000\n' >> ${HOME}/.tmux.conf
 
 # CMake
-RUN cd ${HOME} && \
+RUN mkdir -p ${HOME}/Documents && \
+    cd ${HOME}/Documents && \
     wget https://github.com/Kitware/CMake/releases/download/v3.18.4/cmake-3.18.4.tar.gz && \
     tar -xzvf cmake-3.18.4.tar.gz && \
     cd cmake-3.18.4 && \
@@ -17,7 +22,8 @@ RUN cd ${HOME} && \
     rm ../cmake-3.18.4.tar.gz
 
 # LLVM
-RUN wget https://apt.llvm.org/llvm.sh && \
+RUN cd ${HOME}/Documents && \
+    wget https://apt.llvm.org/llvm.sh && \
     chmod +x llvm.sh && \
     ./llvm.sh 9
 RUN ln -sf /usr/bin/llvm-config-9 /usr/bin/llvm-config
@@ -37,7 +43,7 @@ RUN echo 'export PATH="${PATH}:/usr/local/cuda/bin"\n' \
 RUN /bin/bash -c "source ~/.bashrc"
 
 # SDE
-RUN cd ${HOME} && \
+RUN cd ${HOME}/Documents && \
     wget -q https://software.intel.com/content/dam/develop/external/us/en/documents/sde-external-8.56.0-2020-07-05-lin.tar.bz2 && \
     tar -xf sde-external-8.56.0-2020-07-05-lin.tar.bz2 && \
     mv sde-external-8.56.0-2020-07-05-lin sde && \
@@ -45,7 +51,7 @@ RUN cd ${HOME} && \
     rm sde-external-8.56.0-2020-07-05-lin.tar.bz2
 
 # PCM
-RUN cd ${HOME} && \
+RUN cd ${HOME}/Documents && \
     git clone https://github.com/opcm/pcm.git && \
     cd pcm && \
     make -j16
@@ -66,14 +72,14 @@ RUN export avx_option="$( avx=`grep -c avx /proc/cpuinfo`; \
                           else \
                             echo 0; \
                           fi )"
-RUN cd ${HOME} && \
+RUN cd ${HOME}/Documents && \
     git clone https://github.com/hfp/libxsmm.git && \
     cd libxsmm && \
     make -j16 INTRINSICS=1 AVX=$avx_option && \
     cd ..
 
 # MKLDNN
-RUN cd ${HOME} && \
+RUN cd ${HOME}/Documents && \
     git clone https://github.com/oneapi-src/oneDNN.git && \
     mkdir -p oneDNN/build && \
     cd oneDNN/build && \
@@ -91,8 +97,8 @@ RUN cd /tmp && \
     apt-get install -y intel-mkl-64bit-2020.3-111
 
 # TVM
-RUN pip3 install --user numpy decorator attrs tornado psutil xgboost cython
-RUN cd ${HOME} && \
+RUN pip3 install --user numpy decorator attrs tornado psutil xgboost cython typed_ast
+RUN cd ${HOME}/Documents && \
     git clone --recursive https://github.com/moderato/incubator-tvm tvm && \
     mkdir -p tvm/build && \
     cd tvm/build && \
@@ -102,5 +108,7 @@ RUN cd ${HOME} && \
     cd .. && \
     make cython3 && \
     cd ..
-RUN echo 'export TVM_HOME=${HOME}/tvm' >> ${HOME}/.bashrc && \
-    echo 'export PYTHONPATH=${TVM_HOME}/python:${PYTHONPATH}' >> ${HOME}/.bashrc
+RUN echo 'export TVM_HOME=${HOME}/Documents/tvm' >> ${HOME}/.bashrc && \
+    echo 'export PYTHONPATH=${TVM_HOME}/python:${PYTHONPATH}' >> ${HOME}/.bashrc && \
+    echo 'alias initialize="cd ~/Documents/LayerFusion && source ./init_vars.sh"' >> ${HOME}/.bashrc && \
+    echo 'alias attach="tmux attach -t"' >> ${HOME}/.bashrc

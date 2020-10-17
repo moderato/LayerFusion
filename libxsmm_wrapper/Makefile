@@ -5,8 +5,7 @@ SOURCES = batch_reduce_plus_init.cc
 
 INC=-I$(LIBXSMM_HOME)/include
 LIBS = $(LIBXSMM_HOME)/lib/libxsmm.a $(LIBXSMM_HOME)/lib/libxsmmext.a \
-       $(LIBXSMM_HOME)/lib/libxsmmnoblas.a $(LIBXSMM_HOME)/lib/libxsmmgen.a \
-       $(LIBXSMM_HOME)/lib/libxsmmf.a
+       $(LIBXSMM_HOME)/lib/libxsmmnoblas.a $(LIBXSMM_HOME)/lib/libxsmmgen.a
 TARGET= libxsmm_wrapper.so
 
 all:

@@ -22,6 +22,19 @@ TARGETS = {
             }
         }
     },
+    "llvm -mcpu=skylake-avx512": {
+        "key": "Xeon",
+        "config_params": {
+            "number": 20,
+            "repeat": 3,
+            "min_repeat_ms": 0,
+            "timeout": {
+                "general": 300,
+                "depth_conv": 300,
+                "conv_conv": 5000
+            }
+        }
+    },
     "llvm -mcpu=core-avx2": {
         "key": "i7_7700K",
         "config_params": {
