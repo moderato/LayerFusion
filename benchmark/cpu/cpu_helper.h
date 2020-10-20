@@ -32,6 +32,8 @@
                              ::"i"(tag) : "%ebx")
 #endif
 
+using namespace pcm;
+
 // #define DEBUG 1
 
 // TODO: Generalize the vlens reading

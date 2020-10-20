@@ -1,4 +1,4 @@
-CC= gcc
+CC= icpc
 CFLAGS= -O3 -fPIC -std=c++11 -fopenmp
 LDFLAGS= -shared
 SOURCES = batch_reduce_plus_init.cc

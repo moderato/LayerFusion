@@ -32,6 +32,7 @@
 // #define DEBUG 1
 
 using namespace dnnl;
+using namespace pcm;
 using tag = dnnl::memory::format_tag;
 using dt = dnnl::memory::data_type;
 

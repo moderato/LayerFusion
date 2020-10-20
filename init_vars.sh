@@ -21,6 +21,7 @@ mkdir -p logs/runtime/cpu
 mkdir -p logs/runtime/gpu
 mkdir -p generated_kernels/cpu/kernel_launch_config
 mkdir -p generated_kernels/gpu/kernel_launch_config
+mkdir -p npy
 
 # # For VTune benchmark
 # sudo ln -sf ${VTUNE_HOME}/bin64/vtune /usr/bin/vtune 

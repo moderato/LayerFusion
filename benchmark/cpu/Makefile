@@ -1,22 +1,20 @@
-CXX := g++
+CXX := icpc
 ASXX := as
 TARGET := cpu_bench
-CXXFLAGS := -std=c++11 -O2 -fPIC \
+CXXFLAGS := -std=c++14 -O2 -fPIC \
 	-I${TVM_HOME}/include \
-	-I${DMLC_CORE}/include \
-	-I${MKLDNN_HOME}/include \
 	-I${TVM_HOME}/3rdparty/dlpack/include \
-	-I${VTUNE_HOME}/include \
-	-I${PCM_HOME}
+	-I${DMLC_CORE}/include \
+	-I${PCM_HOME} \
+	-I${MKLDNN_HOME}/include
 LDFLAGS := \
-	${PCM_HOME}/libPCM.a \
-	${VTUNE_HOME}/lib64/libittnotify.a \
 	-L${TVM_HOME}/build \
+	${PCM_HOME}/libPCM.a \
 	-L${MKLDNN_HOME}/build \
 	-L/usr/local/lib \
-	-L${VTUNE_HOME}/lib64 \
-	-ltvm_runtime -littnotify -ldl -lpthread -lcnpy -lz -lmkldnn
-ASFLAGS := -march=corei7+fma+avx+avx2+sse3
+	-ltvm_runtime -ldl -lpthread -lcnpy -lz -lmkldnn
+# -I${VTUNE_HOME}/include ${VTUNE_HOME}/lib64/libittnotify.a -L${VTUNE_HOME}/lib64 -littnotify 
+ASFLAGS ?= -march=corei7+fma+avx+avx2+sse3
 KERNEL ?= ../../generated_kernels/cpu/mv1_1.asm
 REPEATITION ?= 1000
 ENABLE_PCM ?= 0
