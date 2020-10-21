@@ -89,10 +89,10 @@ void benchmark_generated_cpu(std::string workload_name,
     std::string kernel_1_name = folder_name + (is_f1_depthwise ? "filter_1_d_NCHWc.npy" : "filter_1_NCHWc.npy");
     std::string kernel_2_name = folder_name + "filter_2_NCHWc.npy";
     std::string output_name = folder_name + "output_NCHWc.npy";
-    // std::string scale_1_name = folder_name + "scale_1.npy";
-    // std::string shift_1_name = folder_name + "shift_1.npy";
-    // std::string scale_2_name = folder_name + "scale_2.npy";
-    // std::string shift_2_name = folder_name + "shift_2.npy";
+    std::string scale_1_name = folder_name + "scale_1.npy";
+    std::string shift_1_name = folder_name + "shift_1.npy";
+    std::string scale_2_name = folder_name + "scale_2.npy";
+    std::string shift_2_name = folder_name + "shift_2.npy";
 
 #ifdef DEBUG
     std::cout << "npy file names:" << std::endl;
@@ -107,6 +107,15 @@ void benchmark_generated_cpu(std::string workload_name,
     cnpy::NpyArray input_npy = cnpy::npy_load(input_name);
     cnpy::NpyArray kernel_1_npy = cnpy::npy_load(kernel_1_name);
     cnpy::NpyArray kernel_2_npy = cnpy::npy_load(kernel_2_name);
+    cnpy::NpyArray scale_1_npy, shift_1_npy, scale_2_npy, shift_2_npy;
+    if (f1_activation) {
+        scale_1_npy = cnpy::npy_load(scale_1_name);
+        shift_1_npy = cnpy::npy_load(shift_1_name);
+    }
+    if (f2_activation) {
+        scale_2_npy = cnpy::npy_load(scale_2_name);
+        shift_2_npy = cnpy::npy_load(shift_2_name);
+    }
 
     // For verification
     cnpy::NpyArray output_npy = cnpy::npy_load(output_name);
@@ -119,7 +128,7 @@ void benchmark_generated_cpu(std::string workload_name,
     tvm::runtime::Module mod = tvm::runtime::Module::LoadFromFile("kernel.so");
     tvm::runtime::PackedFunc fused_2 = mod.GetFunction("fused_2");
     assert(fused_2 != nullptr);
-    DLTensor *input, *filter_1, *filter_2, *output;
+    DLTensor *input, *filter_1, *filter_2, *output, *scale_1, *shift_1, *scale_2, *shift_2;
     int vlen1, vlen2;
     getKernelConfig(workload_name, vlen1, vlen2);
     int dtype_code = kDLFloat;
@@ -131,6 +140,8 @@ void benchmark_generated_cpu(std::string workload_name,
     int64_t filter_1_shape_tuple[6] = {is_f1_depthwise ? 1 : int64_t(std::ceil(kernel_1_out_channel_or_multiplier)), int64_t(std::ceil(kernel_1_in_channel / vlen1)), kernel_1_height, kernel_1_width, vlen1, 1};
     int64_t filter_2_shape_tuple[6] = {int64_t(std::ceil(kernel_2_out_channel / vlen2)), int64_t(std::ceil(kernel_2_in_channel / vlen1)), kernel_2_height, kernel_2_width, vlen1, vlen2};
     int64_t output_shape_tuple[5] = {output_batch, int64_t(std::ceil(output_channel / vlen2)), output_height, output_width, vlen2};
+    int64_t scale_or_shift_1_shape_tuple[4] = {1, 1, 1, inter_channel};
+    int64_t scale_or_shift_2_shape_tuple[4] = {1, 1, 1, output_channel};
     TVMArrayAlloc(input_shape_tuple, 5, dtype_code, dtype_bits, dtype_lanes,
                     device_type, device_id, &input);
     TVMArrayAlloc(filter_1_shape_tuple, 6, dtype_code, dtype_bits, dtype_lanes,
@@ -142,6 +153,23 @@ void benchmark_generated_cpu(std::string workload_name,
     memcpy(input->data, input_npy.data<float>(), input_batch * input_height * input_width * input_channel * sizeof(float));
     memcpy(filter_1->data, kernel_1_npy.data<float>(), kernel_1_height * kernel_1_width * kernel_1_in_channel * kernel_1_out_channel_or_multiplier * sizeof(float));
     memcpy(filter_2->data, kernel_2_npy.data<float>(), kernel_2_height * kernel_2_width * kernel_2_in_channel * kernel_2_out_channel * sizeof(float));
+
+    if (f1_activation) {
+        TVMArrayAlloc(scale_or_shift_1_shape_tuple, 4, dtype_code, dtype_bits, dtype_lanes,
+                    device_type, device_id, &scale_1);
+        TVMArrayAlloc(scale_or_shift_1_shape_tuple, 4, dtype_code, dtype_bits, dtype_lanes,
+                    device_type, device_id, &shift_1);
+        memcpy(scale_1->data, scale_1_npy.data<float>(), inter_channel * sizeof(float));
+        memcpy(shift_1->data, shift_1_npy.data<float>(), inter_channel * sizeof(float));
+    }
+    if (f2_activation) {
+        TVMArrayAlloc(scale_or_shift_2_shape_tuple, 4, dtype_code, dtype_bits, dtype_lanes,
+                    device_type, device_id, &scale_2);
+        TVMArrayAlloc(scale_or_shift_2_shape_tuple, 4, dtype_code, dtype_bits, dtype_lanes,
+                    device_type, device_id, &shift_2);
+        memcpy(scale_2->data, scale_2_npy.data<float>(), output_channel * sizeof(float));
+        memcpy(shift_2->data, shift_2_npy.data<float>(), output_channel * sizeof(float));
+    }
 
 #ifdef DEBUG
     std::cout << "npy_input_shape: (" << input_shape_tuple[0] << ", " << input_shape_tuple[1] << ", " << input_shape_tuple[2] << ", " << input_shape_tuple[3] << ", " << input_shape_tuple[4] << ")" << std::endl;
@@ -172,12 +200,22 @@ void benchmark_generated_cpu(std::string workload_name,
 #if ENABLE_PCM == 1
         SystemCounterState before_sstate = getSystemCounterState();
 #endif
+    auto elapsed = std::chrono::high_resolution_clock::now() - std::chrono::high_resolution_clock::now();
+    if (!f1_activation && !f2_activation) {
         auto start = std::chrono::high_resolution_clock::now();
 
         // asm function call here
         fused_2(input, filter_1, filter_2, output);
 
-        auto elapsed = std::chrono::high_resolution_clock::now() - start;
+        elapsed = std::chrono::high_resolution_clock::now() - start;
+    } else {
+        auto start = std::chrono::high_resolution_clock::now();
+
+        // asm function call here
+        fused_2(input, filter_1, scale_1, shift_1, filter_2, scale_2, shift_2, output);
+
+        elapsed = std::chrono::high_resolution_clock::now() - start;
+    }
 #if ENABLE_PCM == 1
         SystemCounterState after_sstate = getSystemCounterState();
 #endif
