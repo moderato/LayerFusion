@@ -96,8 +96,8 @@ RUN cd ${HOME}/Documents && \
 # MKLDNN
 RUN cd ${HOME}/Documents && \
     git clone https://github.com/oneapi-src/oneDNN.git mkl-dnn && \
-    mkdir -p oneDNN/build && \
-    cd oneDNN/build && \
+    mkdir -p mkl-dnn/build && \
+    cd mkl-dnn/build && \
     cmake .. && \
     make -j16 && \
     make install

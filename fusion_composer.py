@@ -562,10 +562,12 @@ class FusionComposer:
         if best_config:
             self.update_all_shapes_from_best_cfg(best_config)
         ref_data = []
+        ref_data_no_transform = []
 
         # Pretending the input_data is some output_data from stage -1
         input_cfg = self.get_input_cfg(0)
         output_data = np.random.uniform(0.0, 0.1, size=(input_cfg.N, input_cfg.H, input_cfg.W, input_cfg.C)).astype(self.output_dtype)
+        ref_data_no_transform.append(output_data)
         ref_data.append(self.tensor_transformation(output_data, input_cfg, 'data'))
         # params names for saving data
         params_name = ['input']
@@ -573,6 +575,7 @@ class FusionComposer:
         for idx in range(self.layer_num):
             f = self.get_filter_cfg(idx)
             filter_data = np.random.uniform(0.0, 0.1, size=(f.H, f.W, f.I, f.O)).astype(self.output_dtype)
+            ref_data_no_transform.append(filter_data)
             ref_data.append(self.tensor_transformation(filter_data, f, 'kernel'))
             input_data = np.copy(output_data)
 
@@ -583,10 +586,15 @@ class FusionComposer:
                 output_data = testing.conv2d_nhwc_python(input_data, filter_data, f.stride_h, padding=f.padding).astype(self.output_dtype)
                 params_name.append('filter_{}'.format(idx+1))
 
+            # print("&&&")
+            # print(output_data[0,0,0,0:10])
+
             if f.bn_relu is not None:
                 n, h, w, oc = output_data.shape
                 scale_np = np.random.uniform(0.0, 0.1, size=(1, 1, 1, oc)).astype(self.output_dtype)
                 shift_np = np.random.uniform(0.0, 0.1, size=(1, 1, 1, oc)).astype(self.output_dtype)
+                ref_data_no_transform.append(scale_np)
+                ref_data_no_transform.append(shift_np)
                 ref_data.append(scale_np)
                 ref_data.append(shift_np)
 
@@ -601,35 +609,51 @@ class FusionComposer:
 
                     relu_scipy[:,:,:,c] = np.maximum(scale_shift_scipy[:,:,:,c], 0)
                     if f.bn_relu == 'relu6':
-                        relu_scipy[:,:,:,c] = np.minimum(relu_scipy[:,:,:,c], 6).astype(self.output_dtype)
-                output_data = relu_scipy
+                        relu_scipy[:,:,:,c] = np.minimum(relu_scipy[:,:,:,c], 6)
+                output_data = relu_scipy.astype(self.output_dtype)
                 params_name.extend(['scale_{}'.format(idx+1), 'shift_{}'.format(idx+1)])
+
+                # print("&&&")
+                # print(scale_shift_scipy[0,0,0,0:10])
+                # print(output_data[0,0,0,0:10])
 
             if idx == self.layer_num - 1: # At the last stage, append output_data as the final output for reference
                 output_cfg = self.get_output_cfg(idx)
+                ref_data_no_transform.append(output_data)
                 ref_data.append(self.tensor_transformation(output_data, output_cfg, 'data'))
         params_name.append('output')
 
         if save_data:
             # Save ref data
+            folder_name = 'npy/{}/'.format(workload_name)
+            if not os.path.exists(folder_name):
+                os.mkdir(folder_name)
             for i in range(0, len(ref_data)):
-                filename = 'npy/{}/'.format(workload_name)
-                if not os.path.exists(filename):
-                    os.mkdir(filename)
-                filename += params_name[i]
+                filename = folder_name + params_name[i]
                 # Transpose filter for cudnn: should be non-fortran order
                 if self.target.kind.name == 'cuda':
                     np.save(filename, ref_data[i])
                     if 'filter' in filename:
-                        if '_d' in filename: # HWIO/HWOI myth
-                            np.save(filename+'_transposed', np.array(ref_data[i].transpose(2, 3, 0, 1), order='C'))
+                        if '_d' in filename: # IOHW/OIHW myth
+                            np.save(filename+'_transposed', np.array(ref_data[i].transpose(2, 3, 0, 1), order='C')) # HWIO -> IOHW
                         else:
-                            np.save(filename+'_transposed', np.array(ref_data[i].transpose(3, 2, 0, 1), order='C'))
+                            np.save(filename+'_transposed', np.array(ref_data[i].transpose(3, 2, 0, 1), order='C')) # HWIO -> OIHW
                     else:
                         if len(ref_data[i].shape) == 4: # Don't need to save NCHW format scale and shift data
                             np.save(filename+'_NCHW', np.array(ref_data[i].transpose(0, 3, 1, 2), order='C'))
                 else:
-                    np.save(filename+'_NCHWc', ref_data[i])
+                    if 'filter' in filename:
+                        np.save(filename+'_NCHWc', ref_data[i]) # NCHWc data
+                        if '_d' in filename: # IOHW/OIHW myth
+                            np.save(filename+'_transposed', np.array(ref_data_no_transform[i].transpose(2, 3, 0, 1), order='C')) # HWIO -> IOHW
+                        else:
+                            np.save(filename+'_transposed', np.array(ref_data_no_transform[i].transpose(3, 2, 0, 1), order='C')) # HWIO -> OIHW
+                    else:
+                        if len(ref_data[i].shape) != 4: # Don't need to save NCHW format scale and shift data
+                            np.save(filename+'_NCHWc', ref_data[i]) # NCHWc data
+                            np.save(filename+'_NCHW', np.array(ref_data_no_transform[i].transpose(0, 3, 1, 2), order='C')) # NHWC to NCHW
+                        else:
+                            np.save(filename, ref_data[i])
 
         return ref_data
 

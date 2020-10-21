@@ -100,24 +100,43 @@ def register_count(device=None):
         return 32
     return 0
 
-def get_fusion_parameters(task1, task2):
+def get_fusion_parameters(task1, task2, layout="NHWC"):
     workload1 = task1.workload
     workload2 = task2.workload
 
     param = []
-    for x in workload1[1][1]: # Input tensor size
-        param.append(x)
-    param.append(workload1[2][1][0]) # 1st filter hw
-    param.append(workload1[2][1][3]) # 1st filter oc
-    param.append(workload1[3][0]) # 1st filter stride
-    param.append(True) # Depthwise
-    param.append('relu') # TODO: Add support to bn+relu
-    param.append(workload2[2][1][0]) # 2nd filter hw
-    param.append(workload2[2][1][3]) # 2nd filter oc
-    param.append(workload2[3][0]) # 2nd filter stride
-    param.append(False) # Not depthwise
-    param.append('relu') # TODO: Add support to bn+relu
-    param.append(False) # TODO: Add support to block
+    if layout == "NHWC":
+        for x in workload1[1][1]: # Input tensor size
+            param.append(x)
+        param.append(workload1[2][1][0]) # 1st filter hw
+        param.append(workload1[2][1][3]) # 1st filter oc
+        param.append(workload1[3][0]) # 1st filter stride
+        param.append(True) # Depthwise
+        param.append('relu') # TODO: Add support to bn+relu
+        param.append(workload2[2][1][0]) # 2nd filter hw
+        param.append(workload2[2][1][3]) # 2nd filter oc
+        param.append(workload2[3][0]) # 2nd filter stride
+        param.append(False) # Not depthwise
+        param.append('relu') # TODO: Add support to bn+relu
+        param.append(False) # TODO: Add support to block
+    else:
+        # NCHW -> NHWC
+        param.append(workload1[1][1][0])
+        param.append(workload1[1][1][2])
+        param.append(workload1[1][1][3])
+        param.append(workload1[1][1][1])
+        #e
+        param.append(workload1[2][1][2]) # 1st filter hw
+        param.append(workload1[2][1][1]) # 1st filter oc
+        param.append(workload1[3][0]) # 1st filter stride
+        param.append(True) # Depthwise
+        param.append('relu') # TODO: Add support to bn+relu
+        param.append(workload2[2][1][2]) # 2nd filter hw
+        param.append(workload2[2][1][1]) # 2nd filter oc
+        param.append(workload2[3][0]) # 2nd filter stride
+        param.append(False) # Not depthwise
+        param.append('relu') # TODO: Add support to bn+relu
+        param.append(False) # TODO: Add support to block
 
     return param
 

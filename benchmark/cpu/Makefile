@@ -15,8 +15,8 @@ LDFLAGS := \
 	-ltvm_runtime -ldl -lpthread -lcnpy -lz -lmkldnn
 # -I${VTUNE_HOME}/include ${VTUNE_HOME}/lib64/libittnotify.a -L${VTUNE_HOME}/lib64 -littnotify 
 ASFLAGS ?= -march=corei7+fma+avx+avx2+sse3
-KERNEL ?= ../../generated_kernels/cpu/mv1_1.asm
-REPEATITION ?= 1000
+KERNEL ?= ../../generated_kernels/cpu/mv1_3.asm
+REPEATITION ?= 1
 ENABLE_PCM ?= 0
 
 all: $(TARGET).cpp
