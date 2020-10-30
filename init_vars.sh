@@ -8,6 +8,9 @@ export MKLDNN_HOME=${HOME}/Documents/mkl-dnn
 export PCM_HOME=${HOME}/Documents/pcm
 export LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${TVM_HOME}/build"
 
+# icc & icpc
+source /opt/intel/oneapi/setvars.sh >& /dev/null
+
 # Make folders
 mkdir -p logs/arithmetic_intensity/cpu
 mkdir -p logs/arithmetic_intensity/gpu

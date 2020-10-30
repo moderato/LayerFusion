@@ -14,7 +14,7 @@ LDFLAGS := \
 	-L/usr/local/lib \
 	-ltvm_runtime -ldl -lpthread -lcnpy -lz -lmkldnn
 # -I${VTUNE_HOME}/include ${VTUNE_HOME}/lib64/libittnotify.a -L${VTUNE_HOME}/lib64 -littnotify 
-ASFLAGS ?= -march=corei7+fma+avx+avx2+sse3
+ASFLAGS ?= -march=corei7+fma+avx+avx2+sse3+avx512f+avx512cd+avx512vl+avx512dq # Put all potentially needed extensions here
 KERNEL ?= ../../generated_kernels/cpu/mv1_3.asm
 REPEATITION ?= 1000
 ENABLE_PCM ?= 0
