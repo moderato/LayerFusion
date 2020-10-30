@@ -12,6 +12,8 @@ from fusion_composer import FusionComposer
 from helper import *
 from pprint import pprint
 
+DISABLED_PASS = ['ForwardFoldScaleAxis','BackwardFoldScaleAxis']
+
 # image_shape and layout are made consistent outside the function.
 def get_network(name, batch_size, dtype="float32", image_shape=(3, 224, 224), layout="NCHW"):
     assert (layout == "NHWC" or layout == "NCHW")
@@ -46,6 +48,7 @@ def fuse_tasks(tasks, tuning_opt, target_str="cuda"):
     # Collect all fusable layers
     tmp_tasks = []
     previous_task = None
+    layout = "NHWC" if target_str == "cuda" else "NCHW"
     for idx, task in enumerate(reversed(tasks)):
         tmp_tasks.append(task)
         if idx != 0: # Skip the first round
@@ -55,7 +58,7 @@ def fuse_tasks(tasks, tuning_opt, target_str="cuda"):
                 tmp_tasks.pop()
 
                 # Append the fused task
-                parameters = get_fusion_parameters(previous_task, task)
+                parameters = get_fusion_parameters(previous_task, task, layout)
                 sargs = autotvm.task.topi_integration.serialize_args([parameters, True, target_str, 'depth_conv'])
                 t = autotvm.task.create("fused", args=sargs, target=target_str)
                 tmp_tasks.append(t)
@@ -67,11 +70,6 @@ def tune_tasks(tasks,
                target_str="cuda",
                log_filename='tuning.log'):
     print("Tuning...")
-
-    # create tmp log file
-    tmp_log_file = log_filename + ".tmp"
-    if os.path.exists(tmp_log_file):
-        os.remove(tmp_log_file)
 
     for i, task in enumerate(reversed(tasks)):
         prefix = "[Task %2d/%2d] " %(i+1, len(tasks))
@@ -91,8 +89,8 @@ def tune_tasks(tasks,
         tuner = autotvm.tuner.XGBTuner(task, feature_type="curve")
 
         # Transfer learning if the training log exists
-        if tuning_opt.auto_tvm_transfer_learning and os.path.isfile(tmp_log_file):
-            tuner.load_history(autotvm.record.load_from_file(tmp_log_file))
+        if tuning_opt.auto_tvm_transfer_learning and os.path.isfile(log_filename):
+            tuner.load_history(autotvm.record.load_from_file(log_filename))
 
         task_trial = min(tuning_opt.auto_tvm_trials, len(task.config_space))
         tuner.tune(n_trial=task_trial,
@@ -100,12 +98,11 @@ def tune_tasks(tasks,
                     measure_option=measure_option,
                     callbacks=[
                         autotvm.callback.progress_bar(task_trial, prefix=prefix),
-                        autotvm.callback.log_to_file(tmp_log_file)
+                        autotvm.callback.log_to_file(log_filename)
                     ])
 
     # Pick best records to a cache file
-    autotvm.record.pick_best(tmp_log_file, log_filename)
-    os.remove(tmp_log_file)
+    autotvm.record.pick_best(log_filename, '{}_best.log'.format(log_filename.split('.')[0]))
 
 # Use graph tuner to achieve graph level optimal schedules
 # Set use_DP=False if it takes too long to finish.
@@ -135,13 +132,13 @@ def tune_and_evaluate(tuning_opt, target_str, network='mobilenet_v1', dtype='flo
     tasks = autotvm.task.extract_from_program(mod['main'], target=target_str, params=params, ops=(relay.op.get('nn.conv2d'),))
 
     # Replace all fusable tasks to fused tasks
-    # print("\n### Before replacement")
-    # pprint(tasks)
+    print("\n### Before replacement")
+    pprint(tasks)
     tasks = fuse_tasks(tasks, tuning_opt, target_str=target_str)
     opt_level = 3 if tuning_opt.no_fusion else 5
-    # print("\n### After replacement")
-    # pprint(tasks)
-    # print("\n")
+    print("\n### After replacement")
+    pprint(tasks)
+    print("\n")
 
     # Run tuning tasks
     if not tuning_opt.auto_tvm_skip_training:
@@ -152,7 +149,7 @@ def tune_and_evaluate(tuning_opt, target_str, network='mobilenet_v1', dtype='flo
     # Compile kernels with history best records
     with (autotvm.apply_history_best(log_filename) if 'cuda' in target_str else autotvm.apply_graph_best(graph_opt_sch_file)):
         print('Compile...')
-        with tvm.transform.PassContext(opt_level=opt_level, trace=print_ir, disabled_pass=['ForwardFoldScaleAxis','BackwardFoldScaleAxis']):
+        with tvm.transform.PassContext(opt_level=opt_level, trace=print_ir, disabled_pass=DISABLED_PASS):
             # """
             # build = optimize + generate_code
             # build / generate_code: return mod
@@ -206,5 +203,5 @@ if __name__ == '__main__':
         return options
 
     options = get_options()
-    ### target: 'cuda', 'llvm -mcpu=core-avx2'
-    tune_and_evaluate(options, target_str='cuda', network='mobilenet_v2')
+    ### target: 'cuda', 'llvm -mcpu=core-avx2', 'llvm -mcpu=core-avx512'
+    tune_and_evaluate(options, target_str='cuda', network='mobilenet_v1')

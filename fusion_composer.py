@@ -38,7 +38,7 @@ class FusionComposer:
             self.bn_relu = bn_relu
             self.dilation_h = dilation
             self.dilation_w = dilation
-            self.shape = (H, W, I, O)
+            self.shape = (H, W, O, I) if depthwise else (H, W, I, O)
             self.vlen_i = -1
             self.vlen_o = -1
             if isinstance(padding, str):
@@ -356,7 +356,7 @@ class FusionComposer:
 
             Output = te.compute(self.output_cfg.get_shape(),
                         lambda n, h, w, c: te.sum(
-                                                (Filter[ry, rx, c, 0] *
+                                                (Filter[ry, rx, 0, c] *
                                                 Padded[n,
                                                         h * stride_h + ry * dilation_h,
                                                         w * stride_w + rx * dilation_w,
@@ -551,8 +551,13 @@ class FusionComposer:
                 return np.array(nchwc.transpose(0, 3, 1, 2, 4), order='C')
             else: # kernel: HWIO -> OIHWio
                 o_chunk, i_chunk, h, w, vlen_i, vlen_o = tensor_cfg.get_shape()
-                oihwio = data.reshape(h, w, i_chunk, vlen_i, o_chunk, vlen_o)
-                return np.array(oihwio.transpose(4, 2, 0, 1, 3, 5), order='C')
+                if tensor_cfg.depthwise:
+                    oihwio = data.reshape(h, w, o_chunk, vlen_o, i_chunk, vlen_i)
+                    np_array = np.array(oihwio.transpose(2, 4, 0, 1, 5, 3), order='C')
+                else:
+                    oihwio = data.reshape(h, w, i_chunk, vlen_i, o_chunk, vlen_o)
+                    np_array = np.array(oihwio.transpose(4, 2, 0, 1, 3, 5), order='C')
+                return np_array
         return data
 
     def get_ref_data(self,
@@ -574,7 +579,8 @@ class FusionComposer:
 
         for idx in range(self.layer_num):
             f = self.get_filter_cfg(idx)
-            filter_data = np.random.uniform(0.0, 0.1, size=(f.H, f.W, f.I, f.O)).astype(self.output_dtype)
+            f_size = (f.H, f.W, f.O, f.I) if f.depthwise else (f.H, f.W, f.I, f.O)
+            filter_data = np.random.uniform(0.0, 0.1, size=f_size).astype(self.output_dtype)
             ref_data_no_transform.append(filter_data)
             ref_data.append(self.tensor_transformation(filter_data, f, 'kernel'))
             input_data = np.copy(output_data)
@@ -634,20 +640,14 @@ class FusionComposer:
                 if self.target.kind.name == 'cuda':
                     np.save(filename, ref_data[i])
                     if 'filter' in filename:
-                        if '_d' in filename: # IOHW/OIHW myth
-                            np.save(filename+'_transposed', np.array(ref_data[i].transpose(2, 3, 0, 1), order='C')) # HWIO -> IOHW
-                        else:
-                            np.save(filename+'_transposed', np.array(ref_data[i].transpose(3, 2, 0, 1), order='C')) # HWIO -> OIHW
+                        np.save(filename+'_transposed', np.array(ref_data[i].transpose(3, 2, 0, 1), order='C'))
                     else:
                         if len(ref_data[i].shape) == 4: # Don't need to save NCHW format scale and shift data
                             np.save(filename+'_NCHW', np.array(ref_data[i].transpose(0, 3, 1, 2), order='C'))
                 else:
                     if 'filter' in filename:
                         np.save(filename+'_NCHWc', ref_data[i]) # NCHWc data
-                        if '_d' in filename: # IOHW/OIHW myth
-                            np.save(filename+'_transposed', np.array(ref_data_no_transform[i].transpose(2, 3, 0, 1), order='C')) # HWIO -> IOHW
-                        else:
-                            np.save(filename+'_transposed', np.array(ref_data_no_transform[i].transpose(3, 2, 0, 1), order='C')) # HWIO -> OIHW
+                        np.save(filename+'_transposed', np.array(ref_data_no_transform[i].transpose(3, 2, 0, 1), order='C'))
                     else:
                         if len(ref_data[i].shape) != 4: # Don't need to save NCHW format scale and shift data
                             np.save(filename+'_NCHWc', ref_data[i]) # NCHWc data
