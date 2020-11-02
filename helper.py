@@ -66,7 +66,7 @@ TARGETS = {
 def get_vlen(axis_length, device=None):
     if device == 'cuda':
         candidates = [16, 24, 32, 64, 128]
-    elif device == 'llvm' or device == 'llvm -mcpu=core-avx2' or device == 'llvm -mcpu=skylake-avx512':
+    elif 'llvm' in device:
         candidates = [8, 16, 24, 32, 64] # Non-c axes don't matter
     vlens = []
     for i in candidates:
@@ -100,7 +100,7 @@ def register_count(device=None):
         return 32
     return 0
 
-def get_fusion_parameters(task1, task2, layout="NHWC"):
+def get_fusion_parameters_from_tasks(task1, task2, layout='NHWC'):
     workload1 = task1.workload
     workload2 = task2.workload
 
@@ -125,7 +125,6 @@ def get_fusion_parameters(task1, task2, layout="NHWC"):
         param.append(workload1[1][1][2])
         param.append(workload1[1][1][3])
         param.append(workload1[1][1][1])
-        #e
         param.append(workload1[2][1][2]) # 1st filter hw
         param.append(workload1[2][1][1]) # 1st filter oc
         param.append(workload1[3][0]) # 1st filter stride

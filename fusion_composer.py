@@ -20,7 +20,7 @@ class FusionComposer:
             self.shape = (N, H, W, C)
         def update_shape(self, vlen):
             self.vlen = vlen
-            C_chunk = math.ceil(self.C / vlen)
+            C_chunk = tvm.tir.indexdiv(self.C, vlen).value
             self.shape = (self.N, C_chunk, self.H, self.W, vlen)
         def get_shape(self):
             return self.shape
@@ -50,8 +50,8 @@ class FusionComposer:
         def update_shape(self, vlen_i, vlen_o):
             self.vlen_i = vlen_i
             self.vlen_o = vlen_o
-            OC_chunk = math.ceil(self.O / vlen_o)
-            IC_chunk = math.ceil(self.I / vlen_i)
+            OC_chunk = tvm.tir.indexdiv(self.O, vlen_o).value
+            IC_chunk = tvm.tir.indexdiv(self.I, vlen_i).value
             self.shape = (OC_chunk, IC_chunk, self.H, self.W, vlen_i, vlen_o) if not self.depthwise else (1, IC_chunk, self.H, self.W, vlen_i, 1)
         def get_shape(self):
             return self.shape
@@ -79,21 +79,18 @@ class FusionComposer:
         assert(idx >= 0 and idx < self.layer_num)
         return self.layers[idx][1].bn_relu
 
-    def make_placeholders(self):
+    def make_placeholders(self, skip_bn_relu=False):
         placeholders = []
         placeholders.append(te.placeholder(self.get_input_cfg(0).get_shape(), name='Input'))
         for idx in range(self.layer_num):
             filter_cfg = self.get_filter_cfg(idx)
             placeholders.append(te.placeholder(filter_cfg.get_shape(), name='Filter_{}'.format(idx)))
 
-            if self.get_bn_relu(idx):
+            if self.get_bn_relu(idx) and not skip_bn_relu:
                 output_cfg = self.get_output_cfg(idx)
                 placeholders.append(te.placeholder((1, 1, 1, output_cfg.C), name='Scale_{}'.format(idx)))
                 placeholders.append(te.placeholder((1, 1, 1, output_cfg.C), name='Shift_{}'.format(idx)))
         return placeholders
-
-    def get_placeholders(self):
-        return self.placeholders
 
     def define_search_space(self):
         for idx in range(self.layer_num):
@@ -279,17 +276,18 @@ class FusionComposer:
         self.layers.append((OUTPUT,))
         self.layer_num = len(self.layers) - 1 # Excluding input
         self.need_padding = [False] * self.layer_num
+        self.pattern = 'depth_conv' # TODO: Add logic to it
 
         # Define search space
         self.define_search_space()
-
-        # Make placeholders for testing purpose
-        self.placeholders = self.make_placeholders()
 
         # Temporary variables for composing compute
         self.filter_cfg = None
         self.output_cfg = None
         self.layer_idx = -1
+
+        # # Register the task
+        # _ = self.get_schedule_tuning()
 
     def padding(self, Input, Filter):
         if self.pack:
@@ -458,7 +456,7 @@ class FusionComposer:
         # self.stages[-1].append(Last)
         return Last
 
-    def get_compute(self):
+    def get_compute(self, skip_bn_relu=False):
         def compute(input_tensors):
             Feature = input_tensors[0]
             tensor_idx = 1
@@ -475,7 +473,7 @@ class FusionComposer:
                 else:
                     Feature = self.make_conv_output(Feature, Filter)
 
-                if self.get_bn_relu(idx) is not None:
+                if (self.get_bn_relu(idx) is not None) and (not skip_bn_relu):
                     Scale = input_tensors[tensor_idx + 1]
                     Shift = input_tensors[tensor_idx + 2]
                     tensor_idx += 3
@@ -489,17 +487,15 @@ class FusionComposer:
         self.layer_idx = -1
         return compute
 
-    def get_schedule(self, pattern='depth_conv', tuning=False):
+    def get_schedule(self, target=None, tuning=False):
+        assert not (not tuning and target is None)
+
         if tuning:
             cfg = self.cfg
         else:
-            if self.target.kind.name == 'cuda':
-                target_str = self.target.kind.name
-            else: # LLVM
-                target_str = "{} -mcpu={}".format(self.target.kind.name, self.target.mcpu)
-            workload = ("fused",) + autotvm.task.topi_integration.serialize_args([self.parameters, True, target_str, pattern])
+            workload = ('fused_conv2d.{}'.format('cuda' if self.target.kind.name == 'cuda' else 'x86'),) + autotvm.task.topi_integration.serialize_args([self.parameters])
             dispatch_ctx = autotvm.task.DispatchContext.current
-            cfg = dispatch_ctx.query(self.target, workload)
+            cfg = dispatch_ctx.query(target, workload)
             if cfg.is_fallback:
                 raise Exception("AutoTVM cfg not found!")
 
@@ -512,7 +508,7 @@ class FusionComposer:
                     from schedules.schedule_utils import gpu_schedules as sch
                 else:
                     from schedules.schedule_utils import cpu_schedules as sch
-                return sch(pattern, (cfg is not None), tuning)
+                return sch(self.pattern, (cfg is not None), tuning)
             f = raw_schedule()
             if self.pack:
                 inputs_cfg = {}
@@ -533,6 +529,19 @@ class FusionComposer:
                     ret = f(outs)
             return ret
         return wrapper
+
+    def get_schedule_inference(self, target):
+        # Get schedule (comes first as tensor shapes need to be updated)
+        schedule = self.get_schedule(target)
+
+        # Get compute
+        compute = self.get_compute()
+        input_tensors = self.make_placeholders()
+        output_tensor = compute(input_tensors)
+        all_tensors = input_tensors + [output_tensor]
+
+        s = schedule(output_tensor)
+        return s, all_tensors
 
     def print_info(self):
         for i in range(self.layer_num):
@@ -657,43 +666,43 @@ class FusionComposer:
 
         return ref_data
 
-@autotvm.template('fused')
-def get_schedule_tuning(parameters, auto_tvm=True, device='cuda', pattern='depth_conv', constraints_idx=-1):
-    target = tvm.target.create(device)
-
-    # A workaround for CPU autotuning
-    if device != 'cuda':
-        tmp = []
-        for idx in range(len(parameters)):
-            if parameters[idx] == 'relu' or parameters[idx] == 'relu6':
-                tmp.append(None)
-            else:
-                tmp.append(parameters[idx])
-        parameters = tmp
-    fc = FusionComposer(parameters, auto_tvm=auto_tvm, target=target)
+@autotvm.template('fused_conv2d.cuda')
+def get_schedule_tuning_cuda(parameters):
+    target = tvm.target.create('cuda')
+    fc = FusionComposer(parameters, target=target)
 
     # Get schedule
-    schedule = fc.get_schedule(pattern, tuning=True)
+    schedule = fc.get_schedule(tuning=True)
 
     # Get compute
     compute = fc.get_compute()
-    input_tensors = fc.get_placeholders()
+    input_tensors = fc.make_placeholders()
     output_tensor = compute(input_tensors)
     all_tensors = input_tensors + [output_tensor]
 
     s = schedule(output_tensor)
     return s, all_tensors
 
-def get_schedule_inference(parameters, auto_tvm=True, device='cuda', pattern='depth_conv', constraints_idx=-1):
-    target = tvm.target.create(device)
-    fc = FusionComposer(parameters, auto_tvm=auto_tvm, target=target)
+@autotvm.template('fused_conv2d.x86')
+def get_schedule_tuning_x86(parameters):
+    target = tvm.target.create('llvm')
 
-    # Get schedule (comes first as tensor shapes need to be updated)
-    schedule = fc.get_schedule(pattern)
+    # A workaround for CPU autotuning
+    tmp = []
+    for idx in range(len(parameters)):
+        if parameters[idx] == 'relu' or parameters[idx] == 'relu6':
+            tmp.append(None)
+        else:
+            tmp.append(parameters[idx])
+    parameters = tmp
+    fc = FusionComposer(parameters, target=target)
+
+    # Get schedule
+    schedule = fc.get_schedule(tuning=True)
 
     # Get compute
     compute = fc.get_compute()
-    input_tensors = fc.get_placeholders()
+    input_tensors = fc.make_placeholders()
     output_tensor = compute(input_tensors)
     all_tensors = input_tensors + [output_tensor]
 
@@ -704,9 +713,9 @@ def test_compute():
     parameters = (1, 56, 56, 128, 3, 1, 1, True, 'relu', 1, 64, 1, False, 'relu', False)
     target = tvm.target.create('cuda')
     print(target)
-    fc = FusionComposer(parameters, auto_tvm=True, target=target)
+    fc = FusionComposer(parameters, target=target)
     f = fc.get_compute()
-    input_tensors = fc.get_placeholders()
+    input_tensors = fc.make_placeholders()
     from pprint import pprint
     pprint(input_tensors)
     print(f(input_tensors))
@@ -714,10 +723,8 @@ def test_compute():
 
 def test_schedule():
     parameters = (1, 56, 56, 128, 3, 1, 1, True, 'relu', 1, 64, 1, False, 'relu', False)
-    device = 'cuda'
-    pattern = 'depth_conv'
-    with tvm.target.create(device):
-        s, flatten_params = get_schedule_tuning(parameters, True, device, pattern)
+    with tvm.target.create('cuda'):
+        s, flatten_params = get_schedule_tuning_cuda(parameters)
     print(tvm.lower(s, flatten_params, simple_mode=True))
 
 if __name__ == '__main__':

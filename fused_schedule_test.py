@@ -48,8 +48,8 @@ def verify_fused(workload_name,
             logging.getLogger('autotvm').addHandler(logging.StreamHandler(sys.stdout))
 
             # fused schedule auto
-            sargs = autotvm.task.topi_integration.serialize_args([parameters, auto_tvm, target_str, name])
-            task = autotvm.task.create('fused', args=sargs, target=target_str)
+            sargs = autotvm.task.topi_integration.serialize_args([parameters])
+            task = autotvm.task.create('fused_conv2d.{}'.format('cuda' if target_str == 'cuda' else 'x86'), args=sargs, target=target)
             print(task.config_space)
             print(task.target)
             print(task.workload)
@@ -85,12 +85,12 @@ def verify_fused(workload_name,
 
             # apply history best from log file
             with dispatch_context:
-                with tvm.target.create(target_str):
-                    s, flatten_params = get_schedule_inference(parameters, auto_tvm, target_str, name)
+                with tvm.target.create(target_str) as target:
+                    s, flatten_params = fc.get_schedule_inference(target)
         else:
             best_config = None
-            with tvm.target.create(target_str):
-                s, flatten_params = get_schedule_inference(parameters, auto_tvm, target_str, name)
+            with tvm.target.create(target_str) as target:
+                s, flatten_params = fc.get_schedule_inference(target)
 
         if not no_print_ir:
             print(tvm.lower(s, flatten_params, simple_mode=True))

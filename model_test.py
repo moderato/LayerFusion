@@ -44,6 +44,7 @@ def get_network(name, batch_size, dtype="float32", image_shape=(3, 224, 224), la
 def fuse_tasks(tasks, tuning_opt, target_str="cuda"):
     if tuning_opt.no_fusion:
         return tasks
+    target = tvm.target.create(target_str)
 
     # Collect all fusable layers
     tmp_tasks = []
@@ -58,9 +59,10 @@ def fuse_tasks(tasks, tuning_opt, target_str="cuda"):
                 tmp_tasks.pop()
 
                 # Append the fused task
-                parameters = get_fusion_parameters(previous_task, task, layout)
-                sargs = autotvm.task.topi_integration.serialize_args([parameters, True, target_str, 'depth_conv'])
-                t = autotvm.task.create("fused", args=sargs, target=target_str)
+                parameters = get_fusion_parameters_from_tasks(previous_task, task, layout)
+                sargs = autotvm.task.topi_integration.serialize_args([parameters])
+                print(target.kind.name)
+                t = autotvm.task.create('fused_conv2d.{}'.format('cuda' if target.kind.name == 'cuda' else 'x86'), args=sargs, target=target_str)
                 tmp_tasks.append(t)
         previous_task = task
     return tmp_tasks
