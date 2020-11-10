@@ -1,4 +1,5 @@
 import tvm
+import tvm.relay as relay
 from tvm.topi import testing
 from tvm.topi.nn.dilate import dilate
 from tvm.topi.nn.pad import pad
@@ -6,8 +7,8 @@ from tvm.topi.nn.util import get_pad_tuple
 from tvm.topi.util import simplify, get_const_tuple
 from tvm import autotvm, te
 from helper import get_vlen, get_CPU_vlen_from_config
-import os, math
 import numpy as np
+import os, math, re
 
 class FusionComposer:
     class FeatureConfig:
@@ -88,8 +89,8 @@ class FusionComposer:
 
             if self.get_bn_relu(idx) and not skip_bn_relu:
                 output_cfg = self.get_output_cfg(idx)
-                placeholders.append(te.placeholder((1, 1, 1, output_cfg.C), name='Scale_{}'.format(idx)))
-                placeholders.append(te.placeholder((1, 1, 1, output_cfg.C), name='Shift_{}'.format(idx)))
+                placeholders.append(te.placeholder((output_cfg.C,), name='Scale_{}'.format(idx)))
+                placeholders.append(te.placeholder((output_cfg.C,), name='Shift_{}'.format(idx)))
         return placeholders
 
     def define_search_space(self):
@@ -210,7 +211,6 @@ class FusionComposer:
                 DATA.update_shape(vlen_i)
                 FILTER.update_shape(vlen_i, vlen_o)
                 OUTPUT.update_shape(vlen_o) # Actually overlapped with the input of next layer
-            self.placeholders = self.make_placeholders()
 
     def get_FLOP(self):
         flop = 0
@@ -420,10 +420,6 @@ class FusionComposer:
                                 name='ScaleShift_{}'.format(self.layer_idx),
                                 tag='scaleshift')
 
-        # self.params[-1].append(Scale)
-        # self.params[-1].append(Shift)
-        # self.stages[-1].append(ScaleShift)
-
         # TODO: Recover this
         # if block_input is not None:
         #     inputs = block_input if isinstance(block_input, list) else [block_input]
@@ -453,7 +449,6 @@ class FusionComposer:
             Last = te.compute(Last.shape,
                             lambda *i: te.min(te.max(Last(*i), tvm.runtime.const(0, Last.dtype)), tvm.runtime.const(6, Last.dtype)),
                             name='ReLU6_{}'.format(self.layer_idx), tag='relu6')
-        # self.stages[-1].append(Last)
         return Last
 
     def get_compute(self, skip_bn_relu=False):
@@ -497,7 +492,7 @@ class FusionComposer:
             dispatch_ctx = autotvm.task.DispatchContext.current
             cfg = dispatch_ctx.query(target, workload)
             if cfg.is_fallback:
-                raise Exception("AutoTVM cfg not found!")
+                print("---[[[ AutoTVM cfg not found! ]]]---")
 
             # Update the tensor shapes with the best config
             self.update_all_shapes_from_best_cfg(cfg)
@@ -668,7 +663,7 @@ class FusionComposer:
 
 @autotvm.template('fused_conv2d.cuda')
 def get_schedule_tuning_cuda(parameters):
-    target = tvm.target.create('cuda')
+    target = tvm.target.Target('cuda')
     fc = FusionComposer(parameters, target=target)
 
     # Get schedule
@@ -685,7 +680,7 @@ def get_schedule_tuning_cuda(parameters):
 
 @autotvm.template('fused_conv2d.x86')
 def get_schedule_tuning_x86(parameters):
-    target = tvm.target.create('llvm')
+    target = tvm.target.Target('llvm')
 
     # A workaround for CPU autotuning
     tmp = []
@@ -711,7 +706,7 @@ def get_schedule_tuning_x86(parameters):
 
 def test_compute():
     parameters = (1, 56, 56, 128, 3, 1, 1, True, 'relu', 1, 64, 1, False, 'relu', False)
-    target = tvm.target.create('cuda')
+    target = tvm.target.Target('cuda')
     print(target)
     fc = FusionComposer(parameters, target=target)
     f = fc.get_compute()
@@ -723,7 +718,7 @@ def test_compute():
 
 def test_schedule():
     parameters = (1, 56, 56, 128, 3, 1, 1, True, 'relu', 1, 64, 1, False, 'relu', False)
-    with tvm.target.create('cuda'):
+    with tvm.target.Target('cuda'):
         s, flatten_params = get_schedule_tuning_cuda(parameters)
     print(tvm.lower(s, flatten_params, simple_mode=True))
 

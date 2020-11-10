@@ -102,7 +102,7 @@ def intrin_libxsmm_brgemm(
                                 r, s,
                                 False,
                                 yy_ptr.strides[0], yy_ptr.strides[1])
-        if math.ceil(in_channel / ifmblock.value) == rco: # rco = rco_i: if all the reduce axes are included
+        if tvm.tir.indexdiv(in_channel, ifmblock).value == rco: # rco = rco_i: if all the reduce axes are included
             return init_update, None, init_update
         else:
             return init_update, reset, update

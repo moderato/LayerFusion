@@ -261,10 +261,8 @@ def export_kernel_launch_config(workload_name, output_shape, best_config, target
             f.write(','.join(vlens))
 
 def get_CPU_vlen_from_config(best_config=None, cfg_key=''):
-    if best_config is None:
+    if best_config is None or isinstance(best_config, FallbackConfigEntity):
         return 16
-    if isinstance(best_config, FallbackConfigEntity):
-        raise Exception("Best config is a FallbackConfigEntity! Probably not tuned appropriately.")
     config_dict = best_config.to_json_dict()
     if cfg_key != 'all':
         for e in config_dict['entity']:

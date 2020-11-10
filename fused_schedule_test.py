@@ -85,11 +85,11 @@ def verify_fused(workload_name,
 
             # apply history best from log file
             with dispatch_context:
-                with tvm.target.create(target_str) as target:
+                with target:
                     s, flatten_params = fc.get_schedule_inference(target)
         else:
             best_config = None
-            with tvm.target.create(target_str) as target:
+            with target:
                 s, flatten_params = fc.get_schedule_inference(target)
 
         if not no_print_ir:
