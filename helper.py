@@ -63,6 +63,9 @@ TARGETS = {
     }
 }
 
+_NCHWc_matcher = re.compile("^NCHW[0-9]+c$")
+_OIHWio_matcher = re.compile("^OIHW[0-9]+i[0-9]+o$")
+
 def get_vlen(axis_length, device=None):
     if device == 'cuda':
         candidates = [16, 24, 32, 64, 128]
@@ -136,6 +139,34 @@ def get_fusion_parameters_from_tasks(task1, task2, layout='NHWC'):
         param.append(False) # Not depthwise
         param.append('relu') # TODO: Add support to bn+relu
         param.append(False) # TODO: Add support to block
+
+    return param
+
+def get_fusion_parameters_from_fused_conv2d_attrs(attrs, inputs):
+    param = []
+
+    num_layers = attrs.num_layers
+    for l in range(num_layers):
+        layout = attrs.data_layout_array[l]
+        if l == 0:
+            if layout == 'NHWC':
+                param.append(inputs[0].shape[0])
+                param.append(inputs[0].shape[1])
+                param.append(inputs[0].shape[2])
+                param.append(inputs[0].shape[3])
+            elif _NCHWc_matcher.match(layout):
+                param.append(inputs[0].shape[0])
+                param.append(inputs[0].shape[2])
+                param.append(inputs[0].shape[3])
+                param.append(inputs[0].shape[1] * inputs[0].shape[4])
+            else:
+                raise Exception("Layout {} is not supported!".format(layout))
+        param.append(attrs.kernel_size_array[l][0])
+        param.append(attrs.channels_array[l] // attrs.groups_array[l])
+        param.append(attrs.strides_array[l][0])
+        param.append(bool(attrs.groups_array[l] > 1))
+        param.append('relu')
+    param.append(False)
 
     return param
 

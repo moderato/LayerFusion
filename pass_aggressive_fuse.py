@@ -7,21 +7,20 @@ from tvm.contrib.util import tempdir
 from tvm.relay.testing.mobilenet import separable_conv_block, get_workload
 from tvm.contrib.debugger import debug_runtime
 from tvm.autotvm.graph_tuner import DPTuner, PBQPTuner
+from tvm.relay.dataflow_pattern import wildcard, is_op, is_constant, is_expr, is_var, TupleGetItemPattern, rewrite, DFPatternCallback
+from tvm.relay.build_module import bind_params_by_name
+from tvm.relay.testing import run_opt_pass
 from fusion_composer import FusionComposer
 from pprint import pprint
 from helper import print_ir
 import numpy as np
 
-from tvm.relay.dataflow_pattern import wildcard, is_op, is_constant, is_expr, is_var, TupleGetItemPattern, rewrite, DFPatternCallback
-from tvm.relay.build_module import bind_params_by_name
-from tvm.relay.testing import run_opt_pass
-
 target_str = 'llvm -mcpu=core-avx2'
 # target_str = 'cuda'
-target = tvm.target.create(target_str)
+target = tvm.target.Target(target_str)
 
 def tune_graph(graph, dshape, target_str, records, opt_sch_file, use_DP=True, fuse=False, params=None):
-    target = tvm.target.create(target_str)
+    target = tvm.target.Target(target_str)
     target_op = [relay.op.get("nn.conv2d"), relay.op.get("nn.fused_conv2d")] # Tune fused_conv2d too.
     Tuner = DPTuner if use_DP else PBQPTuner
     executor = Tuner(graph, {'data': dshape}, records, target_op, target, fuse=fuse)
@@ -43,109 +42,143 @@ def example(image_shape, layout='NHWC'):
 
     return relay.Function(relay.analysis.free_vars(body), body), params
 
+class FusedConv2DCallback(DFPatternCallback):
+    # A callback class to rewrite the matched pattern to a batch_norm op.
+    def __init__(self):
+        super(FusedConv2DCallback, self).__init__()
+        self.data = wildcard()
+        self.weight1 = wildcard()
+        self.scale1 = wildcard()
+        self.shift1 = wildcard()
+        self.weight2 = wildcard()
+        self.scale2 = wildcard()
+        self.shift2 = wildcard()
+
+        pattern = is_op('nn.conv2d')(self.data, self.weight1)
+        pattern = is_op('multiply')(pattern, self.scale1)
+        pattern = is_op('add')(pattern, self.shift1)
+        pattern = is_op('nn.relu')(pattern)
+        pattern = is_op('nn.conv2d')(pattern, self.weight2).has_attr({'groups': 1}) # 2nd Conv should be a normal one
+        pattern = is_op('multiply')(pattern, self.scale2)
+        pattern = is_op('add')(pattern, self.shift2)
+        pattern = is_op('nn.relu')(pattern)
+        self.pattern = pattern
+        self.num_layers = 2
+
+    def callback(self, pre, post, node_map):
+        data = node_map[self.data][0]
+        weight1 = node_map[self.weight1][0]
+        scale1 = node_map[self.scale1][0]
+        shift1 = node_map[self.shift1][0]
+        weight2 = node_map[self.weight2][0]
+        scale2 = node_map[self.scale2][0]
+        shift2 = node_map[self.shift2][0]
+
+        strides_array = []
+        padding_array = []
+        dilation_array = []
+        groups_array = []
+        channels_array = []
+        kernel_size_array = []
+        bn_relu_array = []
+        data_layout_array = []
+        kernel_layout_array = []
+        out_layout_array = []
+        out_dtype = "float32" # Now only accept float32
+
+        # Traverse upward
+        tmp = pre
+        count = 0
+        while not isinstance(tmp, (relay.Var, relay.Constant)):
+            if count >= self.num_layers:
+                break
+            if tmp.op.name == 'nn.conv2d':
+                strides_array.append(tmp.attrs['strides'])
+                padding_array.append(tmp.attrs['padding'])
+                dilation_array.append(tmp.attrs['dilation'])
+                groups_array.append(tmp.attrs['groups'])
+                channels_array.append(tmp.attrs['channels'])
+                kernel_size_array.append(tmp.attrs['kernel_size'])
+                data_layout_array.append(tmp.attrs['data_layout'])
+                kernel_layout_array.append(tmp.attrs['kernel_layout'])
+                out_layout_array.append(tmp.attrs['out_layout'])
+                count += 1
+            elif tmp.op.name == 'multiply':
+                bn_relu_array.append(True)
+            tmp = tmp.args[0]
+
+        strides_array.reverse()
+        padding_array.reverse()
+        dilation_array.reverse()
+        groups_array.reverse()
+        channels_array.reverse()
+        kernel_size_array.reverse()
+        bn_relu_array.reverse()
+        data_layout_array.reverse()
+        kernel_layout_array.reverse()
+        out_layout_array.reverse()
+
+        return relay.op.nn.fused_conv2d(data,
+                                        weight1, scale1, shift1,
+                                        weight2, scale2, shift2,
+                                        strides_array, padding_array, dilation_array,
+                                        groups_array, channels_array, kernel_size_array, bn_relu_array,
+                                        data_layout_array, kernel_layout_array, out_layout_array, out_dtype)
+
+class ReplaceBatchNormCallback(DFPatternCallback):
+    # A callback class to rewrite the matched pattern to a batch_norm op.
+    def __init__(self):
+        super(ReplaceBatchNormCallback, self).__init__()
+        self.x = is_var() | wildcard()
+        self.var = is_var()
+        self.mean = is_var()
+        self.beta = is_var()
+        self.gamma = is_var()
+        pattern = is_op('nn.batch_norm')(self.x, self.gamma, self.beta, self.mean, self.var)
+        tuple_get_item_node = TupleGetItemPattern(pattern, 0)
+
+        self.pattern = tuple_get_item_node
+
+    def callback(self, pre, post, node_map):
+        x = node_map[self.x][0]
+        beta = node_map[self.beta][0]
+        gamma = node_map[self.gamma][0]
+
+        mul = relay.multiply(x, gamma)
+        add = relay.add(mul, beta)
+        return add
+
+def fuse_preprocess(f, params):
+    with tvm.target.Target(target_str):
+
+        mod = tvm.IRModule.from_expr(f)
+        mod['main'] = bind_params_by_name(mod['main'], params)
+        seq = tvm.transform.Sequential(
+            [
+                relay.transform.RemoveUnusedFunctions(),
+                relay.transform.ToBasicBlockNormalForm(),
+                relay.transform.Legalize(),
+                relay.transform.DynamicToStatic(),
+                relay.transform.SimplifyInference(),
+                relay.transform.EliminateCommonSubexpr(),
+                relay.transform.SimplifyExpr(),
+                relay.transform.FoldConstant(),
+                relay.transform.CombineParallelConv2D(),
+                relay.transform.CombineParallelDense(),
+                relay.transform.CombineParallelBatchMatmul(),
+                relay.transform.FoldConstant(),
+                relay.transform.FoldScaleAxis(),
+                relay.transform.CanonicalizeCast(),
+                relay.transform.CanonicalizeOps(),
+            ]
+        )
+        mod = seq(mod)
+        mod['main'] = rewrite(FusedConv2DCallback(), mod['main'])
+        mod = relay.transform.InferType()(mod)
+
+    return mod
+
 def aggressive_fuse(fuse=False):
-
-    class ReplaceBatchNormCallback(DFPatternCallback):
-        # A callback class to rewrite the matched pattern to a batch_norm op.
-        def __init__(self):
-            super(ReplaceBatchNormCallback, self).__init__()
-            self.x = is_var() | wildcard()
-            self.var = is_var()
-            self.mean = is_var()
-            self.beta = is_var()
-            self.gamma = is_var()
-            pattern = is_op('nn.batch_norm')(self.x, self.gamma, self.beta, self.mean, self.var)
-            tuple_get_item_node = TupleGetItemPattern(pattern, 0)
-
-            self.pattern = tuple_get_item_node
-
-        def callback(self, pre, post, node_map):
-            x = node_map[self.x][0]
-            beta = node_map[self.beta][0]
-            gamma = node_map[self.gamma][0]
-
-            mul = relay.multiply(x, gamma)
-            add = relay.add(mul, beta)
-            return add
-
-    class FusedConv2DCallback(DFPatternCallback):
-        # A callback class to rewrite the matched pattern to a batch_norm op.
-        def __init__(self):
-            super(FusedConv2DCallback, self).__init__()
-            self.data = wildcard()
-            self.weight1 = wildcard()
-            self.scale1 = wildcard()
-            self.shift1 = wildcard()
-            self.weight2 = wildcard()
-            self.scale2 = wildcard()
-            self.shift2 = wildcard()
-
-            pattern = is_op('nn.conv2d')(self.data, self.weight1)
-            pattern = is_op('multiply')(pattern, self.scale1)
-            pattern = is_op('add')(pattern, self.shift1)
-            pattern = is_op('nn.relu')(pattern)
-            pattern = is_op('nn.conv2d')(pattern, self.weight2).has_attr({'groups': 1}) # 2nd Conv should be a normal one
-            pattern = is_op('multiply')(pattern, self.scale2)
-            pattern = is_op('add')(pattern, self.shift2)
-            pattern = is_op('nn.relu')(pattern)
-            self.pattern = pattern
-            self.num_layers = 2
-
-        def callback(self, pre, post, node_map):
-            data = node_map[self.data][0]
-            weight1 = node_map[self.weight1][0]
-            scale1 = node_map[self.scale1][0]
-            shift1 = node_map[self.shift1][0]
-            weight2 = node_map[self.weight2][0]
-            scale2 = node_map[self.scale2][0]
-            shift2 = node_map[self.shift2][0]
-
-            # print("**")
-            # print(node_map[self.data])
-            # print("**")
-            # print(node_map[self.data][0])
-            # print("**")
-
-            strides_array = []
-            padding_array = []
-            dilation_array = []
-            groups_array = []
-            channels_array = []
-            kernel_size_array = []
-            bn_relu_array = []
-            data_layout_array = []
-            kernel_layout_array = []
-            out_layout_array = []
-            out_dtype = "float32" # Now only accept float32
-
-            # Traverse upward
-            tmp = pre
-            count = 0
-            while not isinstance(tmp, (relay.Var, relay.Constant)):
-                if tmp.op.name == 'nn.conv2d':
-                    if count >= self.num_layers:
-                        break
-                    strides_array.append(tmp.attrs['strides'])
-                    padding_array.append(tmp.attrs['padding'])
-                    dilation_array.append(tmp.attrs['dilation'])
-                    groups_array.append(tmp.attrs['groups'])
-                    channels_array.append(tmp.attrs['channels'])
-                    kernel_size_array.append(tmp.attrs['kernel_size'])
-                    data_layout_array.append(tmp.attrs['data_layout'])
-                    kernel_layout_array.append(tmp.attrs['kernel_layout'])
-                    out_layout_array.append(tmp.attrs['out_layout'])
-                    count += 1
-                elif tmp.op.name == 'multiply':
-                    bn_relu_array.append(True)
-                tmp = tmp.args[0]
-
-            return relay.op.nn.fused_conv2d(data,
-                                            weight1, scale1, shift1,
-                                            weight2, scale2, shift2,
-                                            strides_array, padding_array, dilation_array,
-                                            groups_array, channels_array, kernel_size_array, bn_relu_array,
-                                            data_layout_array, kernel_layout_array, out_layout_array, out_dtype)
-
     if target_str == 'cuda':
         log_filename='logs/autotvm/model/gpu/test.log'
         image_shape, layout = (224, 224, 3), 'NHWC'
@@ -155,29 +188,9 @@ def aggressive_fuse(fuse=False):
             image_shape, layout = (3, 224, 224), 'NCHW'
         else:
             image_shape, layout = (224, 224, 3), 'NHWC'
-    graph_opt_sch_file = 'logs/autotvm/model/cpu/test_graph_opt.log'
+    graph_opt_sch_file = 'logs/autotvm/model/cpu/test_graph_opt{}.log'.format('_fuse' if fuse else '')
 
     f, params = example(image_shape, layout=layout)
-    mod = tvm.IRModule.from_expr(f)
-    mod = relay.transform.InferType()(mod)
-
-    if 'llvm' in target_str:
-        tmp_f = mod['main']
-        # Replace BN with multiply add
-        tmp_f = rewrite(ReplaceBatchNormCallback(), tmp_f)
-        # Fuse two conv layers
-        tmp_f = rewrite(FusedConv2DCallback(), tmp_f)
-        mod = tvm.IRModule.from_expr(tmp_f)
-        relay.transform.RemoveUnusedFunctions()(mod)
-        relay.transform.EliminateCommonSubexpr()(mod)
-        relay.transform.DeadCodeElimination()(mod)
-
-        print(mod)
-        exit()
-        print("***")
-        if fuse:
-            layout = 'NHWC'
-        tune_graph(tmp_f, (1, 112, 112, 32) if layout == 'NHWC' else (1, 32, 112, 112), target_str, log_filename, graph_opt_sch_file, fuse=fuse)
 
     # compile kernels with history best records
     # with (autotvm.apply_history_best(log_filename) if 'cuda' in target_str else autotvm.apply_graph_best(graph_opt_sch_file)):
@@ -185,7 +198,14 @@ def aggressive_fuse(fuse=False):
         print("############### Compile... ###############")
         # disabled_pass: to prevent 'multiply' from being eliminated
         # TODO: Fix this
-        with tvm.transform.PassContext(opt_level=5, trace=print_ir,
+
+        if fuse:
+            mod = fuse_preprocess(f, params)
+        else:
+            mod = tvm.IRModule.from_expr(f)
+            mod = relay.transform.InferType()(mod)
+
+        with tvm.transform.PassContext(opt_level=3, trace=print_ir,
             disabled_pass=['ForwardFoldScaleAxis','BackwardFoldScaleAxis']):
             # """
             # build = optimize + generate_code
@@ -264,13 +284,11 @@ def fuse_pattern_table():
         pattern = is_op('nn.conv2d')(wildcard(), wildcard())
         pattern = is_op('multiply')(pattern, wildcard())
         pattern = is_op('add')(pattern, wildcard())
-        tuple_get_item_node = TupleGetItemPattern(pattern, 0)
-        pattern = is_op('nn.relu')(tuple_get_item_node)
+        pattern = is_op('nn.relu')(pattern)
         pattern = is_op('nn.conv2d')(pattern, wildcard())
         pattern = is_op('multiply')(pattern, wildcard())
         pattern = is_op('add')(pattern, wildcard())
-        tuple_get_item_node = TupleGetItemPattern(pattern, 0)
-        pattern = is_op('nn.relu')(tuple_get_item_node)
+        pattern = is_op('nn.relu')(pattern)
         return pattern
 
     return [('conv_bn_relu', conv_bn_relu_pattern()),
