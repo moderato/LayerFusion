@@ -1,7 +1,7 @@
 import numpy as np
 import tvm
-import os, math
-from tvm.topi.util import get_const_tuple
+import os, math, re
+from tvm.topi.util import simplify, get_const_tuple
 from tvm.topi.nn.util import get_pad_tuple
 from tvm import autotvm, te
 from tvm.autotvm.task.space import FallbackConfigEntity
@@ -65,6 +65,59 @@ TARGETS = {
 
 _NCHWc_matcher = re.compile("^NCHW[0-9]+c$")
 _OIHWio_matcher = re.compile("^OIHW[0-9]+i[0-9]+o$")
+class FeatureConfig:
+    def __init__(self, N, H, W, C):
+        self.N = N
+        self.H = H
+        self.W = W
+        self.C = C
+        self.vlen = -1
+        self.shape = (N, H, W, C)
+    def update_shape(self, vlen):
+        self.vlen = vlen
+        C_chunk = tvm.tir.indexdiv(self.C, vlen).value
+        self.shape = (self.N, C_chunk, self.H, self.W, vlen)
+    def get_shape(self):
+        return self.shape
+
+class FilterConfig:
+    def __init__(self, H, W, I, O, stride_h, stride_w, depthwise, bn_relu, dilation=1, padding='SAME'):
+        assert bn_relu in [None, 'relu', 'relu6']
+        self.H = H
+        self.W = W
+        self.I = I
+        self.O = O
+        self.stride_h = stride_h
+        self.stride_w = stride_w
+        self.depthwise = depthwise
+        self.bn_relu = bn_relu
+        self.dilation_h = dilation
+        self.dilation_w = dilation
+        self.shape = (H, W, O, I) if depthwise else (H, W, I, O)
+        self.vlen_i = -1
+        self.vlen_o = -1
+        if isinstance(padding, str):
+            self.padding = padding
+            self.padding_shape = None
+        else:
+            self.padding = None
+            self.padding_shape = padding
+    def update_shape(self, vlen_i, vlen_o):
+        self.vlen_i = vlen_i
+        self.vlen_o = vlen_o
+        OC_chunk = tvm.tir.indexdiv(self.O, vlen_o).value
+        IC_chunk = tvm.tir.indexdiv(self.I, vlen_i).value
+        self.shape = (OC_chunk, IC_chunk, self.H, self.W, vlen_i, vlen_o) if not self.depthwise else (1, IC_chunk, self.H, self.W, vlen_i, 1)
+    def get_shape(self):
+        return self.shape
+    def get_padding_shape(self):
+        assert(self.padding_shape is not None)
+        return self.padding_shape[0], self.padding_shape[1], self.padding_shape[2], self.padding_shape[3]
+    def get_stride(self):
+        return self.stride_h, self.stride_w
+    def get_dilation(self):
+        return self.dilation_h, self.dilation_w
+
 
 def get_vlen(axis_length, device=None):
     if device == 'cuda':
@@ -188,6 +241,45 @@ def get_workloads_from_file(workload_types=['depth_conv', 'conv_conv']):
                 tmp[workload_name] = parameters
             workloads[w] = tmp
     return workloads
+
+def get_4D_shapes_from_params(p):
+    idx = 0
+    OUTPUT = None
+    layers = []
+    while 1:
+        if idx + 5 > len(p): # Skip is_block for now
+            break
+
+        if not OUTPUT:
+            DATA = FeatureConfig(*p[idx:(idx+4)])
+            FILTER = FilterConfig(p[idx+4], p[idx+4], DATA.C, p[idx+5],\
+                                            p[idx+6], *p[(idx+6):(idx+9)])
+            idx += 9
+        else:
+            DATA = OUTPUT
+            FILTER = FilterConfig(p[idx], p[idx], DATA.C, p[idx+1],\
+                                        p[idx+2], *p[(idx+2):(idx+5)])
+            idx += 5
+        layers.append((DATA, FILTER))
+
+        # Compute the output shape with the original input size, i.e. WITHOUT INPUT PACKING
+        dilated_kernel_h = (FILTER.H - 1) * FILTER.dilation_h + 1
+        dilated_kernel_w = (FILTER.W - 1) * FILTER.dilation_w + 1
+        pad_top, pad_left, pad_down, pad_right = get_pad_tuple(
+            FILTER.padding, (dilated_kernel_h, dilated_kernel_w))
+        if FILTER.padding_shape is None:
+            FILTER.padding_shape = (pad_top, pad_left, pad_down, pad_right)
+
+        # Make output
+        ON = DATA.N
+        OH = simplify((DATA.H - dilated_kernel_h + pad_top + pad_down) // FILTER.stride_h + 1)
+        OW = simplify((DATA.W - dilated_kernel_w + pad_left + pad_right) // FILTER.stride_w + 1)
+        OC = FILTER.I * FILTER.O if FILTER.depthwise else FILTER.O
+        OUTPUT = FeatureConfig(ON, OH, OW, OC)
+
+    layers.append((OUTPUT,))
+
+    return layers
 
 def get_workloads():
     workloads = {}

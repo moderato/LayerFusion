@@ -4,66 +4,15 @@ from tvm.topi import testing
 from tvm.topi.nn.dilate import dilate
 from tvm.topi.nn.pad import pad
 from tvm.topi.nn.util import get_pad_tuple
-from tvm.topi.util import simplify, get_const_tuple
+from tvm.topi.util import get_const_tuple
 from tvm import autotvm, te
-from helper import get_vlen, get_CPU_vlen_from_config
+import tvm.te._ffi_api
+from tvm.autotvm.task import TaskExtractEnv, args_to_workload
+from helper import get_vlen, get_CPU_vlen_from_config, get_4D_shapes_from_params
 import numpy as np
 import os, math
 
 class FusionComposer:
-    class FeatureConfig:
-        def __init__(self, N, H, W, C):
-            self.N = N
-            self.H = H
-            self.W = W
-            self.C = C
-            self.vlen = -1
-            self.shape = (N, H, W, C)
-        def update_shape(self, vlen):
-            self.vlen = vlen
-            C_chunk = tvm.tir.indexdiv(self.C, vlen).value
-            self.shape = (self.N, C_chunk, self.H, self.W, vlen)
-        def get_shape(self):
-            return self.shape
-
-    class FilterConfig:
-        def __init__(self, H, W, I, O, stride_h, stride_w, depthwise, bn_relu, dilation=1, padding='SAME'):
-            assert bn_relu in [None, 'relu', 'relu6']
-            self.H = H
-            self.W = W
-            self.I = I
-            self.O = O
-            self.stride_h = stride_h
-            self.stride_w = stride_w
-            self.depthwise = depthwise
-            self.bn_relu = bn_relu
-            self.dilation_h = dilation
-            self.dilation_w = dilation
-            self.shape = (H, W, O, I) if depthwise else (H, W, I, O)
-            self.vlen_i = -1
-            self.vlen_o = -1
-            if isinstance(padding, str):
-                self.padding = padding
-                self.padding_shape = None
-            else:
-                self.padding = None
-                self.padding_shape = padding
-        def update_shape(self, vlen_i, vlen_o):
-            self.vlen_i = vlen_i
-            self.vlen_o = vlen_o
-            OC_chunk = tvm.tir.indexdiv(self.O, vlen_o).value
-            IC_chunk = tvm.tir.indexdiv(self.I, vlen_i).value
-            self.shape = (OC_chunk, IC_chunk, self.H, self.W, vlen_i, vlen_o) if not self.depthwise else (1, IC_chunk, self.H, self.W, vlen_i, 1)
-        def get_shape(self):
-            return self.shape
-        def get_padding_shape(self):
-            assert(self.padding_shape is not None)
-            return self.padding_shape[0], self.padding_shape[1], self.padding_shape[2], self.padding_shape[3]
-        def get_stride(self):
-            return self.stride_h, self.stride_w
-        def get_dilation(self):
-            return self.dilation_h, self.dilation_w
-
     def get_input_cfg(self, idx):
         assert(idx >= 0 and idx < self.layer_num)
         return self.layers[idx][0]
@@ -126,7 +75,7 @@ class FusionComposer:
 
             # Split axes, etc
             if self.cfg is not None:
-                if self.target.kind.name == 'cuda':
+                if self.target.kind.name == 'cuda' or self.target.device_name == 'tracing':
                     _, OH, OW, OC = OUTPUT.get_shape()
 
                     if FILTER.depthwise:
@@ -227,53 +176,17 @@ class FusionComposer:
                 flop += 2 * (ocfg.N * ocfg.H * ocfg.W * ocfg.C)
         return flop
 
-    def __init__(self, p, auto_tvm=True, target=None, dtype='float32', constraints_idx=-1):
+    def __init__(self, p, pack=None, auto_tvm=True, target=None, dtype='float32', constraints_idx=-1):
         self.cfg = autotvm.get_config() if auto_tvm else None
         self.parameters = p
         self.target = target
-        self.pack = (target.kind.name != 'cuda')
+        self.pack = (target.kind.name != 'cuda' and target.device_name != 'tracing') if pack is None else pack
         self.output_dtype=dtype
         self.is_block = False
         self.layers = []
         self.placeholders = []
 
-        idx = 0
-        layer_idx = 0
-        OUTPUT = None
-        while 1:
-            if idx + 5 > len(p): # Skip is_block for now
-                break
-
-            if not OUTPUT:
-                DATA = self.FeatureConfig(*p[idx:(idx+4)])
-                FILTER = self.FilterConfig(p[idx+4], p[idx+4], DATA.C, p[idx+5],\
-                                            p[idx+6], *p[(idx+6):(idx+9)])
-                idx += 9
-            else:
-                DATA = OUTPUT
-                FILTER = self.FilterConfig(p[idx], p[idx], DATA.C, p[idx+1],\
-                                            p[idx+2], *p[(idx+2):(idx+5)])
-                idx += 5
-            self.layers.append((DATA, FILTER))
-
-            # Compute the output shape with the original input size, i.e. WITHOUT INPUT PACKING
-            dilated_kernel_h = (FILTER.H - 1) * FILTER.dilation_h + 1
-            dilated_kernel_w = (FILTER.W - 1) * FILTER.dilation_w + 1
-            pad_top, pad_left, pad_down, pad_right = get_pad_tuple(
-                FILTER.padding, (dilated_kernel_h, dilated_kernel_w))
-            if FILTER.padding_shape is None:
-                FILTER.padding_shape = (pad_top, pad_left, pad_down, pad_right)
-
-            # Make output
-            ON = DATA.N
-            OH = simplify((DATA.H - dilated_kernel_h + pad_top + pad_down) // FILTER.stride_h + 1)
-            OW = simplify((DATA.W - dilated_kernel_w + pad_left + pad_right) // FILTER.stride_w + 1)
-            OC = FILTER.I * FILTER.O if FILTER.depthwise else FILTER.O
-            OUTPUT = self.FeatureConfig(ON, OH, OW, OC)
-
-            layer_idx += 1
-
-        self.layers.append((OUTPUT,))
+        self.layers = get_4D_shapes_from_params(p)
         self.layer_num = len(self.layers) - 1 # Excluding input
         self.need_padding = [False] * self.layer_num
         self.pattern = 'depth_conv' # TODO: Add logic to it
@@ -285,9 +198,6 @@ class FusionComposer:
         self.filter_cfg = None
         self.output_cfg = None
         self.layer_idx = -1
-
-        # # Register the task
-        # _ = self.get_schedule_tuning()
 
     def padding(self, Input, Filter):
         if self.pack:
@@ -416,14 +326,13 @@ class FusionComposer:
                                 name='ScaleShift_{}'.format(self.layer_idx),
                                 tag='scaleshift')
         else:
-            ScaleShift =  te.compute(Input.shape, lambda n, h, w, c: Input[n, h, w, c] * Scale[0, 0, 0, c] + Shift[0, 0, 0, c],
+            ScaleShift =  te.compute(Input.shape, lambda n, h, w, c: Input[n, h, w, c] * Scale[c] + Shift[c],
                                 name='ScaleShift_{}'.format(self.layer_idx),
                                 tag='scaleshift')
 
         # TODO: Recover this
         # if block_input is not None:
         #     inputs = block_input if isinstance(block_input, list) else [block_input]
-
         #     First = inputs[0] # TODO: Support multiple branches addition later
         #     Last = self.stages[-1][-1] # Output if bn_relu is None, ScaleShift if it's not None
         #     assert sorted(get_const_tuple(First.shape)) == sorted(get_const_tuple(Last.shape)), '{} is not the same as {}'.format(First.shape, Last.shape)
@@ -485,6 +394,12 @@ class FusionComposer:
     def get_schedule(self, target=None, tuning=False):
         assert not (not tuning and target is None)
 
+        task_env = TaskExtractEnv.current
+        task_name = 'fused_conv2d.{}'.format('cuda' if self.target.kind.name == 'cuda' else 'x86')
+        args = autotvm.task.topi_integration.serialize_args([self.parameters])
+        if task_env is not None and task_env.tracing:
+            task_env.add_task(task_name, args)
+
         if tuning:
             cfg = self.cfg
         else:
@@ -514,15 +429,22 @@ class FusionComposer:
                     filters_cfg['Layer_{}'.format(l)] = self.get_filter_cfg(l)
                     outputs_cfg['Layer_{}'.format(l)] = self.get_output_cfg(l)
                 if cfg is not None:
-                    ret = f(cfg, outs, inputs_cfg=inputs_cfg, filters_cfg=filters_cfg, outputs_cfg=outputs_cfg)
+                    s = f(cfg, outs, inputs_cfg=inputs_cfg, filters_cfg=filters_cfg, outputs_cfg=outputs_cfg)
                 else:
-                    ret = f(outs, inputs_cfg=inputs_cfg, filters_cfg=filters_cfg, outputs_cfg=outputs_cfg)
-            else: # CUDA
+                    s = f(outs, inputs_cfg=inputs_cfg, filters_cfg=filters_cfg, outputs_cfg=outputs_cfg)
+            elif self.target.kind.name == 'cuda': # CUDA
                 if cfg is not None:
-                    ret = f(cfg, outs)
+                    s = f(cfg, outs)
                 else:
-                    ret = f(outs)
-            return ret
+                    s = f(outs)
+            elif self.target.device_name == 'tracing':
+                # Return empty schedule
+                outs = [outs] if isinstance(outs, te.tensor.Tensor) else outs
+                s = te.create_schedule([x.op for x in outs])
+            else:
+                raise Exception("Don't recognize the case!")
+
+            return s
         return wrapper
 
     def get_schedule_inference(self, target):
@@ -596,9 +518,6 @@ class FusionComposer:
                 output_data = testing.conv2d_nhwc_python(input_data, filter_data, f.stride_h, padding=f.padding).astype(self.output_dtype)
                 params_name.append('filter_{}'.format(idx+1))
 
-            # print("&&&")
-            # print(output_data[0,0,0,0:10])
-
             if f.bn_relu is not None:
                 n, h, w, oc = output_data.shape
                 scale_np = np.random.uniform(0.0, 0.1, size=(oc,)).astype(self.output_dtype)
@@ -622,10 +541,6 @@ class FusionComposer:
                         relu_scipy[:,:,:,c] = np.minimum(relu_scipy[:,:,:,c], 6)
                 output_data = relu_scipy.astype(self.output_dtype)
                 params_name.extend(['scale_{}'.format(idx+1), 'shift_{}'.format(idx+1)])
-
-                # print("&&&")
-                # print(scale_shift_scipy[0,0,0,0:10])
-                # print(output_data[0,0,0,0:10])
 
             if idx == self.layer_num - 1: # At the last stage, append output_data as the final output for reference
                 output_cfg = self.get_output_cfg(idx)
@@ -831,6 +746,53 @@ def _alter_fused_conv2d_layout(attrs, inputs, tinfos, out_type):
     del new_attrs['num_layers']
 
     return relay.op.nn.fused_conv2d(*inputs, **new_attrs)
+
+
+@tvm.target.generic_func
+def fused_conv2d_infer_layout(workload, cfg):
+    """Infer input/output shapes and layouts from a workload and cfg.
+
+    Parameters
+    ----------
+    workload : tuple
+        conv2d workload
+
+    cfg : tuple
+        tvm.autotvm config
+
+    Returns
+    -------
+    Output : [tuple of tuple and str, tuple of tuple and str]
+        Input shapes and layouts, and output shapes and layouts
+    """
+    raise ValueError("missing register for topi.nn.conv2d_infer_layout")
+
+@fused_conv2d_infer_layout.register("cpu")
+def _fused_conv2d_infer_layout(workload, cfg):
+    if cfg.is_fallback:
+        raise Exception("Don't accept FallBack config")
+
+    layers = get_4D_shapes_from_params(workload[1])
+    num_layers = len(layers) - 1
+
+    # Input
+    first_feature, first_filter = layers[0]
+    if first_filter.depthwise:
+        vlen_i = cfg['vlen_layer_0'].val
+    else:
+        vlen_i = cfg['vlen_layer_input'].val
+    first_feature.update_shape(vlen_i)
+    in_layout = "NCHW%dc" % vlen_i
+    in_shape = first_feature.shape
+
+    # Output
+    output, = layers[-1]
+    vlen_o = cfg['vlen_layer_{}'.format(num_layers-1)].val
+    output.update_shape(vlen_o)
+    out_layout = "NCHW%dc" % vlen_o
+    out_shape = output.shape
+
+    return ((in_shape, in_layout),), ((out_shape, out_layout),)
 
 
 # @conv2d_legalize.register("cpu")
