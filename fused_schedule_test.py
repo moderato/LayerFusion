@@ -2,7 +2,7 @@ import tvm, os, logging, sys, argparse
 import tvm.topi.testing
 import tvm.topi.tag as tag
 from tvm import autotvm
-from tvm.topi.util import get_const_tuple
+from tvm.topi.utils import get_const_tuple
 from tvm.contrib.pickle_memoize import memoize
 
 from helper import *
@@ -77,7 +77,7 @@ def verify_fused(workload_name,
                                         autotvm.callback.log_to_file(log_name)])
 
             # inspect the best config
-            # autotvm.record.pick_best(log_name, "logs/autotvm/model/gpu/test.log")
+            # autotvm.record.pick_best(log_name, "logs/autotvm/model/{}/test.log".format(device))
             dispatch_context = autotvm.apply_history_best(log_name)
             best_config = dispatch_context.query(task.target, task.workload)
             print('\nBest config:')
@@ -125,8 +125,6 @@ def verify_fused(workload_name,
 
         nd_arrays = []
         for idx, array in enumerate(ref_data):
-            # if idx == 2 or idx == 3:
-            #     print(array)
             if idx != len(ref_data) - 1: # Append data to nd_arrays
                 nd_arrays.append(tvm.nd.array(array, ctx))
             else: # Leave the last nd_array as all-zero

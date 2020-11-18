@@ -1,10 +1,13 @@
-import numpy as np
 import tvm
-import os, math, re
-from tvm.topi.util import simplify, get_const_tuple
-from tvm.topi.nn.util import get_pad_tuple
+import tvm.relay as relay
+from tvm.topi.utils import simplify, get_const_tuple
+from tvm.topi.nn.utils import get_pad_tuple
 from tvm import autotvm, te
 from tvm.autotvm.task.space import FallbackConfigEntity
+from tvm.relay.dataflow_pattern import wildcard, is_op, is_constant, is_expr, is_var, rewrite, TupleGetItemPattern, DFPatternCallback
+from tvm.relay.build_module import bind_params_by_name
+import os, math, re
+import numpy as np
 
 np.random.seed(42)
 TARGETS = {
@@ -67,10 +70,10 @@ _NCHWc_matcher = re.compile("^NCHW[0-9]+c$")
 _OIHWio_matcher = re.compile("^OIHW[0-9]+i[0-9]+o$")
 class FeatureConfig:
     def __init__(self, N, H, W, C):
-        self.N = N
-        self.H = H
-        self.W = W
-        self.C = C
+        self.N = int(N)
+        self.H = int(H)
+        self.W = int(W)
+        self.C = int(C)
         self.vlen = -1
         self.shape = (N, H, W, C)
     def update_shape(self, vlen):
@@ -83,17 +86,17 @@ class FeatureConfig:
 class FilterConfig:
     def __init__(self, H, W, I, O, stride_h, stride_w, depthwise, bn_relu, dilation=1, padding='SAME'):
         assert bn_relu in [None, 'relu', 'relu6']
-        self.H = H
-        self.W = W
-        self.I = I
-        self.O = O
-        self.stride_h = stride_h
-        self.stride_w = stride_w
-        self.depthwise = depthwise
+        self.H = int(H)
+        self.W = int(W)
+        self.I = int(I)
+        self.O = int(O)
+        self.stride_h = int(stride_h)
+        self.stride_w = int(stride_w)
+        self.depthwise = bool(depthwise)
         self.bn_relu = bn_relu
-        self.dilation_h = dilation
-        self.dilation_w = dilation
-        self.shape = (H, W, O, I) if depthwise else (H, W, I, O)
+        self.dilation_h = int(dilation)
+        self.dilation_w = int(dilation)
+        self.shape = (int(H), int(W), int(O), int(I)) if depthwise else (int(H), int(W), int(I), int(O))
         self.vlen_i = -1
         self.vlen_o = -1
         if isinstance(padding, str):
@@ -107,7 +110,7 @@ class FilterConfig:
         self.vlen_o = vlen_o
         OC_chunk = tvm.tir.indexdiv(self.O, vlen_o).value
         IC_chunk = tvm.tir.indexdiv(self.I, vlen_i).value
-        self.shape = (OC_chunk, IC_chunk, self.H, self.W, vlen_i, vlen_o) if not self.depthwise else (1, IC_chunk, self.H, self.W, vlen_i, 1)
+        self.shape = (OC_chunk, IC_chunk, self.H, self.W, vlen_i, vlen_o) if not self.depthwise else (IC_chunk, 1, self.H, self.W, 1, vlen_i)
     def get_shape(self):
         return self.shape
     def get_padding_shape(self):
@@ -117,7 +120,6 @@ class FilterConfig:
         return self.stride_h, self.stride_w
     def get_dilation(self):
         return self.dilation_h, self.dilation_w
-
 
 def get_vlen(axis_length, device=None):
     if device == 'cuda':
@@ -406,3 +408,137 @@ def print_ir(mod, info, is_before=True):
     """Print the name of the pass, the IR, only before passes execute."""
     if is_before:
         pass
+class FusedConv2DCallback(DFPatternCallback):
+    # A callback class to rewrite the matched pattern to a batch_norm op.
+    def __init__(self):
+        super(FusedConv2DCallback, self).__init__()
+        self.data = wildcard()
+        self.weight1 = wildcard()
+        self.scale1 = wildcard()
+        self.shift1 = wildcard()
+        self.weight2 = wildcard()
+        self.scale2 = wildcard()
+        self.shift2 = wildcard()
+
+        pattern = is_op('nn.conv2d')(self.data, self.weight1)
+        pattern = is_op('multiply')(pattern, self.scale1)
+        pattern = is_op('add')(pattern, self.shift1)
+        pattern = is_op('nn.relu')(pattern)
+        pattern = is_op('nn.conv2d')(pattern, self.weight2).has_attr({'groups': 1}) # 2nd Conv should be a normal one
+        pattern = is_op('multiply')(pattern, self.scale2)
+        pattern = is_op('add')(pattern, self.shift2)
+        pattern = is_op('nn.relu')(pattern)
+        self.pattern = pattern
+        self.num_layers = 2
+
+    def callback(self, pre, post, node_map):
+        data = node_map[self.data][0]
+        weight1 = node_map[self.weight1][0]
+        scale1 = node_map[self.scale1][0]
+        shift1 = node_map[self.shift1][0]
+        weight2 = node_map[self.weight2][0]
+        scale2 = node_map[self.scale2][0]
+        shift2 = node_map[self.shift2][0]
+
+        strides_array = []
+        padding_array = []
+        dilation_array = []
+        groups_array = []
+        channels_array = []
+        kernel_size_array = []
+        bn_relu_array = []
+        data_layout_array = []
+        kernel_layout_array = []
+        out_layout_array = []
+        out_dtype = "float32" # Now only accept float32
+
+        # Traverse upward
+        tmp = pre
+        count = 0
+        while not isinstance(tmp, (relay.Var, relay.Constant)):
+            if count >= self.num_layers:
+                break
+            if tmp.op.name == 'nn.conv2d':
+                strides_array.append(tmp.attrs['strides'])
+                padding_array.append(tmp.attrs['padding'])
+                dilation_array.append(tmp.attrs['dilation'])
+                groups_array.append(tmp.attrs['groups'])
+                channels_array.append(tmp.attrs['channels'])
+                kernel_size_array.append(tmp.attrs['kernel_size'])
+                data_layout_array.append(tmp.attrs['data_layout'])
+                kernel_layout_array.append(tmp.attrs['kernel_layout'])
+                out_layout_array.append(tmp.attrs['out_layout'])
+                count += 1
+            elif tmp.op.name == 'multiply':
+                bn_relu_array.append(True)
+            tmp = tmp.args[0]
+
+        strides_array.reverse()
+        padding_array.reverse()
+        dilation_array.reverse()
+        groups_array.reverse()
+        channels_array.reverse()
+        kernel_size_array.reverse()
+        bn_relu_array.reverse()
+        data_layout_array.reverse()
+        kernel_layout_array.reverse()
+        out_layout_array.reverse()
+
+        return relay.op.nn.fused_conv2d(data,
+                                        weight1, scale1, shift1,
+                                        weight2, scale2, shift2,
+                                        strides_array, padding_array, dilation_array,
+                                        groups_array, channels_array, kernel_size_array, bn_relu_array,
+                                        data_layout_array, kernel_layout_array, out_layout_array, out_dtype)
+
+class ReplaceBatchNormCallback(DFPatternCallback):
+    # A callback class to rewrite the matched pattern to a batch_norm op.
+    def __init__(self):
+        super(ReplaceBatchNormCallback, self).__init__()
+        self.x = is_var() | wildcard()
+        self.var = is_var()
+        self.mean = is_var()
+        self.beta = is_var()
+        self.gamma = is_var()
+        pattern = is_op('nn.batch_norm')(self.x, self.gamma, self.beta, self.mean, self.var)
+        tuple_get_item_node = TupleGetItemPattern(pattern, 0)
+
+        self.pattern = tuple_get_item_node
+
+    def callback(self, pre, post, node_map):
+        x = node_map[self.x][0]
+        beta = node_map[self.beta][0]
+        gamma = node_map[self.gamma][0]
+
+        mul = relay.multiply(x, gamma)
+        add = relay.add(mul, beta)
+        return add
+
+def fuse_preprocess(f, params, target_str):
+    with tvm.target.Target(target_str):
+        mod = tvm.IRModule.from_expr(f)
+        mod['main'] = bind_params_by_name(mod['main'], params)
+        seq = tvm.transform.Sequential(
+            [
+                relay.transform.RemoveUnusedFunctions(),
+                relay.transform.ToBasicBlockNormalForm(),
+                relay.transform.Legalize(),
+                relay.transform.DynamicToStatic(),
+                relay.transform.SimplifyInference(),
+                relay.transform.EliminateCommonSubexpr(),
+                relay.transform.SimplifyExpr(),
+                relay.transform.FoldConstant(),
+                relay.transform.CombineParallelConv2D(),
+                relay.transform.CombineParallelDense(),
+                relay.transform.CombineParallelBatchMatmul(),
+                relay.transform.FoldConstant(),
+                relay.transform.FoldScaleAxis(),
+                relay.transform.CanonicalizeCast(),
+                relay.transform.CanonicalizeOps(),
+            ]
+        )
+        mod = seq(mod)
+        mod['main'] = rewrite(FusedConv2DCallback(), mod['main'])
+        mod = relay.transform.InferType()(mod)
+
+    return mod

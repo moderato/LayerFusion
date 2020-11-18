@@ -1,12 +1,13 @@
 import tvm
+import tvm.te._ffi_api
 import tvm.relay as relay
+import tvm.relay.op as reg
 from tvm.topi import testing
 from tvm.topi.nn.dilate import dilate
 from tvm.topi.nn.pad import pad
-from tvm.topi.nn.util import get_pad_tuple
-from tvm.topi.util import get_const_tuple
+from tvm.topi.nn.utils import get_pad_tuple
+from tvm.topi.utils import get_const_tuple
 from tvm import autotvm, te
-import tvm.te._ffi_api
 from tvm.autotvm.task import TaskExtractEnv, args_to_workload
 from helper import get_vlen, get_CPU_vlen_from_config, get_4D_shapes_from_params
 import numpy as np
@@ -177,10 +178,11 @@ class FusionComposer:
         return flop
 
     def __init__(self, p, pack=None, auto_tvm=True, target=None, dtype='float32', constraints_idx=-1):
-        self.cfg = autotvm.get_config() if auto_tvm else None
+        self.cfg = None
         self.parameters = p
         self.target = target
         self.pack = (target.kind.name != 'cuda' and target.device_name != 'tracing') if pack is None else pack
+        self.task_name = 'fused_conv2d.{}'.format('cuda' if target.kind.name == 'cuda' else 'x86')
         self.output_dtype=dtype
         self.is_block = False
         self.layers = []
@@ -188,11 +190,9 @@ class FusionComposer:
 
         self.layers = get_4D_shapes_from_params(p)
         self.layer_num = len(self.layers) - 1 # Excluding input
-        self.need_padding = [False] * self.layer_num
-        self.pattern = 'depth_conv' # TODO: Add logic to it
 
-        # Define search space
-        self.define_search_space()
+        # Logic for pattern
+        self.pattern = 'depth_conv' # TODO: Add logic to it
 
         # Temporary variables for composing compute
         self.filter_cfg = None
@@ -207,9 +207,6 @@ class FusionComposer:
 
         # Only pad when it's not 1x1
         if FH > 1 and FW > 1:
-            self.need_padding[self.layer_idx] = True
-
-            # print('Padding is needed!')
             pad_top, pad_left, pad_down, pad_right = self.filter_cfg.get_padding_shape()
 
             if self.pack:
@@ -222,7 +219,6 @@ class FusionComposer:
                 pad_after = [0, pad_down, pad_right, 0]
 
             PaddedInput = pad(Input, pad_before, pad_after, name='PaddedInput_{}'.format(self.layer_idx))
-            # self.stages.append([PaddedInput])
             return PaddedInput
         return Input
 
@@ -244,7 +240,7 @@ class FusionComposer:
 
             Output = te.compute(self.output_cfg.get_shape(),
                 lambda n, c_chunk, h, w, c_vec: te.sum(
-                                                    (Filter[0, c_chunk, ry, rx, c_vec, 0] *
+                                                    (Filter[c_chunk, 0, ry, rx, 0, c_vec] *
                                                     Padded[n, c_chunk,
                                                                     h * stride_h + ry * dilation_h,
                                                                     w * stride_w + rx * dilation_w,
@@ -360,53 +356,89 @@ class FusionComposer:
                             name='ReLU6_{}'.format(self.layer_idx), tag='relu6')
         return Last
 
+    # TODO: integrate with TOPI
     def get_compute(self, skip_bn_relu=False):
-        def compute(input_tensors):
-            Feature = input_tensors[0]
-            tensor_idx = 1
-            for idx in range(self.layer_num):
-                Filter = input_tensors[tensor_idx]
+        def wrapper(input_tensors):
+            task_env = TaskExtractEnv.current
+            args = autotvm.task.topi_integration.serialize_args([self.parameters])
+            if task_env is not None and task_env.tracing:
+                task_env.add_task(self.task_name, args)
+            workload = ((self.task_name),) + autotvm.task.topi_integration.serialize_args([self.parameters])
+            # tgt = tvm.target.Target.current()
+            # cfg = autotvm.DispatchContext.current.query(tgt, workload)
+            # if not isinstance(cfg, tvm.autotvm.task.space.ConfigSpace):
+            #     self.update_all_shapes_from_best_cfg(cfg)
 
-                # Updates:
-                self.filter_cfg = self.get_filter_cfg(idx)
-                self.output_cfg = self.get_output_cfg(idx)
-                self.layer_idx = idx
+            def compute(input_tensors):
+                Feature = input_tensors[0]
+                tensor_idx = 1
+                for idx in range(self.layer_num):
+                    Filter = input_tensors[tensor_idx]
 
-                if self.get_filter_cfg(idx).depthwise:
-                    Feature = self.make_depthwise_output(Feature, Filter)
-                else:
-                    Feature = self.make_conv_output(Feature, Filter)
+                    # Updates:
+                    self.filter_cfg = self.get_filter_cfg(idx)
+                    self.output_cfg = self.get_output_cfg(idx)
+                    self.layer_idx = idx
 
-                if (self.get_bn_relu(idx) is not None) and (not skip_bn_relu):
-                    Scale = input_tensors[tensor_idx + 1]
-                    Shift = input_tensors[tensor_idx + 2]
-                    tensor_idx += 3
-                    Feature = self.process_relu(Feature, Scale, Shift)
-                else:
-                    tensor_idx += 1
-            return Feature
+                    if self.get_filter_cfg(idx).depthwise:
+                        Feature = self.make_depthwise_output(Feature, Filter)
+                    else:
+                        Feature = self.make_conv_output(Feature, Filter)
+
+                    if (self.get_bn_relu(idx) is not None) and (not skip_bn_relu):
+                        Scale = input_tensors[tensor_idx + 1]
+                        Shift = input_tensors[tensor_idx + 2]
+                        tensor_idx += 3
+                        Feature = self.process_relu(Feature, Scale, Shift)
+                    else:
+                        tensor_idx += 1
+                return Feature
+
+            # attach workload to return op
+            node = compute(input_tensors)
+            op = node.op
+            attrs = {}
+            for k, v in node.op.attrs.items():
+                attrs[k] = v
+            attrs["workload"] = workload
+            if isinstance(op, tvm.te.tensor.ComputeOp):
+                op = tvm.te._ffi_api.ComputeOp(op.name, op.tag, attrs, op.axis, op.body)
+            elif isinstance(op, tvm.te.tensor.ExternOp):
+                op = tvm.te._ffi_api.ExternOp(
+                    op.name,
+                    op.tag,
+                    attrs,
+                    op.inputs,
+                    op.input_placeholders,
+                    op.output_placeholders,
+                    op.body,
+                )
+            else:
+                raise RuntimeError("Unsupported op type: " + str(type(op)))
+            if isinstance(node, tvm.te.tensor.Tensor):
+                return op.output(0)
+            return [op.output(i) for i in range(len(node))]
 
         self.filter_cfg = None
         self.output_cfg = None
         self.layer_idx = -1
-        return compute
+
+        return wrapper
 
     def get_schedule(self, target=None, tuning=False):
         assert not (not tuning and target is None)
-
         task_env = TaskExtractEnv.current
-        task_name = 'fused_conv2d.{}'.format('cuda' if self.target.kind.name == 'cuda' else 'x86')
-        args = autotvm.task.topi_integration.serialize_args([self.parameters])
-        if task_env is not None and task_env.tracing:
-            task_env.add_task(task_name, args)
 
         if tuning:
+            # Define search space
+            self.cfg = autotvm.get_config()
+            self.define_search_space()
             cfg = self.cfg
         else:
-            workload = ('fused_conv2d.{}'.format('cuda' if self.target.kind.name == 'cuda' else 'x86'),) + autotvm.task.topi_integration.serialize_args([self.parameters])
+            workload = ((self.task_name),) + autotvm.task.topi_integration.serialize_args([self.parameters])
             dispatch_ctx = autotvm.task.DispatchContext.current
             cfg = dispatch_ctx.query(target, workload)
-            if cfg.is_fallback:
+            if cfg.is_fallback and not task_env.tracing:
                 print("---[[[ AutoTVM cfg not found! ]]]---")
 
             # Update the tensor shapes with the best config
@@ -442,9 +474,9 @@ class FusionComposer:
                 outs = [outs] if isinstance(outs, te.tensor.Tensor) else outs
                 s = te.create_schedule([x.op for x in outs])
             else:
-                raise Exception("Don't recognize the case!")
-
+                raise Exception("Case unrecognizable!")
             return s
+
         return wrapper
 
     def get_schedule_inference(self, target):
@@ -619,27 +651,6 @@ def get_schedule_tuning_x86(parameters):
     s = schedule(output_tensor)
     return s, all_tensors
 
-@autotvm.register_topi_compute("fused_conv2d.cuda")
-def get_compute_cuda(parameters):
-    target = tvm.target.Target('cuda')
-    fc = FusionComposer(parameters, target=target)
-
-    # Get compute
-    compute = fc.get_compute()
-    input_tensors = fc.make_placeholders()
-    return compute(input_tensors)
-
-@autotvm.register_topi_compute("fused_conv2d.x86")
-def get_compute_x86(parameters):
-    target = tvm.target.Target('llvm')
-    fc = FusionComposer(parameters, target=target)
-
-    # Get compute
-    compute = fc.get_compute()
-    input_tensors = fc.make_placeholders()
-    return compute(input_tensors)
-
-import tvm.relay.op as reg
 @reg.register_alter_op_layout("nn.fused_conv2d")
 def alter_op_layout_fused_conv2d(attrs, inputs, tinfos, out_type):
     """Alternate the layout of fused_conv2d"""
@@ -667,14 +678,11 @@ def fused_conv2d_alter_layout(attrs, inputs, tinfos, out_type):
     # not to change by default
     return None
 
-
 @fused_conv2d_alter_layout.register("cpu")
 def _alter_fused_conv2d_layout(attrs, inputs, tinfos, out_type):
-    print("Enter")
     target = tvm.target.Target.current(allow_none=False)
     dispatch_ctx = autotvm.task.DispatchContext.current
     if isinstance(dispatch_ctx, autotvm.task.ApplyGraphBest):
-        print("apply graph best")
         cfg = dispatch_ctx.query(target, None)
         workload = cfg.workload
     else:
@@ -704,8 +712,6 @@ def _alter_fused_conv2d_layout(attrs, inputs, tinfos, out_type):
         kernel_layout = kernel_layout_array[l]
         groups = groups_array[l]
         depthwise = (groups > 1)
-
-        # print(data_layout, kernel_layout, depthwise)
 
         if (data_layout == "NCHW" and kernel_layout == "OIHW") or \
             (data_layout == "NHWC" and kernel_layout == "HWOI" and depthwise) or \
@@ -740,13 +746,10 @@ def _alter_fused_conv2d_layout(attrs, inputs, tinfos, out_type):
     new_attrs['kernel_layout_array'] = kernel_layout_array
     new_attrs['out_layout_array'] = out_layout_array
 
-    # print(inputs)
-
     # TODO: Skip num_layers for now
     del new_attrs['num_layers']
 
     return relay.op.nn.fused_conv2d(*inputs, **new_attrs)
-
 
 @tvm.target.generic_func
 def fused_conv2d_infer_layout(workload, cfg):
@@ -793,154 +796,6 @@ def _fused_conv2d_infer_layout(workload, cfg):
     out_shape = output.shape
 
     return ((in_shape, in_layout),), ((out_shape, out_layout),)
-
-
-# @conv2d_legalize.register("cpu")
-# def _conv2d_legalize(attrs, inputs, arg_types):
-#     """Legalizes Conv2D op.
-
-#     Parameters
-#     ----------
-#     attrs : tvm.ir.Attrs
-#         Attributes of current convolution
-#     inputs : list of tvm.relay.Expr
-#         The args of the Relay expr to be legalized
-#     types : list of types
-#         List of input and output types
-
-#     Returns
-#     -------
-#     result : tvm.relay.Expr
-#         The legalized expr
-#     """
-
-#     # Dilation not supported yet. Return None if dilation is not (1, 1)
-#     dilation = attrs.get_int_tuple("dilation")
-#     if not (dilation[0] == 1 and dilation[1] == 1):
-#         return None
-
-#     # No legalization for depthwise convolutions yet.
-#     groups = attrs.get_int("groups")
-#     if groups != 1:
-#         return None
-
-#     # Collect the input tensors.
-#     data_tensor, kernel_tensor = arg_types[0], arg_types[1]
-#     data_dtype = data_tensor.dtype
-#     kernel_dtype = kernel_tensor.dtype
-
-#     # Collect the output tensor.
-#     output_tensor = arg_types[2]
-
-#     # Collect the input exprs.
-#     data, kernel = inputs
-
-#     # Get the conv attrs
-#     new_attrs = {k: attrs[k] for k in attrs.keys()}
-
-#     is_int8_inputs = False
-#     # If both the inputs are int8, we can add 128 to make the input dtype uint8, and then adjust the
-#     # output. This will help picking up Intel VNNI instructions.
-#     # Original --> C = A (conv) B
-#     # A and B are int8
-#     #   C = (A + 128 - 128) (conv) B
-#     #   C = (A' conv B) - 128 (conv) B
-#     # where A' = A + 128
-#     # and 128 (conv) B is basically a reduce on CRS axis for weights.
-#     if data_tensor.dtype == "int8" and kernel_tensor.dtype == "int8":
-#         is_int8_inputs = True
-#         padding = attrs.get_int_tuple("padding")
-#         kh, kw = attrs.get_int_tuple("kernel_size")
-#         pt, pl, pb, pr = get_pad_tuple(padding, (kh, kw))
-
-#         if attrs["data_layout"] == "NHWC" and attrs["kernel_layout"] == "HWIO":
-#             adjust_shift = relay.sum(relay.cast(kernel, dtype="int32"), axis=(0, 1, 2))
-#             pad_width = ((0, 0), (pt, pb), (pl, pr), (0, 0))
-#         elif attrs["data_layout"] == "NCHW" and attrs["kernel_layout"] == "OIHW":
-#             pad_width = ((0, 0), (0, 0), (pt, pb), (pl, pr))
-#             adjust_shift = relay.sum(relay.cast(kernel, dtype="int32"), axis=(1, 2, 3))
-#             adjust_shift = relay.expand_dims(adjust_shift, axis=1, num_newaxis=2)
-#         else:
-#             return None
-
-#         data = relay.cast(data, "int32")
-#         data = relay.add(data, relay.const(128, "int32"))
-#         data = relay.cast(data, "uint8")
-
-#         # Do external padding as pad value has to be 128.
-#         if not (padding[0] == 0 and padding[1] == 0):
-#             data = relay.nn.pad(data, pad_width=pad_width, pad_value=128)
-#         new_attrs["padding"] = (0, 0)
-
-#         # The data type is now shifted to uint8
-#         data_dtype = "uint8"
-
-#         # Multiply 128 to adjust shift.
-#         adjust_shift = relay.multiply(adjust_shift, relay.const(128, "int32"))
-
-#     # Legalize if the datatypes are suitable for fast Int8 instructions.  Int8 instructions require
-#     # input channel to be a multiple of 4 and output channels to be a multiple of 16. For input
-#     # channels, we pad both the inputs and weights input channels. For output channels, we pad the
-#     # weight and stride_slice the output.
-#     if is_int8_hw_support(data_dtype, kernel_dtype):
-#         # Flags to remember if the expr is modified
-#         ic_modified = False
-#         oc_modified = False
-
-#         # Find the value of input and output channel.
-#         in_channel = -1
-#         out_channel = -1
-#         if attrs["data_layout"] == "NHWC" and attrs["kernel_layout"] == "HWIO":
-#             in_channel = data_tensor.shape[3].value
-#             out_channel = kernel_tensor.shape[3].value
-#         elif attrs["data_layout"] == "NCHW" and attrs["kernel_layout"] == "OIHW":
-#             in_channel = data_tensor.shape[1].value
-#             out_channel = kernel_tensor.shape[0].value
-#         else:
-#             return None
-
-#         if in_channel % 4 != 0:
-#             new_in_channel = ((in_channel + 4) // 4) * 4
-#             diff = new_in_channel - in_channel
-#             if attrs["data_layout"] == "NHWC" and attrs["kernel_layout"] == "HWIO":
-#                 data = relay.nn.pad(data, pad_width=((0, 0), (0, 0), (0, 0), (0, diff)))
-#                 kernel = relay.nn.pad(kernel, pad_width=((0, 0), (0, 0), (0, diff), (0, 0)))
-#                 ic_modified = True
-#             elif attrs["data_layout"] == "NCHW" and attrs["kernel_layout"] == "OIHW":
-#                 pad_width = ((0, 0), (0, diff), (0, 0), (0, 0))
-#                 data = relay.nn.pad(data, pad_width=pad_width)
-#                 kernel = relay.nn.pad(kernel, pad_width=pad_width)
-#                 ic_modified = True
-#             else:
-#                 return None
-
-#         new_out_channel = out_channel
-#         if out_channel % 16 != 0:
-#             new_out_channel = ((out_channel + 16) // 16) * 16
-#             diff = new_out_channel - out_channel
-#             if attrs["data_layout"] == "NHWC" and attrs["kernel_layout"] == "HWIO":
-#                 kernel = relay.nn.pad(kernel, pad_width=((0, 0), (0, 0), (0, 0), (0, diff)))
-#                 oc_modified = True
-#             elif attrs["data_layout"] == "NCHW" and attrs["kernel_layout"] == "OIHW":
-#                 kernel = relay.nn.pad(kernel, pad_width=((0, diff), (0, 0), (0, 0), (0, 0)))
-#                 oc_modified = True
-#             else:
-#                 return None
-
-#         if oc_modified:
-#             new_attrs["channels"] = new_out_channel
-#             out = tvm.relay.nn.conv2d(data, kernel, **new_attrs)
-#             original_out_shape = [x.value for x in output_tensor.shape]
-#             out = relay.strided_slice(out, begin=[0, 0, 0, 0], end=original_out_shape)
-#         else:
-#             out = relay.nn.conv2d(data, kernel, **new_attrs)
-
-#         if is_int8_inputs:
-#             out = relay.subtract(out, adjust_shift)
-
-#         return out
-#     return None
-
 
 def test_compute():
     parameters = (1, 56, 56, 128, 3, 1, 1, True, 'relu', 1, 64, 1, False, 'relu', False)
