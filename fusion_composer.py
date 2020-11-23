@@ -39,8 +39,7 @@ class FusionComposer:
 
             if self.get_bn_relu(idx) and not skip_bn_relu:
                 output_cfg = self.get_output_cfg(idx)
-                placeholders.append(te.placeholder((output_cfg.C,), name='Scale_{}'.format(idx)))
-                placeholders.append(te.placeholder((output_cfg.C,), name='Shift_{}'.format(idx)))
+                placeholders.append(te.placeholder((output_cfg.C,), name='Bias_{}'.format(idx)))
         return placeholders
 
     def define_search_space(self):
@@ -315,22 +314,22 @@ class FusionComposer:
                                                 tag='conv2d_nhwc')
         return Output
 
-    def process_relu(self, Input, Scale, Shift):
+    def process_relu(self, Input, Bias):
         if self.pack:
             _, _, _, _, OC_vec = Input.shape
-            ScaleShift =  te.compute(Input.shape, lambda n, c_chunk, h, w, c_vec: Input[n, c_chunk, h, w, c_vec] * Scale[c_chunk * OC_vec + c_vec] + Shift[c_chunk * OC_vec + c_vec],
-                                name='ScaleShift_{}'.format(self.layer_idx),
-                                tag='scaleshift')
+            BiasAdd =  te.compute(Input.shape, lambda n, c_chunk, h, w, c_vec: Input[n, c_chunk, h, w, c_vec] + Bias[c_chunk * OC_vec + c_vec],
+                                name='BiasAdd_{}'.format(self.layer_idx),
+                                tag='biasadd')
         else:
-            ScaleShift =  te.compute(Input.shape, lambda n, h, w, c: Input[n, h, w, c] * Scale[c] + Shift[c],
-                                name='ScaleShift_{}'.format(self.layer_idx),
-                                tag='scaleshift')
+            BiasAdd =  te.compute(Input.shape, lambda n, h, w, c: Input[n, h, w, c] + Bias[c],
+                                name='BiasAdd_{}'.format(self.layer_idx),
+                                tag='biasadd')
 
         # TODO: Recover this
         # if block_input is not None:
         #     inputs = block_input if isinstance(block_input, list) else [block_input]
         #     First = inputs[0] # TODO: Support multiple branches addition later
-        #     Last = self.stages[-1][-1] # Output if bn_relu is None, ScaleShift if it's not None
+        #     Last = self.stages[-1][-1] # Output if bn_relu is None, BiasAdd if it's not None
         #     assert sorted(get_const_tuple(First.shape)) == sorted(get_const_tuple(Last.shape)), '{} is not the same as {}'.format(First.shape, Last.shape)
         #     if self.pack:
         #         Output = te.compute(self.output_shape,
@@ -343,9 +342,9 @@ class FusionComposer:
         #                             name='ElementwiseAddOutput_{}'.format(self.layer_idx),
         #                             tag='elem_{}'.format(tag_suffix))
         #     self.stages[-1].append(Output)
-        # Last = self.stages[-1][-1] # ScaleShift if it's not a block, Output if it's a block
+        # Last = self.stages[-1][-1] # BiasAdd if it's not a block, Output if it's a block
 
-        Last = ScaleShift
+        Last = BiasAdd
         if self.filter_cfg.bn_relu == 'relu':
             Last = te.compute(Last.shape,
                             lambda *i: te.max(Last(*i), tvm.runtime.const(0, Last.dtype)),
@@ -386,10 +385,9 @@ class FusionComposer:
                         Feature = self.make_conv_output(Feature, Filter)
 
                     if (self.get_bn_relu(idx) is not None) and (not skip_bn_relu):
-                        Scale = input_tensors[tensor_idx + 1]
-                        Shift = input_tensors[tensor_idx + 2]
-                        tensor_idx += 3
-                        Feature = self.process_relu(Feature, Scale, Shift)
+                        Bias = input_tensors[tensor_idx + 1]
+                        tensor_idx += 2
+                        Feature = self.process_relu(Feature, Bias)
                     else:
                         tensor_idx += 1
                 return Feature
@@ -438,7 +436,7 @@ class FusionComposer:
             workload = ((self.task_name),) + autotvm.task.topi_integration.serialize_args([self.parameters])
             dispatch_ctx = autotvm.task.DispatchContext.current
             cfg = dispatch_ctx.query(target, workload)
-            if cfg.is_fallback and not task_env.tracing:
+            if cfg.is_fallback and task_env and not task_env.tracing:
                 print("---[[[ AutoTVM cfg not found! ]]]---")
 
             # Update the tensor shapes with the best config
@@ -552,27 +550,24 @@ class FusionComposer:
 
             if f.bn_relu is not None:
                 n, h, w, oc = output_data.shape
-                scale_np = np.random.uniform(0.0, 0.1, size=(oc,)).astype(self.output_dtype)
-                shift_np = np.random.uniform(0.0, 0.1, size=(oc,)).astype(self.output_dtype)
-                ref_data_no_transform.append(scale_np)
-                ref_data_no_transform.append(shift_np)
-                ref_data.append(scale_np)
-                ref_data.append(shift_np)
+                bias_np = np.random.uniform(0.0, 0.1, size=(oc,)).astype(self.output_dtype)
+                ref_data_no_transform.append(bias_np)
+                ref_data.append(bias_np)
 
-                scale_shift_scipy = np.zeros(shape=(n, h, w, oc))
+                bias_add_scipy = np.zeros(shape=(n, h, w, oc))
                 relu_scipy = np.zeros(shape=(n, h, w, oc))
                 for c in range(oc):
-                    scale_shift_scipy[:,:,:,c] = output_data[:,:,:,c] * scale_np[c] + shift_np[c]
+                    bias_add_scipy[:,:,:,c] = output_data[:,:,:,c] + bias_np[c]
 
                     # For ResNet / DenseNet blocks, etc
                     if self.is_block:
-                        scale_shift_scipy[:,:,:,c] = scale_shift_scipy[:,:,:,c] + input_data[:,:,:,c]
+                        bias_add_scipy[:,:,:,c] = bias_add_scipy[:,:,:,c] + input_data[:,:,:,c]
 
-                    relu_scipy[:,:,:,c] = np.maximum(scale_shift_scipy[:,:,:,c], 0)
+                    relu_scipy[:,:,:,c] = np.maximum(bias_add_scipy[:,:,:,c], 0)
                     if f.bn_relu == 'relu6':
                         relu_scipy[:,:,:,c] = np.minimum(relu_scipy[:,:,:,c], 6)
                 output_data = relu_scipy.astype(self.output_dtype)
-                params_name.extend(['scale_{}'.format(idx+1), 'shift_{}'.format(idx+1)])
+                params_name.append('bias_{}'.format(idx+1))
 
             if idx == self.layer_num - 1: # At the last stage, append output_data as the final output for reference
                 output_cfg = self.get_output_cfg(idx)
@@ -593,14 +588,14 @@ class FusionComposer:
                     if 'filter' in filename:
                         np.save(filename+'_transposed', np.array(ref_data[i].transpose(3, 2, 0, 1), order='C'))
                     else:
-                        if len(ref_data[i].shape) == 4: # Don't need to save NCHW format scale and shift data
+                        if len(ref_data[i].shape) == 4: # Don't need to save NCHW format for bias data
                             np.save(filename+'_NCHW', np.array(ref_data[i].transpose(0, 3, 1, 2), order='C'))
                 else:
                     if 'filter' in filename:
                         np.save(filename+'_NCHWc', ref_data[i]) # NCHWc data
                         np.save(filename+'_transposed', np.array(ref_data_no_transform[i].transpose(3, 2, 0, 1), order='C'))
                     else:
-                        if len(ref_data[i].shape) != 4: # Don't need to save NCHW format scale and shift data
+                        if len(ref_data[i].shape) != 4: # Don't need to save NCHW format for bias data
                             np.save(filename+'_NCHWc', ref_data[i]) # NCHWc data
                             np.save(filename+'_NCHW', np.array(ref_data_no_transform[i].transpose(0, 3, 1, 2), order='C')) # NHWC to NCHW
                         else:

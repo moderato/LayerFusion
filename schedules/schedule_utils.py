@@ -45,15 +45,15 @@ def get_stages_and_cfgs(outs):
     param_dict = {}
     def get_tensors(outs):
         def traverse(prev_op_name, tensors):
-            for idx, t in enumerate(tensors):
+            for t in tensors:
                 op = t.op
                 name = op.name
                 if 'PaddedInput' in name:
                     stage_dict[name] = t
-                elif 'ScaleShift' in name or 'ReLU' in name:
+                elif 'BiasAdd' in name or 'ReLU' in name:
                     n, i = name.split('_')
                     stage_dict['Output_{}_{}'.format(i, n)] = t
-                elif 'Scale' in name or 'Shift' in name or 'Filter' in name:
+                elif 'Bias' in name or 'Filter' in name:
                     param_dict[name] = t
                 elif 'Conv2dOutput' in name:
                     _, i = name.split('_')
@@ -65,8 +65,8 @@ def get_stages_and_cfgs(outs):
                     i = prev_op_name.split('_')[-1]
                     if 'Conv2d' in prev_op_name: # Filter
                         param_dict['Filter_{}'.format(i)] = t
-                    elif 'ScaleShift' in prev_op_name: # ScaleShift
-                        param_dict['{}_{}'.format('Scale' if idx == 1 else 'Shift', i)] = t
+                    elif 'BiasAdd' in prev_op_name: # Bias
+                        param_dict['{}_{}'.format('Bias', i)] = t
                     else:
                         continue
                 else:

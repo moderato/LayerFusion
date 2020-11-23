@@ -17,7 +17,7 @@ def schedule_depth_conv_fused_nchwc_auto_search(cfg, outs, *args, **kwargs):
     s[stage_dict['Output_0']].set_scope('global')
     for l in range(0, layer_num):
         if bn_relu[l]:
-            s[stage_dict['Output_{}_ScaleShift'.format(l)]].compute_inline()
+            s[stage_dict['Output_{}_BiasAdd'.format(l)]].compute_inline()
 
     n, oc_chunk, h, w, oc = s[layer_output_dict['Layer_1']].op.axis
     oc_chunk_o, oc_chunk_i = cfg['split_layer_1_c'].apply(s, layer_output_dict['Layer_1'], oc_chunk)
@@ -102,7 +102,7 @@ def schedule_depth_conv_fused_nchwc_auto_inference(cfg, outs, *args, **kwargs):
     s[layer_output_dict['Layer_1']].reorder(n, oc_chunk_o, ht, wt, oc_chunk_i, h, w, oc)
     if bn_relu[1]:
         s[layer_output_dict['Layer_1']].vectorize(oc)
-        s[stage_dict['Output_1_ScaleShift']].compute_inline()
+        s[stage_dict['Output_1_BiasAdd']].compute_inline()
         s[stage_dict['Output_1']].compute_at(s[layer_output_dict['Layer_1']], wt)
         _, oc_chunk_i, h, w, oc = s[stage_dict['Output_1']].op.axis
     ho, wo, h, w = s[stage_dict['Output_1']].tile(h, w, x_factor=cfg['split_layer_1_h'].size[-1], y_factor=cfg['split_layer_1_w'].size[-1])
@@ -152,7 +152,7 @@ def schedule_depth_conv_fused_nchwc_auto_inference(cfg, outs, *args, **kwargs):
     if bn_relu[0]:
         _, _, h, w, c_vec = s[layer_output_dict['Layer_0']].op.axis
         s[layer_output_dict['Layer_0']].vectorize(c_vec)
-        s[stage_dict['Output_0_ScaleShift']].compute_inline()
+        s[stage_dict['Output_0_BiasAdd']].compute_inline()
         s[stage_dict['Output_0']].compute_at(s[layer_output_dict['Layer_0']], w)
     n, c_chunk, h, w, c_vec = s[stage_dict['Output_0']].op.axis
     ry, rx = s[stage_dict['Output_0']].op.reduce_axis

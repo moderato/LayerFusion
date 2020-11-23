@@ -42,7 +42,7 @@ def schedule_depth_conv_fused_nchwc(outs, *args, **kwargs):
     # s[layer_output_dict['Layer_1']].reorder(n, oc_chunk_o, ht, wt, ho, wo, oc_chunk_i, h, w, oc)
     # if bn_relu[1]:
     #     s[layer_output_dict['Layer_1']].vectorize(oc)
-    #     s[stage_dict['Output_1_ScaleShift']].compute_inline()
+    #     s[stage_dict['Output_1_BiasAdd']].compute_inline()
     #     s[stage_dict['Output_1']].compute_at(s[layer_output_dict['Layer_1']], wo)
     #     _, oc_chunk_i, h, w, oc = s[stage_dict['Output_1']].op.axis
     # ic_chunk, ry, rx, ic = s[stage_dict['Output_1']].op.reduce_axis
@@ -57,7 +57,7 @@ def schedule_depth_conv_fused_nchwc(outs, *args, **kwargs):
     s[layer_output_dict['Layer_1']].reorder(n, oc_chunk_o, ht, wt, oc_chunk_i, h, w, oc)
     if bn_relu[1]:
         s[layer_output_dict['Layer_1']].vectorize(oc)
-        s[stage_dict['Output_1_ScaleShift']].compute_inline()
+        s[stage_dict['Output_1_BiasAdd']].compute_inline()
         s[stage_dict['Output_1']].compute_at(s[layer_output_dict['Layer_1']], wt)
         _, oc_chunk_i, h, w, oc = s[stage_dict['Output_1']].op.axis
     ho, wo, h, w = s[stage_dict['Output_1']].tile(h, w, x_factor=output_step_tile_size_h, y_factor=output_step_tile_size_w) ####
@@ -101,7 +101,7 @@ def schedule_depth_conv_fused_nchwc(outs, *args, **kwargs):
     if bn_relu[0]:
         _, _, h, w, c_vec = s[layer_output_dict['Layer_0']].op.axis
         s[layer_output_dict['Layer_0']].vectorize(c_vec)
-        s[stage_dict['Output_0_ScaleShift']].compute_inline()
+        s[stage_dict['Output_0_BiasAdd']].compute_inline()
         s[stage_dict['Output_0']].compute_at(s[layer_output_dict['Layer_0']], w)
     n, c_chunk, h, w, c_vec = s[stage_dict['Output_0']].op.axis
     ry, rx = s[stage_dict['Output_0']].op.reduce_axis

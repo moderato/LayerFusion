@@ -31,11 +31,11 @@ def verify_fused(workload_name,
         print('Running on target: %s' % target_str)
         if 'llvm' in target_str:
             ctx = tvm.cpu()
-            target = tvm.target.create(target_str)
+            target = tvm.target.Target(target_str)
             device = 'cpu'
         else: # cuda
             ctx = tvm.gpu()
-            target = tvm.target.create(target_str)
+            target = tvm.target.Target(target_str)
             device = 'gpu'
 
         fc = FusionComposer(parameters, auto_tvm=auto_tvm, target=target)

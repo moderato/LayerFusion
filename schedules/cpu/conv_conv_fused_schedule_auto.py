@@ -17,7 +17,7 @@ def schedule_conv_conv_fused_nhwc_auto(cfg, outs, *args, **kwargs):
 
     # Intermediate
     if bn_relu[0]: 
-        s[stage_dict['Output_0_ScaleShift']].compute_inline()
+        s[stage_dict['Output_0_BiasAdd']].compute_inline()
     if hasPaddedInput[1]:
         if bn_relu[0]:
             s[layer_output_dict['Layer_0']].compute_inline()
@@ -27,7 +27,7 @@ def schedule_conv_conv_fused_nhwc_auto(cfg, outs, *args, **kwargs):
 
     # End
     if bn_relu[1]:
-        s[stage_dict['Output_1_ScaleShift']].compute_inline()
+        s[stage_dict['Output_1_BiasAdd']].compute_inline()
 
     n, oc_chunk, h, w, oc = s[layer_output_dict['Layer_1']].op.axis
     oc_chunk_o, oc_chunk_i_1 = cfg['split_layer_1_c'].apply(s, layer_output_dict['Layer_1'], oc_chunk)

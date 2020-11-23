@@ -5,14 +5,12 @@ import numpy as np
 from tvm import te, autotvm, relay
 from tvm.autotvm.tuner import XGBTuner
 from tvm.autotvm.graph_tuner import DPTuner, PBQPTuner
-from tvm.contrib.util import tempdir
+from tvm.contrib.utils import tempdir
 from tvm.contrib.debugger import debug_runtime
 
 from fusion_composer import FusionComposer
 from helper import *
 from pprint import pprint
-
-DISABLED_PASS = ['ForwardFoldScaleAxis','BackwardFoldScaleAxis']
 
 # image_shape and layout are made consistent outside the function.
 def get_network(name, batch_size, dtype="float32", image_shape=(3, 224, 224), layout="NCHW"):
@@ -31,6 +29,10 @@ def get_network(name, batch_size, dtype="float32", image_shape=(3, 224, 224), la
         mod, params = relay.testing.mobilenet.get_workload(batch_size=batch_size, dtype=dtype, image_shape=image_shape, version='v1', layout=layout)
     elif name == 'mobilenet_v2':
         mod, params = relay.testing.mobilenet.get_workload(batch_size=batch_size, dtype=dtype, image_shape=image_shape, version='v2', layout=layout)
+    elif name == 'mnasnet_a1':
+        mod, params = relay.testing.mnasnet.get_workload(batch_size=batch_size, dtype=dtype, image_shape=image_shape, version='a1', layout=layout)
+    elif name == 'mnasnet_b1':
+        mod, params = relay.testing.mnasnet.get_workload(batch_size=batch_size, dtype=dtype, image_shape=image_shape, version='b1', layout=layout)
     elif name == 'squeezenet_v1.1':
         mod, params = relay.testing.squeezenet.get_workload(batch_size=batch_size, version='1.1', dtype=dtype)
     elif name == 'inception_v3':
@@ -44,7 +46,7 @@ def get_network(name, batch_size, dtype="float32", image_shape=(3, 224, 224), la
 def fuse_tasks(tasks, tuning_opt, target_str="cuda"):
     if tuning_opt.no_fusion:
         return tasks
-    target = tvm.target.create(target_str)
+    target = tvm.target.Target(target_str)
 
     # Collect all fusable layers
     tmp_tasks = []
@@ -61,7 +63,6 @@ def fuse_tasks(tasks, tuning_opt, target_str="cuda"):
                 # Append the fused task
                 parameters = get_fusion_parameters_from_tasks(previous_task, task, layout)
                 sargs = autotvm.task.topi_integration.serialize_args([parameters])
-                print(target.kind.name)
                 t = autotvm.task.create('fused_conv2d.{}'.format('cuda' if target.kind.name == 'cuda' else 'x86'), args=sargs, target=target_str)
                 tmp_tasks.append(t)
         previous_task = task
@@ -91,12 +92,12 @@ def tune_tasks(tasks,
         tuner = autotvm.tuner.XGBTuner(task, feature_type="curve")
 
         # Transfer learning if the training log exists
-        if tuning_opt.auto_tvm_transfer_learning and os.path.isfile(log_filename):
+        if tuning_opt.autotvm_transfer_learning and os.path.isfile(log_filename):
             tuner.load_history(autotvm.record.load_from_file(log_filename))
 
-        task_trial = min(tuning_opt.auto_tvm_trials, len(task.config_space))
+        task_trial = min(tuning_opt.autotvm_trials, len(task.config_space))
         tuner.tune(n_trial=task_trial,
-                    early_stopping=tuning_opt.auto_tvm_early_stopping,
+                    early_stopping=tuning_opt.autotvm_early_stopping,
                     measure_option=measure_option,
                     callbacks=[
                         autotvm.callback.progress_bar(task_trial, prefix=prefix),
@@ -109,8 +110,8 @@ def tune_tasks(tasks,
 # Use graph tuner to achieve graph level optimal schedules
 # Set use_DP=False if it takes too long to finish.
 def tune_graph(graph, dshape, target_str, records, opt_sch_file, use_DP=True):
-    target = tvm.target.create(target_str)
-    target_op = [relay.op.get("nn.conv2d"),]
+    target = tvm.target.Target(target_str)
+    target_op = [relay.op.get("nn.conv2d"), relay.op.get("nn.fused_conv2d")] # Tune fused_conv2d too.
     Tuner = DPTuner if use_DP else PBQPTuner
     executor = Tuner(graph, {'data': dshape}, records, target_op, target)
     executor.benchmark_layout_transform(min_exec_num=2000)
@@ -137,21 +138,31 @@ def tune_and_evaluate(tuning_opt, target_str, network='mobilenet_v1', dtype='flo
     print("\n### Before replacement")
     pprint(tasks)
     tasks = fuse_tasks(tasks, tuning_opt, target_str=target_str)
-    opt_level = 3 if tuning_opt.no_fusion else 5
     print("\n### After replacement")
     pprint(tasks)
     print("\n")
 
     # Run tuning tasks
-    if not tuning_opt.auto_tvm_skip_training:
+    if not tuning_opt.autotvm_skip_training:
         tune_tasks(tasks, tuning_opt, target_str=target_str, log_filename=log_filename)
-        if 'llvm' in target_str: # Tune graph for CPU
-            tune_graph(mod["main"], input_shape, target_str, log_filename, graph_opt_sch_file)
+
+    # Tune graph for CPU
+    if not tuning_opt.autotvm_skip_graph_tuning and ('llvm' in target_str):
+        tmp_f = mod['main']
+        if not tuning_opt.no_fusion:
+            # Replace BN with multiply add
+            tmp_f = rewrite(ReplaceBatchNormCallback(), tmp_f)
+            # Fuse two conv layers
+            tmp_f = rewrite(FusedConv2DCallback(), tmp_f)
+        tune_graph(tmp_f, input_shape, target_str, log_filename, graph_opt_sch_file)
 
     # Compile kernels with history best records
     with (autotvm.apply_history_best(log_filename) if 'cuda' in target_str else autotvm.apply_graph_best(graph_opt_sch_file)):
-        print('Compile...')
-        with tvm.transform.PassContext(opt_level=opt_level, trace=print_ir, disabled_pass=DISABLED_PASS):
+        print("############### Compile... ###############")
+        if not tuning_opt.no_fusion:
+            mod = fuse_preprocess(mod['main'], params, target_str)
+
+        with tvm.transform.PassContext(opt_level=3, trace=print_ir):
             # """
             # build = optimize + generate_code
             # build / generate_code: return mod
@@ -196,14 +207,16 @@ if __name__ == '__main__':
         parser = argparse.ArgumentParser(description="Parses command.")
         parser.add_argument("-c", "--use_nchw", action="store_true", help="Use NCHW as the layout for baseline.")
         parser.add_argument("-d", "--enable_debugger", action="store_true", help="Enable debugger.")
-        parser.add_argument("-e", "--auto_tvm_early_stopping", type=int, default=800, help="Number of AutoTVM early stopping trials")
-        parser.add_argument("-k", "--auto_tvm_skip_training", action="store_true", help="Run AutoTVM tuned kernel.")
-        parser.add_argument("-l", "--auto_tvm_transfer_learning", action="store_true", help="Load existing tuning log.")
+        parser.add_argument("-e", "--autotvm_early_stopping", type=int, default=800, help="Number of AutoTVM early stopping trials")
+        parser.add_argument("-k", "--autotvm_skip_training", action="store_true", help="Run AutoTVM tuned kernel.")
+        parser.add_argument("-l", "--autotvm_transfer_learning", action="store_true", help="Load existing kernel tuning log.")
+        parser.add_argument("-p", "--autotvm_skip_graph_tuning", action="store_true", help="Load existing graph tuning log.")
         parser.add_argument("-n", "--no_fusion", action="store_true", help="No fusion.")
-        parser.add_argument("-t", "--auto_tvm_trials", type=int, default=2000, help="Number of AutoTVM trials")
+        parser.add_argument("-t", "--autotvm_trials", type=int, default=2000, help="Number of AutoTVM trials")
         options = parser.parse_args()
         return options
 
     options = get_options()
     ### target: 'cuda', 'llvm -mcpu=core-avx2', 'llvm -mcpu=core-avx512'
+    ### network: mobilenet_v1, mobilenet_v2, mnasnet_a1
     tune_and_evaluate(options, target_str='cuda', network='mobilenet_v1')

@@ -17,7 +17,7 @@ target_str = 'llvm -mcpu=core-avx2'
 # target_str = 'cuda'
 target = tvm.target.Target(target_str)
 
-def tune_graph(graph, dshape, target_str, records, opt_sch_file, use_DP=True, fuse=False, params=None):
+def tune_graph(graph, dshape, target_str, records, opt_sch_file, use_DP=True):
     target = tvm.target.Target(target_str)
     target_op = [relay.op.get("nn.conv2d"), relay.op.get("nn.fused_conv2d")] # Tune fused_conv2d too.
     Tuner = DPTuner if use_DP else PBQPTuner
@@ -63,26 +63,20 @@ def aggressive_fuse(fuse=False):
             tmp_f = rewrite(ReplaceBatchNormCallback(), tmp_f)
             # Fuse two conv layers
             tmp_f = rewrite(FusedConv2DCallback(), tmp_f)
-            layout = 'NHWC'
 
-        mod = tvm.IRModule.from_expr(tmp_f)
         tune_graph(tmp_f, (1, 112, 112, 32) if layout == 'NHWC' else (1, 32, 112, 112), target_str, log_filename, graph_opt_sch_file)
 
     # compile kernels with history best records
     # with (autotvm.apply_history_best(log_filename) if 'cuda' in target_str else autotvm.apply_graph_best(graph_opt_sch_file)):
     with (autotvm.apply_history_best(log_filename) if 'cuda' in target_str else autotvm.apply_graph_best(graph_opt_sch_file)):
         print("############### Compile... ###############")
-        # disabled_pass: to prevent 'multiply' from being eliminated
-        # TODO: Fix this
-
         if fuse:
             mod = fuse_preprocess(f, params, target_str)
         else:
             mod = tvm.IRModule.from_expr(f)
             mod = relay.transform.InferType()(mod)
 
-        with tvm.transform.PassContext(opt_level=3, trace=print_ir,
-            disabled_pass=['ForwardFoldScaleAxis','BackwardFoldScaleAxis']):
+        with tvm.transform.PassContext(opt_level=3, trace=print_ir):
             # """
             # build = optimize + generate_code
             # build / generate_code: return mod

@@ -33,19 +33,17 @@ def schedule_depth_conv_fused_nhwc(outs):
     s[layer_output_dict['Layer_0']].set_scope('shared')
 
     if bn_relu[0]:
-        s[stage_dict['Output_0_ScaleShift']].compute_inline()
+        s[stage_dict['Output_0_BiasAdd']].compute_inline()
         s[stage_dict['Output_0']].set_scope('local')
-        ScaleL_1 = s.cache_read(param_dict['Scale_0'], 'local', [stage_dict['Output_0_ScaleShift']])
-        ShiftL_1 = s.cache_read(param_dict['Shift_0'], 'local', [stage_dict['Output_0_ScaleShift']])
+        BiasL_1 = s.cache_read(param_dict['Bias_0'], 'local', [stage_dict['Output_0_BiasAdd']])
         DepthwiseLocalAccumulator = stage_dict['Output_0']
     else:
         DepthwiseLocalAccumulator = s.cache_write(layer_output_dict['Layer_0'], 'local')
 
     if bn_relu[1]:
-        s[stage_dict['Output_1_ScaleShift']].compute_inline()
+        s[stage_dict['Output_1_BiasAdd']].compute_inline()
         s[stage_dict['Output_1']].set_scope('local')
-        ScaleL_2 = s.cache_read(param_dict['Scale_1'], 'local', [stage_dict['Output_1_ScaleShift']])
-        ShiftL_2 = s.cache_read(param_dict['Shift_1'], 'local', [stage_dict['Output_1_ScaleShift']])
+        BiasL_2 = s.cache_read(param_dict['Bias_1'], 'local', [stage_dict['Output_1_BiasAdd']])
         OL = stage_dict['Output_1']
     else:
         OL = s.cache_write(layer_output_dict['Layer_1'], 'local')
@@ -86,8 +84,7 @@ def schedule_depth_conv_fused_nhwc(outs):
     s[OL].reorder(n, xocc, xoicc, h, w, oc, xiicc)
 
     if bn_relu[1]:
-        s[ScaleL_2].compute_at(s[layer_output_dict['Layer_1']], thx)
-        s[ShiftL_2].compute_at(s[layer_output_dict['Layer_1']], thx)
+        s[BiasL_2].compute_at(s[layer_output_dict['Layer_1']], thx)
 
     # ######## Shared 1by1 filter
     s[FS_2].compute_at(s[OL], xoicc)
@@ -121,8 +118,7 @@ def schedule_depth_conv_fused_nhwc(outs):
     s[DepthwiseLocalAccumulator].reorder(n, c, ry, rx, h, w)
 
     if bn_relu[0]:
-        s[ScaleL_1].compute_at(s[layer_output_dict['Layer_0']], inter_ci)
-        s[ShiftL_1].compute_at(s[layer_output_dict['Layer_0']], inter_ci)
+        s[BiasL_1].compute_at(s[layer_output_dict['Layer_0']], inter_ci)
 
     # ######## Depthwise filter
     s[FL_1].compute_at(s[layer_output_dict['Layer_0']], inter_co)
