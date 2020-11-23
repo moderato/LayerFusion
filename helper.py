@@ -209,6 +209,11 @@ def get_fusion_parameters_from_fused_conv2d_attrs(attrs, inputs):
                 param.append(inputs[0].shape[1])
                 param.append(inputs[0].shape[2])
                 param.append(inputs[0].shape[3])
+            elif layout == 'NCHW':
+                param.append(inputs[0].shape[0])
+                param.append(inputs[0].shape[2])
+                param.append(inputs[0].shape[3])
+                param.append(inputs[0].shape[1])
             elif _NCHWc_matcher.match(layout):
                 param.append(inputs[0].shape[0])
                 param.append(inputs[0].shape[2])
@@ -414,19 +419,15 @@ class FusedConv2DCallback(DFPatternCallback):
         super(FusedConv2DCallback, self).__init__()
         self.data = wildcard()
         self.weight1 = wildcard()
-        self.scale1 = wildcard()
-        self.shift1 = wildcard()
+        self.bias1 = wildcard()
         self.weight2 = wildcard()
-        self.scale2 = wildcard()
-        self.shift2 = wildcard()
+        self.bias2 = wildcard()
 
         pattern = is_op('nn.conv2d')(self.data, self.weight1)
-        pattern = is_op('multiply')(pattern, self.scale1)
-        pattern = is_op('add')(pattern, self.shift1)
+        pattern = is_op('add')(pattern, self.bias1)
         pattern = is_op('nn.relu')(pattern)
         pattern = is_op('nn.conv2d')(pattern, self.weight2).has_attr({'groups': 1}) # 2nd Conv should be a normal one
-        pattern = is_op('multiply')(pattern, self.scale2)
-        pattern = is_op('add')(pattern, self.shift2)
+        pattern = is_op('add')(pattern, self.bias2)
         pattern = is_op('nn.relu')(pattern)
         self.pattern = pattern
         self.num_layers = 2
@@ -434,11 +435,9 @@ class FusedConv2DCallback(DFPatternCallback):
     def callback(self, pre, post, node_map):
         data = node_map[self.data][0]
         weight1 = node_map[self.weight1][0]
-        scale1 = node_map[self.scale1][0]
-        shift1 = node_map[self.shift1][0]
+        bias1 = node_map[self.bias1][0]
         weight2 = node_map[self.weight2][0]
-        scale2 = node_map[self.scale2][0]
-        shift2 = node_map[self.shift2][0]
+        bias2 = node_map[self.bias2][0]
 
         strides_array = []
         padding_array = []
@@ -508,10 +507,7 @@ class ReplaceBatchNormCallback(DFPatternCallback):
     def callback(self, pre, post, node_map):
         x = node_map[self.x][0]
         beta = node_map[self.beta][0]
-        gamma = node_map[self.gamma][0]
-
-        mul = relay.multiply(x, gamma)
-        add = relay.add(mul, beta)
+        add = relay.add(x, beta)
         return add
 
 def fuse_preprocess(f, params, target_str):
