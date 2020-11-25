@@ -26,18 +26,18 @@ class FusionComposer:
         assert(idx >= 0 and idx < self.layer_num)
         return self.layers[idx+1][0]
 
-    def get_bn_relu(self, idx):
+    def get_post_op(self, idx):
         assert(idx >= 0 and idx < self.layer_num)
-        return self.layers[idx][1].bn_relu
+        return self.layers[idx][1].post_op
 
-    def make_placeholders(self, skip_bn_relu=False):
+    def make_placeholders(self, skip_post_op=False):
         placeholders = []
         placeholders.append(te.placeholder(self.get_input_cfg(0).get_shape(), name='Input'))
         for idx in range(self.layer_num):
             filter_cfg = self.get_filter_cfg(idx)
             placeholders.append(te.placeholder(filter_cfg.get_shape(), name='Filter_{}'.format(idx)))
 
-            if self.get_bn_relu(idx) and not skip_bn_relu:
+            if self.get_post_op(idx) and not skip_post_op:
                 output_cfg = self.get_output_cfg(idx)
                 placeholders.append(te.placeholder((output_cfg.C,), name='Bias_{}'.format(idx)))
         return placeholders
@@ -172,7 +172,7 @@ class FusionComposer:
             else:
                 flop += 2 * (ocfg.N * ocfg.H * ocfg.W * ocfg.C) * (fcfg.H * fcfg.W * fcfg.I)
 
-            if fcfg.bn_relu:
+            if fcfg.post_op:
                 flop += 2 * (ocfg.N * ocfg.H * ocfg.W * ocfg.C)
         return flop
 
@@ -314,7 +314,7 @@ class FusionComposer:
                                                 tag='conv2d_nhwc')
         return Output
 
-    def process_relu(self, Input, Bias):
+    def process_post_ops(self, Input, Bias):
         if self.pack:
             _, _, _, _, OC_vec = Input.shape
             BiasAdd =  te.compute(Input.shape, lambda n, c_chunk, h, w, c_vec: Input[n, c_chunk, h, w, c_vec] + Bias[c_chunk * OC_vec + c_vec],
@@ -329,7 +329,7 @@ class FusionComposer:
         # if block_input is not None:
         #     inputs = block_input if isinstance(block_input, list) else [block_input]
         #     First = inputs[0] # TODO: Support multiple branches addition later
-        #     Last = self.stages[-1][-1] # Output if bn_relu is None, BiasAdd if it's not None
+        #     Last = self.stages[-1][-1] # Output if post_op is None, BiasAdd if it's not None
         #     assert sorted(get_const_tuple(First.shape)) == sorted(get_const_tuple(Last.shape)), '{} is not the same as {}'.format(First.shape, Last.shape)
         #     if self.pack:
         #         Output = te.compute(self.output_shape,
@@ -345,10 +345,12 @@ class FusionComposer:
         # Last = self.stages[-1][-1] # BiasAdd if it's not a block, Output if it's a block
 
         Last = BiasAdd
-        if self.filter_cfg.bn_relu == 'relu':
+        if self.filter_cfg.post_op == 'relu':
             Last = te.compute(Last.shape,
                             lambda *i: te.max(Last(*i), tvm.runtime.const(0, Last.dtype)),
                             name='ReLU_{}'.format(self.layer_idx), tag='relu')
+        elif self.filter_cfg.post_op == 'relu':
+            Last = te.compute(Last.shape, lambda *i: te.sigmoid(Last(*i)))
         else: # 'relu6'
             Last = te.compute(Last.shape,
                             lambda *i: te.min(te.max(Last(*i), tvm.runtime.const(0, Last.dtype)), tvm.runtime.const(6, Last.dtype)),
@@ -356,17 +358,13 @@ class FusionComposer:
         return Last
 
     # TODO: integrate with TOPI
-    def get_compute(self, skip_bn_relu=False):
+    def get_compute(self, skip_post_op=False):
         def wrapper(input_tensors):
             task_env = TaskExtractEnv.current
             args = autotvm.task.topi_integration.serialize_args([self.parameters])
             if task_env is not None and task_env.tracing:
                 task_env.add_task(self.task_name, args)
             workload = ((self.task_name),) + autotvm.task.topi_integration.serialize_args([self.parameters])
-            # tgt = tvm.target.Target.current()
-            # cfg = autotvm.DispatchContext.current.query(tgt, workload)
-            # if not isinstance(cfg, tvm.autotvm.task.space.ConfigSpace):
-            #     self.update_all_shapes_from_best_cfg(cfg)
 
             def compute(input_tensors):
                 Feature = input_tensors[0]
@@ -384,10 +382,10 @@ class FusionComposer:
                     else:
                         Feature = self.make_conv_output(Feature, Filter)
 
-                    if (self.get_bn_relu(idx) is not None) and (not skip_bn_relu):
+                    if (self.get_post_op(idx) is not None) and (not skip_post_op):
                         Bias = input_tensors[tensor_idx + 1]
                         tensor_idx += 2
-                        Feature = self.process_relu(Feature, Bias)
+                        Feature = self.process_post_ops(Feature, Bias)
                     else:
                         tensor_idx += 1
                 return Feature
@@ -494,7 +492,7 @@ class FusionComposer:
         for i in range(self.layer_num):
             DATA, KERNEL = self.layers[i]
             print('Input_{} size: {}'.format(i, DATA.get_shape()))
-            print('Filter_{} size: {}, depthwise: {}, bn_relu: {}'.format(i, KERNEL.get_shape(), KERNEL.depthwise, KERNEL.bn_relu))
+            print('Filter_{} size: {}, depthwise: {}, post_op: {}'.format(i, KERNEL.get_shape(), KERNEL.depthwise, KERNEL.post_op))
             print('Is a block: {}'.format(self.is_block))
         # OUTPUT = self.layers[-1][0]
         print('Output size: {}'.format(DATA.get_shape()))
@@ -548,7 +546,7 @@ class FusionComposer:
                 output_data = testing.conv2d_nhwc_python(input_data, filter_data, f.stride_h, padding=f.padding).astype(self.output_dtype)
                 params_name.append('filter_{}'.format(idx+1))
 
-            if f.bn_relu is not None:
+            if f.post_op is not None:
                 n, h, w, oc = output_data.shape
                 bias_np = np.random.uniform(0.0, 0.1, size=(oc,)).astype(self.output_dtype)
                 ref_data_no_transform.append(bias_np)
@@ -564,7 +562,7 @@ class FusionComposer:
                         bias_add_scipy[:,:,:,c] = bias_add_scipy[:,:,:,c] + input_data[:,:,:,c]
 
                     relu_scipy[:,:,:,c] = np.maximum(bias_add_scipy[:,:,:,c], 0)
-                    if f.bn_relu == 'relu6':
+                    if f.post_op == 'relu6':
                         relu_scipy[:,:,:,c] = np.minimum(relu_scipy[:,:,:,c], 6)
                 output_data = relu_scipy.astype(self.output_dtype)
                 params_name.append('bias_{}'.format(idx+1))
@@ -590,12 +588,14 @@ class FusionComposer:
                     else:
                         if len(ref_data[i].shape) == 4: # Don't need to save NCHW format for bias data
                             np.save(filename+'_NCHW', np.array(ref_data[i].transpose(0, 3, 1, 2), order='C'))
+                        else:
+                            np.save(filename, ref_data[i])
                 else:
                     if 'filter' in filename:
                         np.save(filename+'_NCHWc', ref_data[i]) # NCHWc data
                         np.save(filename+'_transposed', np.array(ref_data_no_transform[i].transpose(3, 2, 0, 1), order='C'))
                     else:
-                        if len(ref_data[i].shape) != 4: # Don't need to save NCHW format for bias data
+                        if len(ref_data[i].shape) == 5: # Don't need to save NCHW format for bias data
                             np.save(filename+'_NCHWc', ref_data[i]) # NCHWc data
                             np.save(filename+'_NCHW', np.array(ref_data_no_transform[i].transpose(0, 3, 1, 2), order='C')) # NHWC to NCHW
                         else:
@@ -791,6 +791,64 @@ def _fused_conv2d_infer_layout(workload, cfg):
     out_shape = output.shape
 
     return ((in_shape, in_layout),), ((out_shape, out_layout),)
+
+@reg.register_convert_op_layout("nn.fused_conv2d")
+def convert_fused_conv2d(attrs, inputs, tinfos, desired_layouts):
+    """Convert Layout pass registration for conv2d op.
+
+    Parameters
+    ----------
+    attrs : tvm.attrs.Attrs
+        Attributes of current convolution
+    inputs : list of tvm.relay.Expr
+        The args of the Relay expr to be legalized
+    tinfos : list of types
+        List of input and output types
+    desired_layouts : list of layout strings
+            List of layouts defining our desired
+            layout for the data and kernel inputs respectively.
+
+    Returns
+    -------
+    result : tvm.relay.Expr
+        The transformed expr
+    """
+
+    from tvm import relay
+    data, weight1, bias1, weight2, bias2 = inputs
+    new_attrs = dict(attrs)
+
+    # We expect 2 desired layouts to be specified, one for the data and one for the kernel.
+    assert len(desired_layouts) == 2, "A desired layout is expected for both of nn.fused_conv2d's inputs"
+
+    # Use the first entry in desired layouts which specifies the data layout.
+    # The expected ordering of layouts for this operator is defined by this function.
+    desired_data_layout, desired_kernel_layout = map(str, desired_layouts)
+    assert desired_data_layout != "default", "Data layout cannot be default"
+
+    num_layers = new_attrs['num_layers']
+    if desired_data_layout == 'NCHW':
+        for i in num_layers:
+            new_attrs['data_layout_array'][i] = desired_data_layout
+            if desired_kernel_layout != 'default':
+                new_attrs['kernel_layout_array'][i] = desired_kernel_layout
+            else:
+                new_attrs['kernel_layout_array'][i] = 'OIHW'
+        return relay.nn.conv2d(data, weight1, bias1, weight2, bias2, **new_attrs)
+        
+    elif desired_data_layout == 'NHWC':
+        for i in num_layers:
+            new_attrs['data_layout_array'][i] = desired_data_layout
+            if desired_kernel_layout != 'default':
+                new_attrs['kernel_layout_array'][i] = desired_kernel_layout
+            else:
+                if new_attrs['channels_array'][i] > 1: # group conv
+                    new_attrs['kernel_layout_array'][i] = 'HWOI'
+                else:
+                    new_attrs['kernel_layout_array'][i] = 'HWIO'
+        return relay.nn.conv2d(data, weight1, bias1, weight2, bias2, **new_attrs)
+
+    raise ValueError('Layout %s is not yet supported' % desired_data_layout)
 
 def test_compute():
     parameters = (1, 56, 56, 128, 3, 1, 1, True, 'relu', 1, 64, 1, False, 'relu', False)

@@ -307,37 +307,52 @@ def get_workloads():
     # conv_conv_workloads['vgg_11_12'] = (1, 14, 14, 512, 3, 512, 1, False, None, 3, 512, 1, False, None, False) # / 359.19 us
 
     # ResNet-50
-    conv_conv_workloads['res_2x'] = (1, 56, 56, 64, 3, 64, 1, False, 'relu', 1, 256, 1, False, 'relu', False)
-    conv_conv_workloads['res_3x'] = (1, 28, 28, 128, 3, 128, 1, False, None, 1, 512, 1, False, None, False)
-    conv_conv_workloads['res_4x'] = (1, 14, 14, 256, 3, 256, 1, False, None, 1, 1024, 1, False, None, False)
-    conv_conv_workloads['res_5x'] = (1, 7, 7, 512, 3, 512, 1, False, None, 1, 2048, 1, False, None, False)
+    conv_conv_workloads['res_2x'] = (1, 56, 56, 64, 3, 64, 1, False, 'relu', 1, 256, 1, False, None, False)
+    conv_conv_workloads['res_3x'] = (1, 28, 28, 128, 3, 128, 1, False, 'relu', 1, 512, 1, False, None, False)
+    conv_conv_workloads['res_4x'] = (1, 14, 14, 256, 3, 256, 1, False, 'relu', 1, 1024, 1, False, None, False)
+    conv_conv_workloads['res_5x'] = (1, 7, 7, 512, 3, 512, 1, False, 'relu', 1, 2048, 1, False, None, False)
 
-    # Test
-    conv_conv_workloads['conv_conv_test_tiny'] = (1, 8, 8, 1, 3, 1, 1, False, 'relu', 1, 1, 1, False, 'relu', False)
+    # MNasNet-A1 (Squeeze-excitation's 2 FCs)
+    conv_conv_workloads['mna1_3_1'] = (1, 28, 28, 72, 1, 18, 1, False, 'relu', 1, 72, 1, False, 'sigmoid', False)
+    conv_conv_workloads['mna1_3_2'] = (1, 28, 28, 120, 1, 30, 1, False, 'relu', 1, 120, 1, False, 'sigmoid', False)
+    conv_conv_workloads['mna1_5_1'] = (1, 14, 14, 240, 1, 60, 1, False, 'relu', 1, 240, 1, False, 'sigmoid', False)
+    conv_conv_workloads['mna1_5_2'] = (1, 14, 14, 336, 1, 84, 1, False, 'relu', 1, 336, 1, False, 'sigmoid', False)
+    conv_conv_workloads['mna1_6_1'] = (1, 7, 7, 336, 1, 84, 1, False, 'relu', 1, 336, 1, False, 'sigmoid', False)
+    conv_conv_workloads['mna1_6_2'] = (1, 7, 7, 480, 1, 120, 1, False, 'relu', 1, 480, 1, False, 'sigmoid', False)
+
+    # # Test
+    # conv_conv_workloads['conv_conv_test_tiny'] = (1, 8, 8, 1, 3, 1, 1, False, 'relu', 1, 1, 1, False, 'relu', False)
+    # conv_conv_workloads['res_test_tiny'] = (1, 8, 8, 8, 3, 8, 1, False, None, 1, 8, 1, False, None, False)
     ################################################################
 
     ##################### Depth conv workloads #####################
     # MobileNet-v1
-    depth_conv_workloads['mv1_1'] = (1, 112, 112, 32, 3, 1, 1, True, None, 1, 64, 1, False, None, False) # 67.28 us / 183.70us
-    depth_conv_workloads['mv1_2'] = (1, 112, 112, 64, 3, 1, 2, True, None, 1, 128, 1, False, None, False) # 91.97 us / 124.78 us
-    depth_conv_workloads['mv1_3'] = (1, 56, 56, 128, 3, 1, 1, True, None, 1, 128, 1, False, None, False) # 74.98 us / 134.67 us / 108.12 us (4, 4, 16, 4)
-    depth_conv_workloads['mv1_4'] = (1, 56, 56, 128, 3, 1, 2, True, None, 1, 256, 1, False, None, False) # 69.34 us / 75.01 us
-    depth_conv_workloads['mv1_5'] = (1, 28, 28, 256, 3, 1, 1, True, None, 1, 256, 1, False, None, False) # 79.91 us / 110.06 us / 117.21 us (2, 2, 8, 8)
-    depth_conv_workloads['mv1_6'] = (1, 28, 28, 256, 3, 1, 2, True, None, 1, 512, 1, False, None, False) # 70.35 us / 64.22 us
-    depth_conv_workloads['mv1_7-11'] = (1, 14, 14, 512, 3, 1, 1, True, None, 1, 512, 1, False, None, False) # 97.83 us / 112.37 us
-    depth_conv_workloads['mv1_12'] = (1, 14, 14, 512, 3, 1, 2, True, None, 1, 1024, 1, False, None, False) # 97.71 us / 164.36 us
-    depth_conv_workloads['mv1_13'] = (1, 7, 7, 1024, 3, 1, 1, True, None, 1, 1024, 1, False, None, False) # 129.61 us / 220.23 us
-    depth_conv_workloads['test_tiny'] = (1, 4, 4, 1, 3, 1, 1, True, None, 1, 1, 1, False, None, False)
-    depth_conv_workloads['test_single'] = (1, 56, 56, 64, 1, 64, 1, False, None, False)
+    depth_conv_workloads['mv1_1'] = (1, 112, 112, 32, 3, 1, 1, True, "relu", 1, 64, 1, False, "relu", False) # 67.28 us / 183.70us
+    depth_conv_workloads['mv1_2'] = (1, 112, 112, 64, 3, 1, 2, True, "relu", 1, 128, 1, False, "relu", False) # 91.97 us / 124.78 us
+    depth_conv_workloads['mv1_3'] = (1, 56, 56, 128, 3, 1, 1, True, "relu", 1, 128, 1, False, "relu", False) # 74.98 us / 134.67 us / 108.12 us (4, 4, 16, 4)
+    depth_conv_workloads['mv1_4'] = (1, 56, 56, 128, 3, 1, 2, True, "relu", 1, 256, 1, False, "relu", False) # 69.34 us / 75.01 us
+    depth_conv_workloads['mv1_5'] = (1, 28, 28, 256, 3, 1, 1, True, "relu", 1, 256, 1, False, "relu", False) # 79.91 us / 110.06 us / 117.21 us (2, 2, 8, 8)
+    depth_conv_workloads['mv1_6'] = (1, 28, 28, 256, 3, 1, 2, True, "relu", 1, 512, 1, False, "relu", False) # 70.35 us / 64.22 us
+    depth_conv_workloads['mv1_7-11'] = (1, 14, 14, 512, 3, 1, 1, True, "relu", 1, 512, 1, False, "relu", False) # 97.83 us / 112.37 us
+    depth_conv_workloads['mv1_12'] = (1, 14, 14, 512, 3, 1, 2, True, "relu", 1, 1024, 1, False, "relu", False) # 97.71 us / 164.36 us
+    depth_conv_workloads['mv1_13'] = (1, 7, 7, 1024, 3, 1, 1, True, "relu", 1, 1024, 1, False, "relu", False) # 129.61 us / 220.23 us
 
     # MobileNet-v2
-    depth_conv_workloads['mv2_1'] = (1, 112, 112, 32, 3, 1, 1, True, None, 1, 16, 1, False, None, False) # 38.19 us / 123.81 us
-    depth_conv_workloads['mv2_2'] = (1, 112, 112, 96, 3, 1, 2, True, None, 1, 24, 1, False, None, False) # 129.60 us / 117.13 us
-    depth_conv_workloads['mv2_3'] = (1, 56, 56, 144, 3, 1, 2, True, None, 1, 32, 1, False, None, False) # 39.25 us / 53.14 us
-    depth_conv_workloads['mv2_4'] = (1, 28, 28, 192, 3, 1, 2, True, None, 1, 64, 1, False, None, False) # 14.02 us / 35.55 us
-    depth_conv_workloads['mv2_5'] = (1, 14, 14, 384, 3, 1, 1, True, None, 1, 96, 1, False, None, False) # 37.07 us / 51.26 us
-    depth_conv_workloads['mv2_6'] = (1, 14, 14, 576, 3, 1, 2, True, None, 1, 160, 1, False, None, False) # 66.87 us / 65.03 us
-    depth_conv_workloads['mv2_7'] = (1, 7, 7, 960, 3, 1, 1, True, None, 1, 320, 1, False, None, False) # 104.16 us / 162.04 us
+    depth_conv_workloads['mv2_1'] = (1, 112, 112, 32, 3, 1, 1, True, "relu", 1, 16, 1, False, "relu", False) # 38.19 us / 123.81 us
+    depth_conv_workloads['mv2_2'] = (1, 112, 112, 96, 3, 1, 2, True, "relu", 1, 24, 1, False, "relu", False) # 129.60 us / 117.13 us
+    depth_conv_workloads['mv2_3'] = (1, 56, 56, 144, 3, 1, 2, True, "relu", 1, 32, 1, False, "relu", False) # 39.25 us / 53.14 us
+    depth_conv_workloads['mv2_4'] = (1, 28, 28, 192, 3, 1, 2, True, "relu", 1, 64, 1, False, "relu", False) # 14.02 us / 35.55 us
+    depth_conv_workloads['mv2_5'] = (1, 14, 14, 384, 3, 1, 1, True, "relu", 1, 96, 1, False, "relu", False) # 37.07 us / 51.26 us
+    depth_conv_workloads['mv2_6'] = (1, 14, 14, 576, 3, 1, 2, True, "relu", 1, 160, 1, False, "relu", False) # 66.87 us / 65.03 us
+    depth_conv_workloads['mv2_7'] = (1, 7, 7, 960, 3, 1, 1, True, "relu", 1, 320, 1, False, "relu", False) # 104.16 us / 162.04 us
+
+    # MNasNet-A1
+    depth_conv_workloads['mna1_1_1'] = (1, 112, 112, 32, 3, 1, 1, True, "relu", 1, 16, 1, False, None, False)
+    depth_conv_workloads['mna1_2_1'] = (1, 112, 112, 96, 3, 1, 2, True, "relu", 1, 24, 1, False, None, False)
+    depth_conv_workloads['mna1_2_2'] = (1, 56, 56, 144, 3, 1, 1, True, "relu", 1, 24, 1, False, None, False)
+    depth_conv_workloads['mna1_4_1'] = (1, 28, 28, 240, 3, 1, 2, True, "relu", 1, 80, 1, False, None, False)
+    depth_conv_workloads['mna1_4_2'] = (1, 14, 14, 480, 3, 1, 1, True, "relu", 1, 80, 1, False, None, False)
+    depth_conv_workloads['mna1_7_1'] = (1, 7, 7, 960, 3, 1, 1, True, "relu", 1, 320, 1, False, None, False)
     ################################################################
 
     ######################## Block workloads #######################
