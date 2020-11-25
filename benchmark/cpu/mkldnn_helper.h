@@ -13,6 +13,16 @@
   #define REPEATITION 1000
 #endif
 
+#ifndef NONE
+    #define NONE 0
+#endif
+#ifndef RELU
+    #define RELU  1
+#endif
+#ifndef RELU6
+    #define RELU6 2
+#endif
+
 // i7_7700K L3 cache size = 12 MB. Should be < 200 MB.
 #ifndef BIGGER_THAN_CACHESIZE
     #define BIGGER_THAN_CACHESIZE 3 * 1024 * 1024
@@ -95,17 +105,13 @@ void benchmark_mkldnn(std::string workload_name,
     std::string kernel_1_name = folder_name + (is_f1_depthwise ? "filter_1_d_transposed.npy" : "filter_1_transposed.npy");
     std::string kernel_2_name = folder_name + "filter_2_transposed.npy";
     std::string output_name = folder_name + "output_NCHW.npy";
-    std::string scale_1_name;
-    std::string shift_1_name;
-    std::string scale_2_name;
-    std::string shift_2_name;
+    std::string bias_1_name;
+    std::string bias_2_name;
     if (f1_activation) {
-        scale_1_name = folder_name + "scale_1.npy";
-        shift_1_name = folder_name + "shift_1.npy";
+        bias_1_name = folder_name + "bias_1.npy";
     }
     if (f2_activation) {
-        scale_2_name = folder_name + "scale_2.npy";
-        shift_2_name = folder_name + "shift_2.npy";
+        bias_2_name = folder_name + "bias_2.npy";
     }
 
 #ifdef DEBUG
@@ -144,15 +150,6 @@ void benchmark_mkldnn(std::string workload_name,
     dnnl::memory::dims padding_1_dims = {padding_1_h, padding_1_w};
     dnnl::memory::dims padding_2_dims = {padding_2_h, padding_2_w};
 
-    dnnl::memory::dims scale_shift_1_dims;
-    dnnl::memory::dims scale_shift_2_dims;
-    if (f1_activation) {
-        scale_shift_1_dims = {2, inter_channel};
-    }
-    if (f2_activation) {
-        scale_shift_2_dims = {2, output_channel};
-    }
-
 #ifdef DEBUG
     std::cout << "npy_input_shape: (" << input_dims[0] << ", " << input_dims[1] << ", " << input_dims[2] << ", " << input_dims[3] << ")" << std::endl;
     std::cout << "npy_kernel_1_shape: (" << filter_1_dims[0] << ", " << filter_1_dims[1] << ", " << filter_1_dims[2] << ", " << filter_1_dims[3] << ", " << filter_1_dims[4] << ")" << std::endl;
@@ -164,19 +161,8 @@ void benchmark_mkldnn(std::string workload_name,
     cnpy::NpyArray input_npy = cnpy::npy_load(input_name);
     cnpy::NpyArray kernel_1_npy = cnpy::npy_load(kernel_1_name);
     cnpy::NpyArray kernel_2_npy = cnpy::npy_load(kernel_2_name);
-
-    cnpy::NpyArray scale_1_npy;
-    cnpy::NpyArray shift_1_npy;
-    cnpy::NpyArray scale_2_npy;
-    cnpy::NpyArray shift_2_npy;
-    if (f1_activation) {
-        scale_1_npy = cnpy::npy_load(scale_1_name);
-        shift_1_npy = cnpy::npy_load(shift_1_name);
-    }
-    if (f2_activation) {
-        scale_2_npy = cnpy::npy_load(scale_2_name);
-        shift_2_npy = cnpy::npy_load(shift_2_name);
-    }
+    cnpy::NpyArray bias_1_npy = cnpy::npy_load(bias_1_name);
+    cnpy::NpyArray bias_2_npy = cnpy::npy_load(bias_2_name);
 
     // For verification
     cnpy::NpyArray output_npy = cnpy::npy_load(output_name);
@@ -192,36 +178,17 @@ void benchmark_mkldnn(std::string workload_name,
     // Buffers
     std::vector<float> input_data(input_shape);
     std::vector<float> filter_1_data(filter_1_shape);
-    std::vector<float> bias_1_data(inter_channel, 0.0f);
+    std::vector<float> bias_1_data(inter_channel);
     std::vector<float> filter_2_data(filter_2_shape);
-    std::vector<float> bias_2_data(output_channel, 0.0f);
+    std::vector<float> bias_2_data(output_channel);
     std::vector<float> output_data(output_shape);
-
-    std::vector<float> mean_1_data;
-    std::vector<float> var_1_data;
-    std::vector<float> mean_2_data;
-    std::vector<float> var_2_data;
-    std::vector<float> scale_shift_1_data;
-    std::vector<float> scale_shift_2_data;
 
     // Initialize buffers
     copy(input_npy.data<float>() + 0, input_npy.data<float>() + input_shape, input_data.begin());
     copy(kernel_1_npy.data<float>() + 0, kernel_1_npy.data<float>() + filter_1_shape, filter_1_data.begin());
+    copy(bias_1_npy.data<float>() + 0, bias_1_npy.data<float>() + inter_channel, bias_1_data.begin());
     copy(kernel_2_npy.data<float>() + 0, kernel_2_npy.data<float>() + filter_2_shape, filter_2_data.begin());
-    if (f1_activation) {
-        mean_1_data.resize(inter_channel, 0.0f);
-        var_1_data.resize(inter_channel, 1.0f);
-        scale_shift_1_data.reserve(inter_channel * 2);
-        copy(scale_1_npy.data<float>() + 0, scale_1_npy.data<float>() + inter_channel, scale_shift_1_data.begin());
-        copy(shift_1_npy.data<float>() + 0, shift_1_npy.data<float>() + inter_channel, scale_shift_1_data.begin() + inter_channel);
-    }
-    if (f2_activation) {
-        mean_2_data.resize(output_channel, 0.0f);
-        var_2_data.resize(output_channel, 1.0f);
-        scale_shift_2_data.reserve(output_channel * 2);
-        copy(scale_2_npy.data<float>() + 0, scale_2_npy.data<float>() + output_channel, scale_shift_2_data.begin());
-        copy(shift_2_npy.data<float>() + 0, shift_2_npy.data<float>() + output_channel, scale_shift_2_data.begin() + output_channel);
-    }
+    copy(bias_2_npy.data<float>() + 0, bias_2_npy.data<float>() + output_channel, bias_2_data.begin());
 
     // Memory descriptors for arbitrary layouts.
     auto input_md = dnnl::memory::desc({input_dims}, dt::f32, tag::any);
@@ -231,18 +198,6 @@ void benchmark_mkldnn(std::string workload_name,
     auto filter_2_md = dnnl::memory::desc({filter_2_dims}, dt::f32, tag::any);
     auto bias_2_md = dnnl::memory::desc({bias_2_dims}, dt::f32, tag::a);
     auto output_md = dnnl::memory::desc({output_dims}, dt::f32, tag::any);
-
-    dnnl::memory::desc mean_1_md, var_1_md, scale_shift_1_md, mean_2_md, var_2_md, scale_shift_2_md;
-    if (f1_activation) {
-        mean_1_md = dnnl::memory::desc({inter_channel}, dt::f32, tag::a);
-        var_1_md = dnnl::memory::desc({inter_channel}, dt::f32, tag::a);
-        scale_shift_1_md = dnnl::memory::desc({scale_shift_1_dims}, dt::f32, tag::ab);
-    }
-    if (f2_activation) {
-        mean_2_md = dnnl::memory::desc({output_channel}, dt::f32, tag::a);
-        var_2_md = dnnl::memory::desc({output_channel}, dt::f32, tag::a);
-        scale_shift_2_md = dnnl::memory::desc({scale_shift_2_dims}, dt::f32, tag::ab);
-    }
 
     // Create operation descriptor. 
     auto conv_desc_1 = dnnl::convolution_forward::desc(dnnl::prop_kind::forward_inference,
@@ -263,43 +218,27 @@ void benchmark_mkldnn(std::string workload_name,
     auto bias_2_mem = dnnl::memory(bias_2_md, engine);
     auto output_mem = dnnl::memory({{output_dims}, dt::f32, tag::nchw}, engine); // No data
 
-    dnnl::memory mean_1_mem, var_1_mem, scale_shift_1_mem, mean_2_mem, var_2_mem, scale_shift_2_mem;
-    dnnl::memory inter_bn_mem, output_bn_mem;
-    if (f1_activation) {
-        mean_1_mem = dnnl::memory(mean_1_md, engine);
-        var_1_mem = dnnl::memory(var_1_md, engine);
-        scale_shift_1_mem = dnnl::memory(scale_shift_1_md, engine);
-    }
-    if (f2_activation) {
-        mean_2_mem = dnnl::memory(mean_2_md, engine);
-        var_2_mem = dnnl::memory(var_2_md, engine);
-        scale_shift_2_mem = dnnl::memory(scale_shift_2_md, engine);
-    }
-
     // Write data to memory object's handle.
     write_to_dnnl_memory(input_data.data(), input_mem);
     write_to_dnnl_memory(filter_1_data.data(), filter_1_mem);
     write_to_dnnl_memory(bias_1_data.data(), bias_1_mem);
     write_to_dnnl_memory(filter_2_data.data(), filter_2_mem);
     write_to_dnnl_memory(bias_2_data.data(), bias_2_mem);
-    if (f1_activation) {
-        write_to_dnnl_memory(mean_1_data.data(), mean_1_mem);
-        write_to_dnnl_memory(var_1_data.data(), var_1_mem);
-        write_to_dnnl_memory(scale_shift_1_data.data(), scale_shift_1_mem);
-    }
-    if (f2_activation) {
-        write_to_dnnl_memory(mean_2_data.data(), mean_2_mem);
-        write_to_dnnl_memory(var_2_data.data(), var_2_mem);
-        write_to_dnnl_memory(scale_shift_2_data.data(), scale_shift_2_mem);
-    }
 
-    // BN flags
-    dnnl::normalization_flags flags = dnnl::normalization_flags::use_global_stats | dnnl::normalization_flags::use_scale_shift | normalization_flags::fuse_norm_relu;
-
-    dnnl::post_ops conv_ops_1, conv_ops_2;
+    dnnl::post_ops post_ops_1, post_ops_2;
     dnnl::primitive_attr conv_attr_1, conv_attr_2;
-    conv_attr_1.set_post_ops(conv_ops_1);
-    conv_attr_2.set_post_ops(conv_ops_2);
+    if (f1_activation == RELU) {
+        post_ops_1.append_eltwise(1.0f, algorithm::eltwise_relu, 0.0f, 0.0f);
+    } else if (f1_activation == RELU6) {
+        post_ops_1.append_eltwise(1.0f, algorithm::eltwise_clip, 0.0f, 6.0f);
+    }
+    if (f2_activation == RELU) {
+        post_ops_2.append_eltwise(1.0f, algorithm::eltwise_relu, 0.0f, 0.0f);
+    } else if (f2_activation == RELU6) {
+        post_ops_2.append_eltwise(1.0f, algorithm::eltwise_clip, 0.0f, 6.0f);
+    }
+    conv_attr_1.set_post_ops(post_ops_1);
+    conv_attr_2.set_post_ops(post_ops_2);
 
     // Create primitive descriptors. Optimal layouts are figured out HERE.
     auto conv_pd_1 = dnnl::convolution_forward::primitive_desc(conv_desc_1, conv_attr_1, engine);
@@ -336,30 +275,15 @@ void benchmark_mkldnn(std::string workload_name,
     pr_profile.push_back(dnnl::convolution_forward(conv_pd_1));
     pr_profile_args.push_back(conv_args_1);
 
-    if (f1_activation) {
-        // bn
-        inter_bn_mem = dnnl::memory(conv_pd_1.dst_desc(), engine);
-	    auto bn_desc_1 = dnnl::batch_normalization_forward::desc(dnnl::prop_kind::forward_inference, inter_bn_mem.get_desc(), 1.e-10f, flags);
-        auto bn_pd_1 = dnnl::batch_normalization_forward::primitive_desc(bn_desc_1, engine);
-        std::unordered_map<int, dnnl::memory> bn_args_1;
-        bn_args_1.insert({MKLDNN_ARG_SRC, conv_inter_mem});
-        bn_args_1.insert({MKLDNN_ARG_MEAN, mean_1_mem});
-        bn_args_1.insert({MKLDNN_ARG_VARIANCE, var_1_mem});
-        bn_args_1.insert({MKLDNN_ARG_SCALE_SHIFT, scale_shift_1_mem});
-        bn_args_1.insert({MKLDNN_ARG_DST, inter_bn_mem});
-        pr_profile.push_back(dnnl::batch_normalization_forward(bn_pd_1));
-        pr_profile_args.push_back(bn_args_1);
-    }
-
     // Reorder the data if necessary
     dnnl::memory tmp_inter_mem;
     if (conv_pd_2.src_desc() != conv_pd_1.dst_desc()) {
         std::cout << "reorder intermediate" << std::endl;
         tmp_inter_mem = dnnl::memory(conv_pd_2.src_desc(), engine);
-        pr_profile.push_back(dnnl::reorder((f1_activation ? inter_bn_mem : conv_inter_mem), tmp_inter_mem)); // Layout transformation of intermediate should be profiled
-        pr_profile_args.push_back({{MKLDNN_ARG_FROM, (f1_activation ? inter_bn_mem : conv_inter_mem)}, {MKLDNN_ARG_TO, tmp_inter_mem}});
+        pr_profile.push_back(dnnl::reorder(conv_inter_mem, tmp_inter_mem)); // Layout transformation of intermediate should be profiled
+        pr_profile_args.push_back({{MKLDNN_ARG_FROM, conv_inter_mem}, {MKLDNN_ARG_TO, tmp_inter_mem}});
     } else {
-        tmp_inter_mem = (f1_activation ? inter_bn_mem : conv_inter_mem);
+        tmp_inter_mem = conv_inter_mem;
     }
     if (conv_pd_2.weights_desc() != filter_2_mem.get_desc()) {
         conv_filter_2_mem = dnnl::memory(conv_pd_2.weights_desc(), engine);
@@ -379,29 +303,14 @@ void benchmark_mkldnn(std::string workload_name,
     pr_profile.push_back(dnnl::convolution_forward(conv_pd_2));
     pr_profile_args.push_back(conv_args_2);
 
-    if (f2_activation) {
-        // bn
-        output_bn_mem = dnnl::memory(conv_pd_2.dst_desc(), engine);
-        auto bn_desc_2 = dnnl::batch_normalization_forward::desc(dnnl::prop_kind::forward_inference, output_bn_mem.get_desc(), 1.e-10f, flags);
-        auto bn_pd_2 = dnnl::batch_normalization_forward::primitive_desc(bn_desc_2, engine);
-        std::unordered_map<int, dnnl::memory> bn_args_2;
-        bn_args_2.insert({MKLDNN_ARG_SRC, conv_output_mem});
-        bn_args_2.insert({MKLDNN_ARG_MEAN, mean_2_mem});
-        bn_args_2.insert({MKLDNN_ARG_VARIANCE, var_2_mem});
-        bn_args_2.insert({MKLDNN_ARG_SCALE_SHIFT, scale_shift_2_mem});
-        bn_args_2.insert({MKLDNN_ARG_DST, output_bn_mem});
-        pr_profile.push_back(dnnl::batch_normalization_forward(bn_pd_2));
-        pr_profile_args.push_back(bn_args_2);
-    }
-
     // Reorder the data in case the dst memory descriptor generated by the
     // primitive and the one provided by the user are different.
     if (conv_pd_2.dst_desc() != output_mem.get_desc()) {
-        auto tmp_output_mem = (f2_activation) ? output_bn_mem : conv_output_mem;
+        auto tmp_output_mem = conv_output_mem;
         pr_not_profile.push_back(dnnl::reorder(tmp_output_mem, output_mem));
         pr_not_profile_args.push_back({{MKLDNN_ARG_FROM, tmp_output_mem}, {MKLDNN_ARG_TO, output_mem}});
     } else {
-        output_mem = (f2_activation) ? output_bn_mem : conv_output_mem;
+        output_mem = conv_output_mem;
     }
 
     // Benchmark

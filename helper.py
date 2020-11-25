@@ -464,6 +464,7 @@ class FusedConv2DCallback(DFPatternCallback):
                 groups_array.append(tmp.attrs['groups'])
                 channels_array.append(tmp.attrs['channels'])
                 kernel_size_array.append(tmp.attrs['kernel_size'])
+                bn_relu_array.append('relu')
                 data_layout_array.append(tmp.attrs['data_layout'])
                 kernel_layout_array.append(tmp.attrs['kernel_layout'])
                 out_layout_array.append(tmp.attrs['out_layout'])
