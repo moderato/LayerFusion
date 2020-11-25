@@ -84,8 +84,8 @@ class FeatureConfig:
         return self.shape
 
 class FilterConfig:
-    def __init__(self, H, W, I, O, stride_h, stride_w, depthwise, bn_relu, dilation=1, padding='SAME'):
-        assert bn_relu in [None, 'relu', 'relu6']
+    def __init__(self, H, W, I, O, stride_h, stride_w, depthwise, post_op, dilation=1, padding='SAME'):
+        assert post_op in [None, 'relu', 'relu6', 'sigmoid']
         self.H = int(H)
         self.W = int(W)
         self.I = int(I)
@@ -93,7 +93,7 @@ class FilterConfig:
         self.stride_h = int(stride_h)
         self.stride_w = int(stride_w)
         self.depthwise = bool(depthwise)
-        self.bn_relu = bn_relu
+        self.post_op = post_op
         self.dilation_h = int(dilation)
         self.dilation_w = int(dilation)
         self.shape = (int(H), int(W), int(O), int(I)) if depthwise else (int(H), int(W), int(I), int(O))
@@ -460,7 +460,7 @@ class FusedConv2DCallback(DFPatternCallback):
         groups_array = []
         channels_array = []
         kernel_size_array = []
-        bn_relu_array = []
+        post_op_array = []
         data_layout_array = []
         kernel_layout_array = []
         out_layout_array = []
@@ -479,13 +479,13 @@ class FusedConv2DCallback(DFPatternCallback):
                 groups_array.append(tmp.attrs['groups'])
                 channels_array.append(tmp.attrs['channels'])
                 kernel_size_array.append(tmp.attrs['kernel_size'])
-                bn_relu_array.append('relu')
+                post_op_array.append('relu')
                 data_layout_array.append(tmp.attrs['data_layout'])
                 kernel_layout_array.append(tmp.attrs['kernel_layout'])
                 out_layout_array.append(tmp.attrs['out_layout'])
                 count += 1
-            elif tmp.op.name == 'multiply':
-                bn_relu_array.append(True)
+            elif tmp.op.name == 'add':
+                post_op_array.append(True)
             tmp = tmp.args[0]
 
         strides_array.reverse()
@@ -494,7 +494,7 @@ class FusedConv2DCallback(DFPatternCallback):
         groups_array.reverse()
         channels_array.reverse()
         kernel_size_array.reverse()
-        bn_relu_array.reverse()
+        post_op_array.reverse()
         data_layout_array.reverse()
         kernel_layout_array.reverse()
         out_layout_array.reverse()
@@ -503,7 +503,7 @@ class FusedConv2DCallback(DFPatternCallback):
                                         weight1, bias1,
                                         weight2, bias2,
                                         strides_array, padding_array, dilation_array,
-                                        groups_array, channels_array, kernel_size_array, bn_relu_array,
+                                        groups_array, channels_array, kernel_size_array, post_op_array,
                                         data_layout_array, kernel_layout_array, out_layout_array, out_dtype)
 
 class ReplaceBatchNormCallback(DFPatternCallback):
