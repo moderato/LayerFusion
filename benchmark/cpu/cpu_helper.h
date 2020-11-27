@@ -12,6 +12,22 @@
 #include "cnpy.h"
 #include "cpucounters.h"
 
+#ifndef NONE
+    #define NONE 0
+#endif
+#ifndef BIAS
+    #define BIAS 1
+#endif
+#ifndef RELU
+    #define RELU 2
+#endif
+#ifndef RELU6
+    #define RELU6 3
+#endif
+#ifndef SIGMOID
+    #define SIGMOID 4
+#endif
+
 #ifndef REPEATITION
   #define REPEATITION 1000
 #endif

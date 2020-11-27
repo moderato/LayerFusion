@@ -8,16 +8,13 @@ from .libxsmm_intrin import intrin_libxsmm_brgemm
 def schedule_depth_conv_fused_nchwc_auto_search(cfg, outs, *args, **kwargs):
     outs = [outs] if isinstance(outs, te.tensor.Tensor) else outs
     s = te.create_schedule([x.op for x in outs])
-    stage_dict, layer_output_dict, _, layer_num, post_ops, _ = get_stages_and_cfgs(outs)
+    stage_dict, layer_output_dict, _, _, _, hasPaddedInput = get_stages_and_cfgs(outs)
     inputs_cfg = kwargs['inputs_cfg']
     filters_cfg = kwargs['filters_cfg']
     outputs_cfg = kwargs['outputs_cfg']
 
     s[stage_dict['PaddedInput_0']].compute_inline()
     s[stage_dict['Output_0']].set_scope('global')
-    for l in range(0, layer_num):
-        if post_ops[l]:
-            s[stage_dict['Output_{}_BiasAdd'.format(l)]].compute_inline()
 
     n, oc_chunk, h, w, oc = s[layer_output_dict['Layer_1']].op.axis
     oc_chunk_o, oc_chunk_i = cfg['split_layer_1_c'].apply(s, layer_output_dict['Layer_1'], oc_chunk)
@@ -66,6 +63,8 @@ def schedule_depth_conv_fused_nchwc_auto_search(cfg, outs, *args, **kwargs):
 
     # ######## Intermediate output
     s[layer_output_dict['Layer_0']].compute_at(s[layer_output_dict['Layer_1']], wo)
+    if hasPaddedInput[0]:
+        s[stage_dict['PaddedInput_0']].compute_at(s[layer_output_dict['Layer_1']], wo)
     n, c_chunk, h, w, c_vec = s[layer_output_dict['Layer_0']].op.axis
     ry, rx = s[layer_output_dict['Layer_0']].op.reduce_axis
     s[layer_output_dict['Layer_0']].reorder(n, c_chunk, h, ry, rx, w, c_vec)
@@ -96,9 +95,10 @@ def schedule_depth_conv_fused_nchwc_auto_inference(cfg, outs, *args, **kwargs):
     s[layer_output_dict['Layer_1']].reorder(n, oc_chunk_o, ht, wt, oc_chunk_i, h, w, oc)
     if post_ops[1]:
         s[layer_output_dict['Layer_1']].vectorize(oc)
-        s[stage_dict['Output_1_BiasAdd']].compute_inline()
         s[stage_dict['Output_1']].compute_at(s[layer_output_dict['Layer_1']], wt)
         _, oc_chunk_i, h, w, oc = s[stage_dict['Output_1']].op.axis
+        if post_ops[1] != 'bias':
+            s[stage_dict['Output_1_BiasAdd']].compute_inline()
     ho, wo, h, w = s[stage_dict['Output_1']].tile(h, w, x_factor=cfg['split_layer_1_h'].size[-1], y_factor=cfg['split_layer_1_w'].size[-1]) # stage_dict['Output_1'] = s[layer_output_dict['Layer_1']] if no post_op
     ic_chunk, ry, rx, ic = s[stage_dict['Output_1']].op.reduce_axis
     ic_chunk_o, ic_chunk_i = cfg['split_layer_0_c'].apply(s, stage_dict['Output_1'], ic_chunk)
@@ -146,8 +146,9 @@ def schedule_depth_conv_fused_nchwc_auto_inference(cfg, outs, *args, **kwargs):
     _, _, h, w, c_vec = s[layer_output_dict['Layer_0']].op.axis
     if post_ops[0]:
         s[layer_output_dict['Layer_0']].vectorize(c_vec)
-        s[stage_dict['Output_0_BiasAdd']].compute_inline()
         s[stage_dict['Output_0']].compute_at(s[stage_dict['Output_1']], wo)
+        if post_ops[0] != 'bias':
+            s[stage_dict['Output_0_BiasAdd']].compute_inline()
     n, c_chunk, h, w, c_vec = s[stage_dict['Output_0']].op.axis
     ry, rx = s[stage_dict['Output_0']].op.reduce_axis
     s[stage_dict['Output_0']].reorder(n, c_chunk, h, w, ry, rx, c_vec)

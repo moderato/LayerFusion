@@ -638,7 +638,7 @@ def get_schedule_tuning_x86(parameters):
     # A workaround for CPU autotuning
     tmp = []
     for idx in range(len(parameters)):
-        if parameters[idx] == 'relu' or parameters[idx] == 'relu6' or parameters[idx] == 'sigmoid':
+        if parameters[idx] == 'relu' or parameters[idx] == 'relu6' or parameters[idx] == 'sigmoid' or parameters[idx] == 'bias':
             tmp.append(None)
         else:
             tmp.append(parameters[idx])

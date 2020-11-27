@@ -88,11 +88,20 @@ def get_stages_and_cfgs(outs):
             break
         layer_num += 1
     for idx in range(layer_num):
-        if 'Output_{}_ReLU'.format(idx) in stage_dict.keys():
-            post_ops.append(True)
+        if 'Output_{}_ReLU6'.format(idx) in stage_dict.keys():
+            post_ops.append('relu6')
+            layer_output_dict['Layer_{}'.format(idx)] = stage_dict['Output_{}_ReLU6'.format(idx)]
+        elif 'Output_{}_ReLU'.format(idx) in stage_dict.keys():
+            post_ops.append('relu')
             layer_output_dict['Layer_{}'.format(idx)] = stage_dict['Output_{}_ReLU'.format(idx)]
+        elif 'Output_{}_Sigmoid'.format(idx) in stage_dict.keys():
+            post_ops.append('sigmoid')
+            layer_output_dict['Layer_{}'.format(idx)] = stage_dict['Output_{}_Sigmoid'.format(idx)]
+        elif 'Output_{}_BiasAdd'.format(idx) in stage_dict.keys():
+            post_ops.append('bias')
+            layer_output_dict['Layer_{}'.format(idx)] = stage_dict['Output_{}_BiasAdd'.format(idx)]
         else:
-            post_ops.append(False)
+            post_ops.append(None)
             layer_output_dict['Layer_{}'.format(idx)] = stage_dict['Output_{}'.format(idx)]
 
         if 'PaddedInput_{}'.format(idx) in stage_dict.keys():

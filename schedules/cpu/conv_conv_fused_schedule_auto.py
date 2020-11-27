@@ -11,14 +11,6 @@ def schedule_conv_conv_fused_nhwc_auto_search(cfg, outs, *args, **kwargs):
     filters_cfg = kwargs['filters_cfg']
     outputs_cfg = kwargs['outputs_cfg']
 
-    # # Beginning
-    # if hasPaddedInput[0]:
-    #     s[stage_dict['PaddedInput_0']].compute_inline()
-
-    # # Intermediate
-    # if hasPaddedInput[1]:
-    #     s[stage_dict['PaddedInput_1']].compute_inline()
-
     n, oc_chunk, h, w, oc = s[layer_output_dict['Layer_1']].op.axis
     oc_chunk_o, oc_chunk_i_1 = cfg['split_layer_1_c'].apply(s, layer_output_dict['Layer_1'], oc_chunk)
     ic_chunk, ry, rx, ic = s[layer_output_dict['Layer_1']].op.reduce_axis
@@ -65,9 +57,10 @@ def schedule_conv_conv_fused_nhwc_auto_search(cfg, outs, *args, **kwargs):
                                                 inputs_cfg['Layer_1'].C)
     s[layer_output_dict['Layer_1']].tensorize(tensorize_axis, libxsmm_tensorize)
 
+    # ######## Intermediate output
     s[layer_output_dict['Layer_0']].compute_at(s[layer_output_dict['Layer_1']], wo_1)
-    s[stage_dict['PaddedInput_0']].compute_at(s[layer_output_dict['Layer_1']], wo_1)
-
+    if hasPaddedInput[0]:
+        s[stage_dict['PaddedInput_0']].compute_at(s[layer_output_dict['Layer_1']], wo_1)
     n, oc_chunk, h, w, oc = s[layer_output_dict['Layer_0']].op.axis
     ho, h = cfg['split_layer_0_h'].apply(s, layer_output_dict['Layer_0'], h)
     wo, w = cfg['split_layer_0_w'].apply(s, layer_output_dict['Layer_0'], w)
@@ -123,10 +116,6 @@ def schedule_conv_conv_fused_nhwc_auto_inference(cfg, outs, *args, **kwargs):
     filters_cfg = kwargs['filters_cfg']
     outputs_cfg = kwargs['outputs_cfg']
 
-    # # Beginning
-    # if hasPaddedInput[0]:
-    #     s[stage_dict['PaddedInput_0']].compute_inline()
-
     # Intermediate
     if hasPaddedInput[1]:
         s[stage_dict['PaddedInput_1']].compute_inline()
@@ -139,9 +128,10 @@ def schedule_conv_conv_fused_nhwc_auto_inference(cfg, outs, *args, **kwargs):
     s[layer_output_dict['Layer_1']].parallel(fused_blx)
     if post_ops[1]:
         s[layer_output_dict['Layer_1']].vectorize(oc)
-        s[stage_dict['Output_1_BiasAdd']].compute_inline()
         s[stage_dict['Output_1']].compute_at(s[layer_output_dict['Layer_1']], fused_blx)
         _, oc_chunk_i_1, h, w, oc = s[stage_dict['Output_1']].op.axis
+        if post_ops[1] != 'bias':
+            s[stage_dict['Output_1_BiasAdd']].compute_inline()
     ho_1, wo_1, h, w = s[stage_dict['Output_1']].tile(h, w, x_factor=cfg['split_layer_1_h'].size[-1], y_factor=cfg['split_layer_1_w'].size[-1]) # stage_dict['Output_1'] = s[layer_output_dict['Layer_1']] if no post_op
     ic_chunk, ry, rx, ic = s[stage_dict['Output_1']].op.reduce_axis
     ic_chunk_o_1, ic_chunk_i = cfg['split_layer_0_c'].apply(s, stage_dict['Output_1'], ic_chunk)
@@ -183,16 +173,17 @@ def schedule_conv_conv_fused_nhwc_auto_inference(cfg, outs, *args, **kwargs):
                                                 inputs_cfg['Layer_1'].C)
     s[stage_dict['Output_1']].tensorize(tensorize_axis, libxsmm_tensorize)
 
+    # ######## Intermediate output
     s[layer_output_dict['Layer_0']].compute_at(s[stage_dict['Output_1']], wo_1)
     if hasPaddedInput[0]:
         s[stage_dict['PaddedInput_0']].compute_at(s[stage_dict['Output_1']], wo_1)
-
     n, oc_chunk, h, w, oc = s[layer_output_dict['Layer_0']].op.axis
     if post_ops[0]:
         s[layer_output_dict['Layer_0']].vectorize(oc)
-        s[stage_dict['Output_0_BiasAdd']].compute_inline()
         s[stage_dict['Output_0']].compute_at(s[stage_dict['Output_1']], wo_1)
         _, oc_chunk, h, w, oc = s[stage_dict['Output_0']].op.axis
+        if post_ops[0] != 'bias':
+            s[stage_dict['Output_0_BiasAdd']].compute_inline()
     n, oc_chunk, h, w, oc = s[stage_dict['Output_0']].op.axis
     ho, h = cfg['split_layer_0_h'].apply(s, stage_dict['Output_0'], h)
     wo, w = cfg['split_layer_0_w'].apply(s, stage_dict['Output_0'], w)

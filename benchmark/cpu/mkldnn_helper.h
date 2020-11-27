@@ -9,18 +9,24 @@
 #include "cnpy.h"
 #include "cpucounters.h"
 
-#ifndef REPEATITION
-  #define REPEATITION 1000
-#endif
-
 #ifndef NONE
     #define NONE 0
 #endif
+#ifndef BIAS
+    #define BIAS 1
+#endif
 #ifndef RELU
-    #define RELU  1
+    #define RELU 2
 #endif
 #ifndef RELU6
-    #define RELU6 2
+    #define RELU6 3
+#endif
+#ifndef SIGMOID
+    #define SIGMOID 4
+#endif
+
+#ifndef REPEATITION
+  #define REPEATITION 1000
 #endif
 
 // i7_7700K L3 cache size = 12 MB. Should be < 200 MB.
@@ -231,11 +237,15 @@ void benchmark_mkldnn(std::string workload_name,
         post_ops_1.append_eltwise(1.0f, algorithm::eltwise_relu, 0.0f, 0.0f);
     } else if (f1_activation == RELU6) {
         post_ops_1.append_eltwise(1.0f, algorithm::eltwise_clip, 0.0f, 6.0f);
+    } else if (f1_activation == SIGMOID) {
+        post_ops_1.append_eltwise(1.0f, algorithm::eltwise_swish, 0.0f, 0.0f);
     }
     if (f2_activation == RELU) {
         post_ops_2.append_eltwise(1.0f, algorithm::eltwise_relu, 0.0f, 0.0f);
     } else if (f2_activation == RELU6) {
         post_ops_2.append_eltwise(1.0f, algorithm::eltwise_clip, 0.0f, 6.0f);
+    } else if (f2_activation == SIGMOID) {
+        post_ops_2.append_eltwise(1.0f, algorithm::eltwise_swish, 0.0f, 0.0f);
     }
     conv_attr_1.set_post_ops(post_ops_1);
     conv_attr_2.set_post_ops(post_ops_2);

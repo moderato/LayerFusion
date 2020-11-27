@@ -7,11 +7,17 @@
 #ifndef NONE
     #define NONE 0
 #endif
+#ifndef BIAS
+    #define BIAS 1
+#endif
 #ifndef RELU
-    #define RELU  1
+    #define RELU 2
 #endif
 #ifndef RELU6
-    #define RELU6 2
+    #define RELU6 3
+#endif
+#ifndef SIGMOID
+    #define SIGMOID 4
 #endif
 
 #define GENERATED_CPU 0
@@ -68,10 +74,14 @@ void benchmarkWithWorkloadString(std::string workload, int type) {
             case 9:
                 if (token == "")
                     f1_activation = NONE;
+                else if (token == "bias")
+                    f1_activation = BIAS;
                 else if (token == "relu")
                     f1_activation = RELU;
-                else // token = "relu6"
+                else if (token == "relu6")
                     f1_activation = RELU6;
+                else if (token == "sigmoid")
+                    f1_activation = SIGMOID;
                 break;
             case 10:
                 kernel_2 = std::stoi(token);
@@ -91,10 +101,14 @@ void benchmarkWithWorkloadString(std::string workload, int type) {
             case 14:
                 if (token == "")
                     f2_activation = NONE;
+                else if (token == "bias")
+                    f2_activation = BIAS;
                 else if (token == "relu")
                     f2_activation = RELU;
-                else // token = "relu6"
+                else if (token == "relu6")
                     f2_activation = RELU6;
+                else if (token == "sigmoid")
+                    f2_activation = SIGMOID;
                 break;
             default:
                 break;
