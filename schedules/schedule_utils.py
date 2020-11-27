@@ -9,7 +9,10 @@ def cpu_schedules(name, is_autotvm=True, tuning=False):
             else:
                 from .cpu.depth_conv_fused_schedule_auto import schedule_depth_conv_fused_nchwc_auto_inference as f
         elif name == 'conv_conv':
-            from .cpu.conv_conv_fused_schedule_auto import schedule_conv_conv_fused_nhwc_auto as f
+            if tuning:
+                from .cpu.conv_conv_fused_schedule_auto import schedule_conv_conv_fused_nhwc_auto_search as f
+            else:
+                from .cpu.conv_conv_fused_schedule_auto import schedule_conv_conv_fused_nhwc_auto_inference as f
         else: # resnet block, etc
             from .cpu.block_fused_schedule_auto import schedule_block_fused_nhwc_auto as f
     else:
@@ -50,7 +53,7 @@ def get_stages_and_cfgs(outs):
                 name = op.name
                 if 'PaddedInput' in name:
                     stage_dict[name] = t
-                elif 'BiasAdd' in name or 'ReLU' in name:
+                elif 'BiasAdd' in name or 'ReLU' in name or 'ReLU6' in name or 'Sigmoid' in name:
                     n, i = name.split('_')
                     stage_dict['Output_{}_{}'.format(i, n)] = t
                 elif 'Bias' in name or 'Filter' in name:
@@ -78,7 +81,7 @@ def get_stages_and_cfgs(outs):
 
     get_tensors(outs)
     layer_num = 0
-    bn_relu = []
+    post_ops = []
     padded = []
     while 1:
         if 'Output_{}'.format(layer_num) not in stage_dict.keys():
@@ -86,10 +89,10 @@ def get_stages_and_cfgs(outs):
         layer_num += 1
     for idx in range(layer_num):
         if 'Output_{}_ReLU'.format(idx) in stage_dict.keys():
-            bn_relu.append(True)
+            post_ops.append(True)
             layer_output_dict['Layer_{}'.format(idx)] = stage_dict['Output_{}_ReLU'.format(idx)]
         else:
-            bn_relu.append(False)
+            post_ops.append(False)
             layer_output_dict['Layer_{}'.format(idx)] = stage_dict['Output_{}'.format(idx)]
 
         if 'PaddedInput_{}'.format(idx) in stage_dict.keys():
@@ -97,4 +100,4 @@ def get_stages_and_cfgs(outs):
         else:
             padded.append(False)
 
-    return stage_dict, layer_output_dict, param_dict, layer_num, bn_relu, padded
+    return stage_dict, layer_output_dict, param_dict, layer_num, post_ops, padded

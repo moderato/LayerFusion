@@ -313,12 +313,12 @@ def get_workloads():
     conv_conv_workloads['res_5x'] = (1, 7, 7, 512, 3, 512, 1, False, 'relu', 1, 2048, 1, False, None, False)
 
     # MNasNet-A1 (Squeeze-excitation's 2 FCs)
-    conv_conv_workloads['mna1_3_1'] = (1, 28, 28, 72, 1, 18, 1, False, 'relu', 1, 72, 1, False, 'sigmoid', False)
-    conv_conv_workloads['mna1_3_2'] = (1, 28, 28, 120, 1, 30, 1, False, 'relu', 1, 120, 1, False, 'sigmoid', False)
-    conv_conv_workloads['mna1_5_1'] = (1, 14, 14, 240, 1, 60, 1, False, 'relu', 1, 240, 1, False, 'sigmoid', False)
-    conv_conv_workloads['mna1_5_2'] = (1, 14, 14, 336, 1, 84, 1, False, 'relu', 1, 336, 1, False, 'sigmoid', False)
-    conv_conv_workloads['mna1_6_1'] = (1, 7, 7, 336, 1, 84, 1, False, 'relu', 1, 336, 1, False, 'sigmoid', False)
-    conv_conv_workloads['mna1_6_2'] = (1, 7, 7, 480, 1, 120, 1, False, 'relu', 1, 480, 1, False, 'sigmoid', False)
+    conv_conv_workloads['mna1_3_1'] = (1, 1, 1, 72, 1, 18, 1, False, 'relu', 1, 72, 1, False, 'sigmoid', False)
+    conv_conv_workloads['mna1_3_2'] = (1, 1, 1, 120, 1, 30, 1, False, 'relu', 1, 120, 1, False, 'sigmoid', False)
+    conv_conv_workloads['mna1_5_1'] = (1, 1, 1, 240, 1, 60, 1, False, 'relu', 1, 240, 1, False, 'sigmoid', False)
+    conv_conv_workloads['mna1_5_2'] = (1, 1, 1, 336, 1, 84, 1, False, 'relu', 1, 336, 1, False, 'sigmoid', False)
+    conv_conv_workloads['mna1_6_1'] = (1, 1, 1, 336, 1, 84, 1, False, 'relu', 1, 336, 1, False, 'sigmoid', False)
+    conv_conv_workloads['mna1_6_2'] = (1, 1, 1, 480, 1, 120, 1, False, 'relu', 1, 480, 1, False, 'sigmoid', False)
 
     # # Test
     # conv_conv_workloads['conv_conv_test_tiny'] = (1, 8, 8, 1, 3, 1, 1, False, 'relu', 1, 1, 1, False, 'relu', False)

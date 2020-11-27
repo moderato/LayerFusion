@@ -77,10 +77,9 @@ class FusionComposer:
             if self.cfg is not None:
                 if self.target.kind.name == 'cuda' or self.target.device_name == 'tracing':
                     _, OH, OW, OC = OUTPUT.get_shape()
+                    c_filter = lambda x: x.size[-1] in get_vlen(OC, self.target.kind.name)
 
                     if FILTER.depthwise:
-                        c_filter = lambda x: x.size[-1] in get_vlen(OC, self.target.kind.name)
-                        # cfg.define_split('split_layer_{}_c'.format(idx), OC_chunk, num_outputs=(2 if (self.target.kind.name == 'cuda' or not self.is_final_stage) else 3), policy='verbose')
                         self.cfg.define_split('split_layer_{}_c'.format(idx), self.cfg.axis(int(OC)), num_outputs=3, policy='factors', filter=c_filter)
                     else:
                         if is_final_stage:
@@ -107,11 +106,9 @@ class FusionComposer:
                                             policy='factors')
                 else:
                     _, OC_chunk, OH, OW, _ = OUTPUT.get_shape()
+                    c_filter = lambda x: x.size[-1] >= -1 # dummy
 
                     if FILTER.depthwise:
-                        c_filter = lambda x: x.size[-1] >= -1 # dummy
-                        # cfg.define_split('split_layer_{}_h'.format(idx), OH, num_outputs=2, policy='verbose')
-                        # cfg.define_split('split_layer_{}_w'.format(idx), OW, num_outputs=2, policy='verbose')
                         self.cfg.define_split('split_layer_{}_c'.format(idx), self.cfg.axis(int(OC_chunk)), num_outputs=2, policy='factors', filter=c_filter)
                     else:
                         if is_final_stage:
@@ -176,6 +173,17 @@ class FusionComposer:
                 flop += 2 * (ocfg.N * ocfg.H * ocfg.W * ocfg.C)
         return flop
 
+    def get_pattern(self):
+        assert self.layers is not None
+
+        is_depthwise_array = [l[1].depthwise for l in self.layers[:-1]]
+        if is_depthwise_array[0] and not is_depthwise_array[1]:
+            return 'depth_conv'
+        if not is_depthwise_array[0] and not is_depthwise_array[1]:
+            return 'conv_conv'
+
+        return None
+
     def __init__(self, p, pack=None, auto_tvm=True, target=None, dtype='float32', constraints_idx=-1):
         self.cfg = None
         self.parameters = p
@@ -191,7 +199,7 @@ class FusionComposer:
         self.layer_num = len(self.layers) - 1 # Excluding input
 
         # Logic for pattern
-        self.pattern = 'depth_conv' # TODO: Add logic to it
+        self.pattern = self.get_pattern() # TODO: Add logic to it
 
         # Temporary variables for composing compute
         self.filter_cfg = None
@@ -350,7 +358,9 @@ class FusionComposer:
                             lambda *i: te.max(Last(*i), tvm.runtime.const(0, Last.dtype)),
                             name='ReLU_{}'.format(self.layer_idx), tag='relu')
         elif self.filter_cfg.post_op == 'relu':
-            Last = te.compute(Last.shape, lambda *i: te.sigmoid(Last(*i)))
+            Last = te.compute(Last.shape, 
+                            lambda *i: te.sigmoid(Last(*i)),
+                            name='Sigmoid_{}'.format(self.layer_idx), tag='sigmoid')
         else: # 'relu6'
             Last = te.compute(Last.shape,
                             lambda *i: te.min(te.max(Last(*i), tvm.runtime.const(0, Last.dtype)), tvm.runtime.const(6, Last.dtype)),
@@ -627,7 +637,7 @@ def get_schedule_tuning_x86(parameters):
     # A workaround for CPU autotuning
     tmp = []
     for idx in range(len(parameters)):
-        if parameters[idx] == 'relu' or parameters[idx] == 'relu6':
+        if parameters[idx] == 'relu' or parameters[idx] == 'relu6' or parameters[idx] == 'sigmoid':
             tmp.append(None)
         else:
             tmp.append(parameters[idx])
