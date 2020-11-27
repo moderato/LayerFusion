@@ -85,7 +85,7 @@ class FeatureConfig:
 
 class FilterConfig:
     def __init__(self, H, W, I, O, stride_h, stride_w, depthwise, post_op, dilation=1, padding='SAME'):
-        assert post_op in [None, 'relu', 'relu6', 'sigmoid']
+        assert post_op in [None, 'bias', 'relu', 'relu6', 'sigmoid']
         self.H = int(H)
         self.W = int(W)
         self.I = int(I)
@@ -296,29 +296,29 @@ def get_workloads():
 
     ##################### Conv conv workloads ######################
     # AlexNet
-    # conv_conv_workloads['alex_2_3'] = (1, 55, 55, 96, 3, 256, 2, False, None, 3, 384, 2, False, None, False) # / 701.73 us
-    # conv_conv_workloads['alex_3_4'] = (1, 27, 27, 256, 3, 384, 2, False, None, 3, 384, 2, False, None, False) # / 705.09 us
-    # conv_conv_workloads['alex_4_5'] = (1, 13, 13, 384, 3, 384, 1, False, None, 3, 256, 1, False, None, False) # / 630.92 us
+    conv_conv_workloads['alex_2_3'] = (1, 55, 55, 96, 3, 256, 2, False, None, 3, 384, 2, False, None, False)
+    conv_conv_workloads['alex_3_4'] = (1, 27, 27, 256, 3, 384, 2, False, None, 3, 384, 2, False, None, False)
+    conv_conv_workloads['alex_4_5'] = (1, 13, 13, 384, 3, 384, 1, False, None, 3, 256, 1, False, None, False)
 
     # VGG
-    # conv_conv_workloads['vgg_3_4'] = (1, 112, 112, 128, 3, 128, 1, False, None, 3, 128, 1, False, None, False) # / 2049.59 us
-    # conv_conv_workloads['vgg_5_6'] = (1, 56, 56, 256, 3, 256, 1, False, None, 3, 256, 1, False, None, False) # / 2519.97 us
-    # conv_conv_workloads['vgg_8_9'] = (1, 28, 28, 512, 3, 512, 1, False, None, 3, 512, 1, False, None, False) # / 877.67 us
-    # conv_conv_workloads['vgg_11_12'] = (1, 14, 14, 512, 3, 512, 1, False, None, 3, 512, 1, False, None, False) # / 359.19 us
+    conv_conv_workloads['vgg_3_4'] = (1, 112, 112, 128, 3, 128, 1, False, None, 3, 128, 1, False, None, False)
+    conv_conv_workloads['vgg_5_6'] = (1, 56, 56, 256, 3, 256, 1, False, None, 3, 256, 1, False, None, False)
+    conv_conv_workloads['vgg_8_9'] = (1, 28, 28, 512, 3, 512, 1, False, None, 3, 512, 1, False, None, False)
+    conv_conv_workloads['vgg_11_12'] = (1, 14, 14, 512, 3, 512, 1, False, None, 3, 512, 1, False, None, False)
 
     # ResNet-50
-    conv_conv_workloads['res_2x'] = (1, 56, 56, 64, 3, 64, 1, False, 'relu', 1, 256, 1, False, None, False)
-    conv_conv_workloads['res_3x'] = (1, 28, 28, 128, 3, 128, 1, False, 'relu', 1, 512, 1, False, None, False)
-    conv_conv_workloads['res_4x'] = (1, 14, 14, 256, 3, 256, 1, False, 'relu', 1, 1024, 1, False, None, False)
-    conv_conv_workloads['res_5x'] = (1, 7, 7, 512, 3, 512, 1, False, 'relu', 1, 2048, 1, False, None, False)
+    conv_conv_workloads['res_2x'] = (1, 56, 56, 64, 3, 64, 1, False, 'relu', 1, 256, 1, False, 'bias', False)
+    conv_conv_workloads['res_3x'] = (1, 28, 28, 128, 3, 128, 1, False, 'relu', 1, 512, 1, False, 'bias', False)
+    conv_conv_workloads['res_4x'] = (1, 14, 14, 256, 3, 256, 1, False, 'relu', 1, 1024, 1, False, 'bias', False)
+    conv_conv_workloads['res_5x'] = (1, 7, 7, 512, 3, 512, 1, False, 'relu', 1, 2048, 1, False, 'bias', False)
 
-    # MNasNet-A1 (Squeeze-excitation's 2 FCs)
-    conv_conv_workloads['mna1_3_1'] = (1, 1, 1, 72, 1, 18, 1, False, 'relu', 1, 72, 1, False, 'sigmoid', False)
-    conv_conv_workloads['mna1_3_2'] = (1, 1, 1, 120, 1, 30, 1, False, 'relu', 1, 120, 1, False, 'sigmoid', False)
-    conv_conv_workloads['mna1_5_1'] = (1, 1, 1, 240, 1, 60, 1, False, 'relu', 1, 240, 1, False, 'sigmoid', False)
-    conv_conv_workloads['mna1_5_2'] = (1, 1, 1, 336, 1, 84, 1, False, 'relu', 1, 336, 1, False, 'sigmoid', False)
-    conv_conv_workloads['mna1_6_1'] = (1, 1, 1, 336, 1, 84, 1, False, 'relu', 1, 336, 1, False, 'sigmoid', False)
-    conv_conv_workloads['mna1_6_2'] = (1, 1, 1, 480, 1, 120, 1, False, 'relu', 1, 480, 1, False, 'sigmoid', False)
+    # # MNasNet-A1 (Squeeze-excitation's 2 FCs)
+    # conv_conv_workloads['mna1_3_1'] = (1, 1, 1, 72, 1, 18, 1, False, 'relu', 1, 72, 1, False, 'sigmoid', False)
+    # conv_conv_workloads['mna1_3_2'] = (1, 1, 1, 120, 1, 30, 1, False, 'relu', 1, 120, 1, False, 'sigmoid', False)
+    # conv_conv_workloads['mna1_5_1'] = (1, 1, 1, 240, 1, 60, 1, False, 'relu', 1, 240, 1, False, 'sigmoid', False)
+    # conv_conv_workloads['mna1_5_2'] = (1, 1, 1, 336, 1, 84, 1, False, 'relu', 1, 336, 1, False, 'sigmoid', False)
+    # conv_conv_workloads['mna1_6_1'] = (1, 1, 1, 336, 1, 84, 1, False, 'relu', 1, 336, 1, False, 'sigmoid', False)
+    # conv_conv_workloads['mna1_6_2'] = (1, 1, 1, 480, 1, 120, 1, False, 'relu', 1, 480, 1, False, 'sigmoid', False)
 
     # # Test
     # conv_conv_workloads['conv_conv_test_tiny'] = (1, 8, 8, 1, 3, 1, 1, False, 'relu', 1, 1, 1, False, 'relu', False)
@@ -338,21 +338,21 @@ def get_workloads():
     depth_conv_workloads['mv1_13'] = (1, 7, 7, 1024, 3, 1, 1, True, "relu", 1, 1024, 1, False, "relu", False) # 129.61 us / 220.23 us
 
     # MobileNet-v2
-    depth_conv_workloads['mv2_1'] = (1, 112, 112, 32, 3, 1, 1, True, "relu", 1, 16, 1, False, "relu", False) # 38.19 us / 123.81 us
-    depth_conv_workloads['mv2_2'] = (1, 112, 112, 96, 3, 1, 2, True, "relu", 1, 24, 1, False, "relu", False) # 129.60 us / 117.13 us
-    depth_conv_workloads['mv2_3'] = (1, 56, 56, 144, 3, 1, 2, True, "relu", 1, 32, 1, False, "relu", False) # 39.25 us / 53.14 us
-    depth_conv_workloads['mv2_4'] = (1, 28, 28, 192, 3, 1, 2, True, "relu", 1, 64, 1, False, "relu", False) # 14.02 us / 35.55 us
-    depth_conv_workloads['mv2_5'] = (1, 14, 14, 384, 3, 1, 1, True, "relu", 1, 96, 1, False, "relu", False) # 37.07 us / 51.26 us
-    depth_conv_workloads['mv2_6'] = (1, 14, 14, 576, 3, 1, 2, True, "relu", 1, 160, 1, False, "relu", False) # 66.87 us / 65.03 us
-    depth_conv_workloads['mv2_7'] = (1, 7, 7, 960, 3, 1, 1, True, "relu", 1, 320, 1, False, "relu", False) # 104.16 us / 162.04 us
+    depth_conv_workloads['mv2_1'] = (1, 112, 112, 32, 3, 1, 1, True, "relu6", 1, 16, 1, False, "bias", False) # 38.19 us / 123.81 us
+    depth_conv_workloads['mv2_2'] = (1, 112, 112, 96, 3, 1, 2, True, "relu6", 1, 24, 1, False, "bias", False) # 129.60 us / 117.13 us
+    depth_conv_workloads['mv2_3'] = (1, 56, 56, 144, 3, 1, 2, True, "relu6", 1, 32, 1, False, "bias", False) # 39.25 us / 53.14 us
+    depth_conv_workloads['mv2_4'] = (1, 28, 28, 192, 3, 1, 2, True, "relu6", 1, 64, 1, False, "bias", False) # 14.02 us / 35.55 us
+    depth_conv_workloads['mv2_5'] = (1, 14, 14, 384, 3, 1, 1, True, "relu6", 1, 96, 1, False, "bias", False) # 37.07 us / 51.26 us
+    depth_conv_workloads['mv2_6'] = (1, 14, 14, 576, 3, 1, 2, True, "relu6", 1, 160, 1, False, "bias", False) # 66.87 us / 65.03 us
+    depth_conv_workloads['mv2_7'] = (1, 7, 7, 960, 3, 1, 1, True, "relu6", 1, 320, 1, False, "bias", False) # 104.16 us / 162.04 us
 
     # MNasNet-A1
-    depth_conv_workloads['mna1_1_1'] = (1, 112, 112, 32, 3, 1, 1, True, "relu", 1, 16, 1, False, None, False)
-    depth_conv_workloads['mna1_2_1'] = (1, 112, 112, 96, 3, 1, 2, True, "relu", 1, 24, 1, False, None, False)
-    depth_conv_workloads['mna1_2_2'] = (1, 56, 56, 144, 3, 1, 1, True, "relu", 1, 24, 1, False, None, False)
-    depth_conv_workloads['mna1_4_1'] = (1, 28, 28, 240, 3, 1, 2, True, "relu", 1, 80, 1, False, None, False)
-    depth_conv_workloads['mna1_4_2'] = (1, 14, 14, 480, 3, 1, 1, True, "relu", 1, 80, 1, False, None, False)
-    depth_conv_workloads['mna1_7_1'] = (1, 7, 7, 960, 3, 1, 1, True, "relu", 1, 320, 1, False, None, False)
+    depth_conv_workloads['mna1_1_1'] = (1, 112, 112, 32, 3, 1, 1, True, "relu6", 1, 16, 1, False, 'bias', False)
+    depth_conv_workloads['mna1_2_1'] = (1, 112, 112, 96, 3, 1, 2, True, "relu6", 1, 24, 1, False, 'bias', False)
+    depth_conv_workloads['mna1_2_2'] = (1, 56, 56, 144, 3, 1, 1, True, "relu6", 1, 24, 1, False, 'bias', False)
+    depth_conv_workloads['mna1_4_1'] = (1, 28, 28, 240, 3, 1, 2, True, "relu6", 1, 80, 1, False, 'bias', False)
+    depth_conv_workloads['mna1_4_2'] = (1, 14, 14, 480, 3, 1, 1, True, "relu6", 1, 80, 1, False, 'bias', False)
+    depth_conv_workloads['mna1_7_1'] = (1, 7, 7, 960, 3, 1, 1, True, "relu6", 1, 320, 1, False, 'bias', False)
     ################################################################
 
     ######################## Block workloads #######################

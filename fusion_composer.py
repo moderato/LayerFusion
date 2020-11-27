@@ -352,16 +352,17 @@ class FusionComposer:
         #     self.stages[-1].append(Output)
         # Last = self.stages[-1][-1] # BiasAdd if it's not a block, Output if it's a block
 
+        # Else: only bias_add
         Last = BiasAdd
         if self.filter_cfg.post_op == 'relu':
             Last = te.compute(Last.shape,
                             lambda *i: te.max(Last(*i), tvm.runtime.const(0, Last.dtype)),
                             name='ReLU_{}'.format(self.layer_idx), tag='relu')
-        elif self.filter_cfg.post_op == 'relu':
+        elif self.filter_cfg.post_op == 'sigmoid':
             Last = te.compute(Last.shape, 
                             lambda *i: te.sigmoid(Last(*i)),
                             name='Sigmoid_{}'.format(self.layer_idx), tag='sigmoid')
-        else: # 'relu6'
+        elif self.filter_cfg.post_op == 'relu6':
             Last = te.compute(Last.shape,
                             lambda *i: te.min(te.max(Last(*i), tvm.runtime.const(0, Last.dtype)), tvm.runtime.const(6, Last.dtype)),
                             name='ReLU6_{}'.format(self.layer_idx), tag='relu6')
