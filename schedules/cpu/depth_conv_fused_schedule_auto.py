@@ -13,9 +13,7 @@ def schedule_depth_conv_fused_nchwc_auto_search(cfg, outs, *args, **kwargs):
     filters_cfg = kwargs['filters_cfg']
     outputs_cfg = kwargs['outputs_cfg']
 
-    s[stage_dict['PaddedInput_0']].compute_inline()
-    s[stage_dict['Output_0']].set_scope('global')
-
+    ######## Final output
     n, oc_chunk, h, w, oc = s[layer_output_dict['Layer_1']].op.axis
     oc_chunk_o, oc_chunk_i = cfg['split_layer_1_c'].apply(s, layer_output_dict['Layer_1'], oc_chunk)
     ic_chunk, ry, rx, ic = s[layer_output_dict['Layer_1']].op.reduce_axis
@@ -61,10 +59,8 @@ def schedule_depth_conv_fused_nchwc_auto_search(cfg, outs, *args, **kwargs):
                                                 inputs_cfg['Layer_1'].C)
     s[layer_output_dict['Layer_1']].tensorize(tensorize_axis, libxsmm_tensorize)
 
-    # ######## Intermediate output
+    ######## Intermediate output
     s[layer_output_dict['Layer_0']].compute_at(s[layer_output_dict['Layer_1']], wo)
-    if hasPaddedInput[0]:
-        s[stage_dict['PaddedInput_0']].compute_at(s[layer_output_dict['Layer_1']], wo)
     n, c_chunk, h, w, c_vec = s[layer_output_dict['Layer_0']].op.axis
     ry, rx = s[layer_output_dict['Layer_0']].op.reduce_axis
     s[layer_output_dict['Layer_0']].reorder(n, c_chunk, h, ry, rx, w, c_vec)
@@ -74,6 +70,10 @@ def schedule_depth_conv_fused_nchwc_auto_search(cfg, outs, *args, **kwargs):
                         candidate=[[h, w, ry, rx], [h, ry, w, rx], [h, ry, rx, w], [ry, h, w, rx], [ry, h, rx, w], [ry, rx, h, w]])
     cfg['reorder_depthwise'].apply(s, layer_output_dict['Layer_0'], [h, ry, rx, w])
 
+    ######## PaddedInput 0
+    if hasPaddedInput[0]:
+        s[stage_dict['PaddedInput_0']].compute_inline()
+
     s = s.normalize()
 
     return s
@@ -81,14 +81,12 @@ def schedule_depth_conv_fused_nchwc_auto_search(cfg, outs, *args, **kwargs):
 def schedule_depth_conv_fused_nchwc_auto_inference(cfg, outs, *args, **kwargs):
     outs = [outs] if isinstance(outs, te.tensor.Tensor) else outs
     s = te.create_schedule([x.op for x in outs])
-    stage_dict, layer_output_dict, _, _, post_ops, _ = get_stages_and_cfgs(outs)
+    stage_dict, layer_output_dict, _, _, post_ops, hasPaddedInput = get_stages_and_cfgs(outs)
     inputs_cfg = kwargs['inputs_cfg']
     filters_cfg = kwargs['filters_cfg']
     outputs_cfg = kwargs['outputs_cfg']
 
-    s[stage_dict['PaddedInput_0']].compute_inline()
-    s[stage_dict['Output_0']].set_scope('global')
-
+    ######## Final output
     n, oc_chunk, h, w, oc = s[layer_output_dict['Layer_1']].op.axis
     oc_chunk_o, oc_chunk_i = cfg['split_layer_1_c'].apply(s, layer_output_dict['Layer_1'], oc_chunk)
     ht, wt, h, w = s[layer_output_dict['Layer_1']].tile(h, w, x_factor=cfg['split_layer_1_h'].size[-2] * cfg['split_layer_1_h'].size[-1], y_factor=cfg['split_layer_1_w'].size[-2] * cfg['split_layer_1_w'].size[-1])
@@ -141,7 +139,7 @@ def schedule_depth_conv_fused_nchwc_auto_inference(cfg, outs, *args, **kwargs):
                                                 inputs_cfg['Layer_1'].C)
     s[stage_dict['Output_1']].tensorize(tensorize_axis, libxsmm_tensorize)
 
-    # ######## Intermediate output
+    ######## Intermediate output
     s[layer_output_dict['Layer_0']].compute_at(s[stage_dict['Output_1']], wo)
     _, _, h, w, c_vec = s[layer_output_dict['Layer_0']].op.axis
     if post_ops[0]:
@@ -157,5 +155,9 @@ def schedule_depth_conv_fused_nchwc_auto_inference(cfg, outs, *args, **kwargs):
     cfg.define_reorder('reorder_depthwise', [h, ry, rx, w], policy='candidate',\
                         candidate=[[h, w, ry, rx], [h, ry, w, rx], [h, ry, rx, w], [ry, h, w, rx], [ry, h, rx, w], [ry, rx, h, w]])
     cfg['reorder_depthwise'].apply(s, stage_dict['Output_0'], [h, ry, rx, w])
+
+    ######## PaddedInput 0
+    if hasPaddedInput[0]:
+        s[stage_dict['PaddedInput_0']].compute_inline()
 
     return s

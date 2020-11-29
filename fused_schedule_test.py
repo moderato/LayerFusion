@@ -19,10 +19,10 @@ def verify_fused(workload_name,
     save_data = tuning_opt.save_data
     dry_run = tuning_opt.dry_run
     export_code = tuning_opt.export_code
-    auto_tvm = tuning_opt.auto_tvm
-    auto_tvm_skip_training = tuning_opt.auto_tvm_skip_training
-    auto_tvm_transfer_learning = tuning_opt.auto_tvm_transfer_learning
-    auto_tvm_trials = tuning_opt.auto_tvm_trials
+    use_autotvm = tuning_opt.use_autotvm
+    use_autotvm_skip_training = tuning_opt.use_autotvm_skip_training
+    use_autotvm_transfer_learning = tuning_opt.use_autotvm_transfer_learning
+    use_autotvm_trials = tuning_opt.use_autotvm_trials
 
     def check_target(target_str):
         if not tvm.runtime.enabled(target_str):
@@ -38,8 +38,8 @@ def verify_fused(workload_name,
             target = tvm.target.Target(target_str)
             device = 'gpu'
 
-        fc = FusionComposer(parameters, auto_tvm=auto_tvm, target=target)
-        if auto_tvm:
+        fc = FusionComposer(parameters, use_autotvm=use_autotvm, target=target)
+        if use_autotvm:
             log_name = 'logs/autotvm/layer/{}/{}_fused_{}.log'.format(device, name, workload_name)
             print(log_name)
 
@@ -54,7 +54,7 @@ def verify_fused(workload_name,
             print(task.target)
             print(task.workload)
 
-            if not auto_tvm_skip_training:
+            if not use_autotvm_skip_training:
                 # autotvm setting
                 measure_option = autotvm.measure_option(
                     builder=autotvm.LocalBuilder(),
@@ -68,12 +68,12 @@ def verify_fused(workload_name,
                 tuner = autotvm.tuner.XGBTuner(task, feature_type="curve")
 
                 # Transfer learning if the training log exists
-                if auto_tvm_transfer_learning and os.path.isfile(log_name):
+                if use_autotvm_transfer_learning and os.path.isfile(log_name):
                     tuner.load_history(autotvm.record.load_from_file(log_name))
 
-                tuner.tune(n_trial=auto_tvm_trials,
+                tuner.tune(n_trial=use_autotvm_trials,
                             measure_option=measure_option,
-                            callbacks=[autotvm.callback.progress_bar(auto_tvm_trials),
+                            callbacks=[autotvm.callback.progress_bar(use_autotvm_trials),
                                         autotvm.callback.log_to_file(log_name)])
 
             # inspect the best config
@@ -119,7 +119,7 @@ def verify_fused(workload_name,
 
         # export kernel launch config, e.g. thxyz, blxy, vlen, etc
         output_shape = ref_data[-1].shape
-        if auto_tvm:
+        if use_autotvm:
             assert (best_config is not None)
             export_kernel_launch_config(workload_name, output_shape, best_config, target_str)
 
@@ -167,10 +167,10 @@ if __name__ == '__main__':
         parser.add_argument("-y", "--dry_run", action="store_true", help="Dry run.")
         parser.add_argument("-d", "--save_data", action="store_true", help="Save numpy data as npy files.")
         parser.add_argument("-c", "--export_code", action="store_true", help="Export generated kernel code.")
-        parser.add_argument("-a", "--auto_tvm", action="store_true", help="AutoTVM for auto tuning.")
-        parser.add_argument("-k", "--auto_tvm_skip_training", action="store_true", help="Run AutoTVM tuned kernel.")
-        parser.add_argument("-l", "--auto_tvm_transfer_learning", action="store_true", help="Load existing tuning log.")
-        parser.add_argument("-t", "--auto_tvm_trials", type=int, default=32, help="Number of AutoTVM trials.")
+        parser.add_argument("-a", "--use_autotvm", action="store_true", help="AutoTVM for auto tuning.")
+        parser.add_argument("-k", "--use_autotvm_skip_training", action="store_true", help="Run AutoTVM tuned kernel.")
+        parser.add_argument("-l", "--use_autotvm_transfer_learning", action="store_true", help="Load existing tuning log.")
+        parser.add_argument("-t", "--use_autotvm_trials", type=int, default=32, help="Number of AutoTVM trials.")
         options = parser.parse_args()
         return options
 

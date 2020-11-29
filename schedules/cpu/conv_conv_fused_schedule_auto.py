@@ -3,7 +3,7 @@ from tvm import te
 from ..schedule_utils import get_stages_and_cfgs
 from .libxsmm_intrin import intrin_libxsmm_brgemm
 
-def schedule_conv_conv_fused_nhwc_auto_search(cfg, outs, *args, **kwargs):
+def schedule_conv_conv_fused_nchwc_auto_search(cfg, outs, *args, **kwargs):
     outs = [outs] if isinstance(outs, te.tensor.Tensor) else outs
     s = te.create_schedule([x.op for x in outs])
     stage_dict, layer_output_dict, _, _, _, hasPaddedInput = get_stages_and_cfgs(outs)
@@ -11,6 +11,7 @@ def schedule_conv_conv_fused_nhwc_auto_search(cfg, outs, *args, **kwargs):
     filters_cfg = kwargs['filters_cfg']
     outputs_cfg = kwargs['outputs_cfg']
 
+    ######## Final output
     n, oc_chunk, h, w, oc = s[layer_output_dict['Layer_1']].op.axis
     oc_chunk_o, oc_chunk_i_1 = cfg['split_layer_1_c'].apply(s, layer_output_dict['Layer_1'], oc_chunk)
     ic_chunk, ry, rx, ic = s[layer_output_dict['Layer_1']].op.reduce_axis
@@ -57,8 +58,10 @@ def schedule_conv_conv_fused_nhwc_auto_search(cfg, outs, *args, **kwargs):
                                                 inputs_cfg['Layer_1'].C)
     s[layer_output_dict['Layer_1']].tensorize(tensorize_axis, libxsmm_tensorize)
 
-    # ######## Intermediate output
+    ######## Intermediate output
     s[layer_output_dict['Layer_0']].compute_at(s[layer_output_dict['Layer_1']], wo_1)
+    if hasPaddedInput[1]:
+        s[stage_dict['PaddedInput_1']].compute_inline()
     if hasPaddedInput[0]:
         s[stage_dict['PaddedInput_0']].compute_at(s[layer_output_dict['Layer_1']], wo_1)
     n, oc_chunk, h, w, oc = s[layer_output_dict['Layer_0']].op.axis
@@ -108,7 +111,7 @@ def schedule_conv_conv_fused_nhwc_auto_search(cfg, outs, *args, **kwargs):
 
     return s
 
-def schedule_conv_conv_fused_nhwc_auto_inference(cfg, outs, *args, **kwargs):
+def schedule_conv_conv_fused_nchwc_auto_inference(cfg, outs, *args, **kwargs):
     outs = [outs] if isinstance(outs, te.tensor.Tensor) else outs
     s = te.create_schedule([x.op for x in outs])
     stage_dict, layer_output_dict, _, _, post_ops, hasPaddedInput = get_stages_and_cfgs(outs)
@@ -116,10 +119,10 @@ def schedule_conv_conv_fused_nhwc_auto_inference(cfg, outs, *args, **kwargs):
     filters_cfg = kwargs['filters_cfg']
     outputs_cfg = kwargs['outputs_cfg']
 
-    # Intermediate
     if hasPaddedInput[1]:
         s[stage_dict['PaddedInput_1']].compute_inline()
 
+    ######## Final output
     n, oc_chunk, h, w, oc = s[layer_output_dict['Layer_1']].op.axis
     oc_chunk_o, oc_chunk_i_1 = cfg['split_layer_1_c'].apply(s, layer_output_dict['Layer_1'], oc_chunk)
     ht, wt, h, w = s[layer_output_dict['Layer_1']].tile(h, w, x_factor=cfg['split_layer_1_h'].size[-2] * cfg['split_layer_1_h'].size[-1], y_factor=cfg['split_layer_1_w'].size[-2] * cfg['split_layer_1_w'].size[-1])
@@ -173,7 +176,7 @@ def schedule_conv_conv_fused_nhwc_auto_inference(cfg, outs, *args, **kwargs):
                                                 inputs_cfg['Layer_1'].C)
     s[stage_dict['Output_1']].tensorize(tensorize_axis, libxsmm_tensorize)
 
-    # ######## Intermediate output
+    ######## Intermediate output
     s[layer_output_dict['Layer_0']].compute_at(s[stage_dict['Output_1']], wo_1)
     if hasPaddedInput[0]:
         s[stage_dict['PaddedInput_0']].compute_at(s[stage_dict['Output_1']], wo_1)
@@ -184,7 +187,6 @@ def schedule_conv_conv_fused_nhwc_auto_inference(cfg, outs, *args, **kwargs):
         _, oc_chunk, h, w, oc = s[stage_dict['Output_0']].op.axis
         if post_ops[0] != 'bias':
             s[stage_dict['Output_0_BiasAdd']].compute_inline()
-    n, oc_chunk, h, w, oc = s[stage_dict['Output_0']].op.axis
     ho, h = cfg['split_layer_0_h'].apply(s, stage_dict['Output_0'], h)
     wo, w = cfg['split_layer_0_w'].apply(s, stage_dict['Output_0'], w)
     ic_chunk, ry, rx, ic = s[stage_dict['Output_0']].op.reduce_axis
@@ -224,7 +226,6 @@ def schedule_conv_conv_fused_nhwc_auto_inference(cfg, outs, *args, **kwargs):
                                                 filters_cfg['Layer_0'].stride_w,
 
                                                 inputs_cfg['Layer_0'].C)
-
     s[stage_dict['Output_0']].tensorize(tensorize_axis, libxsmm_tensorize)
 
     s = s.normalize()

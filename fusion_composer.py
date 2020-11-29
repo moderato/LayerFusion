@@ -9,6 +9,7 @@ from tvm.topi.nn.utils import get_pad_tuple
 from tvm.topi.utils import get_const_tuple
 from tvm import autotvm, te
 from tvm.autotvm.task import TaskExtractEnv, args_to_workload
+from scipy.special import expit
 from helper import get_vlen, get_CPU_vlen_from_config, get_4D_shapes_from_params
 import numpy as np
 import os, math
@@ -51,9 +52,10 @@ class FusionComposer:
             FILTER = self.get_filter_cfg(idx)
             OUTPUT = self.get_output_cfg(idx)
 
-            # Vector length
-            if self.pack:
-                if self.cfg is not None:
+            # Split axes, etc
+            if self.cfg is not None:
+                # Vector length
+                if self.pack:
                     if idx == 0 and not FILTER.depthwise: # First layer is not depthwise: define input vlen
                         self.cfg.define_knob('vlen_input', get_vlen(FILTER.I, self.target.kind.name))
                     self.cfg.define_knob('vlen_layer_{}'.format(idx), get_vlen(OUTPUT.C, self.target.kind.name)) # define output vlen
@@ -66,15 +68,11 @@ class FusionComposer:
                     else:
                         vlen_i = self.cfg['vlen_layer_{}'.format(idx-1)].val # input vlen = previous output vlen
                     vlen_o = self.cfg['vlen_layer_{}'.format(idx)].val
-                else:
-                    vlen_i = 16
-                    vlen_o = 16
-                DATA.update_shape(vlen_i)
-                FILTER.update_shape(vlen_i, vlen_o)
-                OUTPUT.update_shape(vlen_o) # Actually overlapped with the input of next layer
 
-            # Split axes, etc
-            if self.cfg is not None:
+                    DATA.update_shape(vlen_i)
+                    FILTER.update_shape(vlen_i, vlen_o)
+                    OUTPUT.update_shape(vlen_o) # Actually overlapped with the input of next layer
+
                 if self.target.kind.name == 'cuda' or self.target.device_name == 'tracing':
                     _, OH, OW, OC = OUTPUT.get_shape()
                     c_filter = lambda x: x.size[-1] in get_vlen(OC, self.target.kind.name)
@@ -184,13 +182,14 @@ class FusionComposer:
 
         return None
 
-    def __init__(self, p, pack=None, auto_tvm=True, target=None, dtype='float32', constraints_idx=-1):
+    def __init__(self, p, pack=None, use_autotvm=True, target=None, dtype='float32', constraints_idx=-1):
         self.cfg = None
         self.parameters = p
-        self.target = target
         self.pack = (target.kind.name != 'cuda' and target.device_name != 'tracing') if pack is None else pack
-        self.task_name = 'fused_conv2d.{}'.format('cuda' if target.kind.name == 'cuda' else 'x86')
+        self.use_autotvm = use_autotvm
+        self.target = target
         self.output_dtype=dtype
+        self.task_name = 'fused_conv2d.{}'.format('cuda' if target.kind.name == 'cuda' else 'x86')
         self.is_block = False
         self.layers = []
         self.placeholders = []
@@ -436,7 +435,10 @@ class FusionComposer:
         assert not (not tuning and target is None)
         task_env = TaskExtractEnv.current
 
-        if tuning:
+        if not self.use_autotvm:
+            cfg = None
+            self.update_all_shapes_from_best_cfg(cfg)
+        elif tuning:
             # Define search space
             self.cfg = autotvm.get_config()
             self.define_search_space()
@@ -445,6 +447,7 @@ class FusionComposer:
             workload = ((self.task_name),) + autotvm.task.topi_integration.serialize_args([self.parameters])
             dispatch_ctx = autotvm.task.DispatchContext.current
             cfg = dispatch_ctx.query(target, workload)
+            assert cfg is not None
             if cfg.is_fallback and task_env and not task_env.tracing:
                 print("---[[[ AutoTVM cfg not found! ]]]---")
 
@@ -563,19 +566,22 @@ class FusionComposer:
                 ref_data_no_transform.append(bias_np)
                 ref_data.append(bias_np)
 
-                bias_add_scipy = np.zeros(shape=(n, h, w, oc))
-                relu_scipy = np.zeros(shape=(n, h, w, oc))
+                post_op_scipy = np.zeros(shape=(n, h, w, oc))
                 for c in range(oc):
-                    bias_add_scipy[:,:,:,c] = output_data[:,:,:,c] + bias_np[c]
+                    post_op_scipy[:,:,:,c] = output_data[:,:,:,c] + bias_np[c]
 
                     # For ResNet / DenseNet blocks, etc
                     if self.is_block:
-                        bias_add_scipy[:,:,:,c] = bias_add_scipy[:,:,:,c] + input_data[:,:,:,c]
+                        post_op_scipy[:,:,:,c] = post_op_scipy[:,:,:,c] + input_data[:,:,:,c]
 
-                    relu_scipy[:,:,:,c] = np.maximum(bias_add_scipy[:,:,:,c], 0)
-                    if f.post_op == 'relu6':
-                        relu_scipy[:,:,:,c] = np.minimum(relu_scipy[:,:,:,c], 6)
-                output_data = relu_scipy.astype(self.output_dtype)
+                    if f.post_op == 'relu':
+                        post_op_scipy[:,:,:,c] = np.maximum(post_op_scipy[:,:,:,c], 0)
+                    elif f.post_op == 'relu6':
+                        post_op_scipy[:,:,:,c] = np.maximum(post_op_scipy[:,:,:,c], 0)
+                        post_op_scipy[:,:,:,c] = np.minimum(post_op_scipy[:,:,:,c], 6)
+                    elif f.post_op == 'sigmoid':
+                        post_op_scipy[:,:,:,c] = expit(post_op_scipy[:,:,:,c])
+                output_data = post_op_scipy.astype(self.output_dtype)
                 params_name.append('bias_{}'.format(idx+1))
 
             if idx == self.layer_num - 1: # At the last stage, append output_data as the final output for reference
@@ -909,9 +915,9 @@ if __name__ == '__main__':
 #         factors = [list(c_factors), list(w_factors), list(h_factors)]
 #         return list(itertools.product(*factors))
 
-# def get_all_possible_schedules(parameters, auto_tvm=False, device='cuda', name='depth_conv'):
+# def get_all_possible_schedules(parameters, use_autotvm=False, device='cuda', name='depth_conv'):
 #     fusion_cfg = FusionComposer(parameters)
 #     schs = []
 #     for idx in len(fusion_cfg.get_constraints()):
-#         schs.append(get_schedule(parameters, auto_tvm=auto_tvm, device=device, name=name, constraints_idx=idx))
+#         schs.append(get_schedule(parameters, use_autotvm=use_autotvm, device=device, name=name, constraints_idx=idx))
 #     return schs

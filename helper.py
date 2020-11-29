@@ -479,13 +479,16 @@ class FusedConv2DCallback(DFPatternCallback):
                 groups_array.append(tmp.attrs['groups'])
                 channels_array.append(tmp.attrs['channels'])
                 kernel_size_array.append(tmp.attrs['kernel_size'])
-                post_op_array.append('relu')
                 data_layout_array.append(tmp.attrs['data_layout'])
                 kernel_layout_array.append(tmp.attrs['kernel_layout'])
                 out_layout_array.append(tmp.attrs['out_layout'])
                 count += 1
-            elif tmp.op.name == 'add':
-                post_op_array.append(True)
+            elif tmp.op.name == 'relu': # TODO: handle relu6
+                post_op_array.append('relu')
+            elif tmp.op.name == 'sigmoid':
+                post_op_array.append('sigmoid')
+            elif tmp.op.name == 'add' and len(post_op_array) <= len(strides_array): # No relu or sigmoid appended
+                post_op_array.append('bias')
             tmp = tmp.args[0]
 
         strides_array.reverse()

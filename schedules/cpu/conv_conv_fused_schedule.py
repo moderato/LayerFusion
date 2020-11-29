@@ -3,22 +3,16 @@ from tvm import te
 from ..schedule_utils import get_stages_and_cfgs
 from .libxsmm_intrin import intrin_libxsmm_brgemm
 
-def schedule_conv_conv_fused_nhwc(outs, *args, **kwargs):
+def schedule_conv_conv_fused_nchwc(outs, *args, **kwargs):
     outs = [outs] if isinstance(outs, te.tensor.Tensor) else outs
     s = te.create_schedule([x.op for x in outs])
-    stage_dict, layer_output_dict, _, _, bn_relu, hasPaddedInput = get_stages_and_cfgs(outs)
+    stage_dict, layer_output_dict, _, _, post_ops, hasPaddedInput = get_stages_and_cfgs(outs)
     inputs_cfg = kwargs['inputs_cfg']
     filters_cfg = kwargs['filters_cfg']
     outputs_cfg = kwargs['outputs_cfg']
 
-    # from pprint import pprint
-    # pprint(stages)
-    # pprint(params)
-    # pprint(layer_output_dict)
-
     ######## Searchable parameters
     # --------------------
-    # ---
     output_step_tile_size_h = 1
     output_step_tile_size_w = 28
     step_num_h = 28
@@ -33,35 +27,23 @@ def schedule_conv_conv_fused_nhwc(outs, *args, **kwargs):
     output_tile_size_w = output_step_tile_size_w * step_num_w
     # --------------------
 
-    ######## Input data, weights, BN, etc
-    # Beginning
-    if hasPaddedInput[0]:
-        s[stage_dict['PaddedInput_0']].compute_inline()
-
-    # Intermediate
-    if bn_relu[0]: 
-        s[stage_dict['Output_0_BiasAdd']].compute_inline()
-    if hasPaddedInput[1]:
-        if bn_relu[0]:
-            s[layer_output_dict['Layer_0']].compute_inline()
-        stage_dict['SharedInput_1'] = stage_dict['PaddedInput_1'] # For disambiguity: 'PaddedInput_1' won't be used in scheduling
-    else:
-        stage_dict['SharedInput_1'] = layer_output_dict['Layer_0'] # For disambiguity
-
-    # End
-    if bn_relu[1]:
-        s[stage_dict['Output_1_BiasAdd']].compute_inline()
-
     ######## Global output
     n, oc_chunk, h, w, oc = s[layer_output_dict['Layer_1']].op.axis
-    oc_chunk_o, oc_chunk_i = s[layer_output_dict['Layer_1']].split(oc_chunk, factor=c_split2)
-    ic_chunk, ry, rx, ic = s[layer_output_dict['Layer_1']].op.reduce_axis
-    ic_chunk_o, ic_chunk_i = s[layer_output_dict['Layer_1']].split(ic_chunk, factor=reduce_split2)
+    oc_chunk_o, oc_chunk_i_1 = s[layer_output_dict['Layer_1']].split(oc_chunk, factor=c_split2)
     ht, wt, h, w = s[layer_output_dict['Layer_1']].tile(h, w, x_factor=output_tile_size_h, y_factor=output_tile_size_w)
-    ho, wo, h, w = s[layer_output_dict['Layer_1']].tile(h, w, x_factor=output_step_tile_size_h, y_factor=output_step_tile_size_w)
-    s[layer_output_dict['Layer_1']].reorder(n, oc_chunk_o, ht, wt, oc_chunk_i, ic_chunk_o, ho, wo, h, ic_chunk_i, ry, rx, w, oc, ic)
+    s[layer_output_dict['Layer_1']].reorder(n, oc_chunk_o, ht, wt, oc_chunk_i_1, h, w, oc)
     fused_blx = s[layer_output_dict['Layer_1']].fuse(n, oc_chunk_o, ht, wt)
     s[layer_output_dict['Layer_1']].parallel(fused_blx)
+    if post_ops[1]:
+        s[layer_output_dict['Layer_1']].vectorize(oc)
+        s[stage_dict['Output_1']].compute_at(s[layer_output_dict['Layer_1']], fused_blx)
+        _, oc_chunk_i_1, h, w, oc = s[stage_dict['Output_1']].op.axis
+        if post_ops[1] != 'bias':
+            s[stage_dict['Output_1_BiasAdd']].compute_inline()
+    ho_1, wo_1, h, w = s[stage_dict['Output_1']].tile(h, w, x_factor=output_step_tile_size_h, y_factor=output_step_tile_size_w)
+    ic_chunk, ry, rx, ic = s[stage_dict['Output_1']].op.reduce_axis
+    ic_chunk_o_1, ic_chunk_i = s[stage_dict['Output_1']].split(ic_chunk, factor=reduce_split2)
+    s[stage_dict['Output_1']].reorder(oc_chunk_i_1, ic_chunk_o_1, ho_1, wo_1, h, ic_chunk_i, ry, rx, w, oc, ic)
 
     if (((filters_cfg['Layer_1'].H == 1 and filters_cfg['Layer_1'].W == 1 and \
             filters_cfg['Layer_1'].stride_h == 1 and filters_cfg['Layer_1'].stride_w == 1)) and \
@@ -88,19 +70,23 @@ def schedule_conv_conv_fused_nhwc(outs, *args, **kwargs):
                                                 filters_cfg['Layer_1'].stride_w,
 
                                                 inputs_cfg['Layer_1'].C)
+    s[stage_dict['Output_1']].tensorize(tensorize_axis, libxsmm_tensorize)
 
-    s[layer_output_dict['Layer_1']].tensorize(tensorize_axis, libxsmm_tensorize)
-
-    s[layer_output_dict['Layer_0']].compute_at(s[layer_output_dict['Layer_1']], wo)
-    s[stage_dict['PaddedInput_0']].compute_at(s[layer_output_dict['Layer_1']], wo)
-    n, oc_chunk, h, w, oc = s[stage_dict['PaddedInput_0']].op.axis
-    s[stage_dict['PaddedInput_0']].vectorize(oc)
-
+    ######## Intermediate output
+    s[layer_output_dict['Layer_0']].compute_at(s[stage_dict['Output_1']], wo_1)
+    if hasPaddedInput[0]:
+        s[stage_dict['PaddedInput_0']].compute_at(s[stage_dict['Output_1']], wo_1)
     n, oc_chunk, h, w, oc = s[layer_output_dict['Layer_0']].op.axis
-    ho, wo, h, w = s[layer_output_dict['Layer_0']].tile(h, w, x_factor=output_tile_0_h, y_factor=output_tile_0_w)
-    ic_chunk, ry, rx, ic = s[layer_output_dict['Layer_0']].op.reduce_axis
-    ic_chunk_o, ic_chunk_i = s[layer_output_dict['Layer_0']].split(ic_chunk, factor=reduce_split1)
-    s[layer_output_dict['Layer_0']].reorder(oc_chunk, ic_chunk_o, ho, wo, h, ic_chunk_i, ry, rx, w, oc, ic)
+    if post_ops[0]:
+        s[layer_output_dict['Layer_0']].vectorize(oc)
+        s[stage_dict['Output_0']].compute_at(s[stage_dict['Output_1']], wo_1)
+        _, oc_chunk, h, w, oc = s[stage_dict['Output_0']].op.axis
+        if post_ops[0] != 'bias':
+            s[stage_dict['Output_0_BiasAdd']].compute_inline()
+    ho, wo, h, w = s[stage_dict['Output_0']].tile(h, w, x_factor=output_tile_0_h, y_factor=output_tile_0_w)
+    ic_chunk, ry, rx, ic = s[stage_dict['Output_0']].op.reduce_axis
+    ic_chunk_o, ic_chunk_i = s[stage_dict['Output_0']].split(ic_chunk, factor=reduce_split1)
+    s[stage_dict['Output_0']].reorder(oc_chunk, ic_chunk_o, ho, wo, h, ic_chunk_i, ry, rx, w, oc, ic)
 
     # TODO: Deal with this. Currently assuming the first layer is never 1x1
     if (((filters_cfg['Layer_0'].H == 1 and filters_cfg['Layer_0'].W == 1 and \
@@ -128,8 +114,7 @@ def schedule_conv_conv_fused_nhwc(outs, *args, **kwargs):
                                                 filters_cfg['Layer_0'].stride_w,
 
                                                 inputs_cfg['Layer_0'].C)
-
-    s[layer_output_dict['Layer_0']].tensorize(tensorize_axis, libxsmm_tensorize)
+    s[stage_dict['Output_0']].tensorize(tensorize_axis, libxsmm_tensorize)
 
     s = s.normalize()
 
