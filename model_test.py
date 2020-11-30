@@ -123,16 +123,19 @@ def tune_and_evaluate(tuning_opt, target_str, network='mobilenet_v1', dtype='flo
     print('Extract tasks...')
     if 'llvm' in target_str: # CPU & NCHWC, use NCHW to get the network though
         image_shape, layout = (3, 224, 224), 'NCHW'
-        log_filename = 'logs/autotvm/model/cpu/{}_nchwc.log'.format(network)
+        if tuning_opt.no_fusion:
+            log_filename = 'logs/autotvm/model/cpu/{}_nchwc_unfused.log'.format(network)
+        else:
+            log_filename = 'logs/autotvm/model/cpu/{}_nchwc_fused.log'.format(network)
     elif tuning_opt.use_nchw: # GPU & NCHW
         image_shape, layout = (3, 224, 224), 'NCHW'
         log_filename = 'logs/autotvm/model/gpu/{}_nchw.log'.format(network)
     else: # GPU & NHWC
         image_shape, layout = (224, 224, 3), "NHWC"
         log_filename = 'logs/autotvm/model/gpu/{}_nhwc.log'.format(network)
-    graph_opt_sch_file = 'logs/autotvm/model/cpu/%s_graph_opt.log' % network
+    graph_opt_sch_file = 'logs/autotvm/model/cpu/%s_graph_opt_{}.log'.format(network, 'unfused' if tuning_opt.no_fusion else 'fused')
     mod, params, input_shape, _ = get_network(network, batch_size=1, dtype=dtype, image_shape=image_shape, layout=layout)
-    tasks = autotvm.task.extract_from_program(mod['main'], target=target_str, params=params, ops=(relay.op.get('nn.conv2d'),))
+    tasks = autotvm.task.extract_from_program(mod['main'], target=target_str, params=params, ops=(relay.op.get('nn.conv2d'), relay.op.get('nn.dense')))
 
     # Replace all fusable tasks to fused tasks
     print("\n### Before replacement")
@@ -150,8 +153,8 @@ def tune_and_evaluate(tuning_opt, target_str, network='mobilenet_v1', dtype='flo
     if not tuning_opt.autotvm_skip_graph_tuning and ('llvm' in target_str):
         tmp_f = mod['main']
         if not tuning_opt.no_fusion:
-            # Replace BN with multiply add
-            tmp_f = rewrite(ReplaceBatchNormCallback(), tmp_f)
+            # Replace BN with bias_add
+            tmp_f = rewrite(ReplaceBatchNormCallback(layout=layout), tmp_f)
             # Fuse two conv layers
             tmp_f = rewrite(FusedConv2DCallback(), tmp_f)
         tune_graph(tmp_f, input_shape, target_str, log_filename, graph_opt_sch_file)
@@ -160,7 +163,7 @@ def tune_and_evaluate(tuning_opt, target_str, network='mobilenet_v1', dtype='flo
     with (autotvm.apply_history_best(log_filename) if 'cuda' in target_str else autotvm.apply_graph_best(graph_opt_sch_file)):
         print("############### Compile... ###############")
         if not tuning_opt.no_fusion:
-            mod = fuse_preprocess(mod['main'], params, target_str)
+            mod = fuse_preprocess(mod['main'], params, target_str, layout)
 
         with tvm.transform.PassContext(opt_level=3, trace=print_ir):
             # """
@@ -219,4 +222,4 @@ if __name__ == '__main__':
     options = get_options()
     ### target: 'cuda', 'llvm -mcpu=core-avx2', 'llvm -mcpu=core-avx512'
     ### network: mobilenet_v1, mobilenet_v2, mnasnet_a1
-    tune_and_evaluate(options, target_str='cuda', network='mobilenet_v1')
+    tune_and_evaluate(options, target_str='llvm -mcpu=core-avx2', network='mobilenet_v1')

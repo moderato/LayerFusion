@@ -439,11 +439,11 @@ class FusedConv2DCallback(DFPatternCallback):
         self.bias2 = wildcard()
 
         pattern = is_op('nn.conv2d')(self.data, self.weight1)
-        pattern = is_op('add')(pattern, self.bias1)
-        pattern = is_op('nn.relu')(pattern)
+        pattern = is_op('nn.bias_add')(pattern, self.bias1) | is_op('add')(pattern, self.bias1)
+        pattern = is_op('nn.relu')(pattern) | is_op('sigmoid')(pattern)
         pattern = is_op('nn.conv2d')(pattern, self.weight2).has_attr({'groups': 1}) # 2nd Conv should be a normal one
-        pattern = is_op('add')(pattern, self.bias2)
-        pattern = is_op('nn.relu')(pattern)
+        pattern = is_op('nn.bias_add')(pattern, self.bias2) | is_op('add')(pattern, self.bias2)
+        pattern = is_op('nn.relu')(pattern) | is_op('sigmoid')(pattern)
         self.pattern = pattern
         self.num_layers = 2
 
@@ -483,11 +483,11 @@ class FusedConv2DCallback(DFPatternCallback):
                 kernel_layout_array.append(tmp.attrs['kernel_layout'])
                 out_layout_array.append(tmp.attrs['out_layout'])
                 count += 1
-            elif tmp.op.name == 'relu': # TODO: handle relu6
-                post_op_array.append('relu')
+            elif tmp.op.name == 'nn.relu': # TODO: handle relu6
+                post_op_array.append('nn.relu')
             elif tmp.op.name == 'sigmoid':
                 post_op_array.append('sigmoid')
-            elif tmp.op.name == 'add' and len(post_op_array) <= len(strides_array): # No relu or sigmoid appended
+            elif tmp.op.name == 'nn.bias_add' and len(post_op_array) <= len(strides_array): # No relu or sigmoid appended
                 post_op_array.append('bias')
             tmp = tmp.args[0]
 
@@ -509,10 +509,38 @@ class FusedConv2DCallback(DFPatternCallback):
                                         groups_array, channels_array, kernel_size_array, post_op_array,
                                         data_layout_array, kernel_layout_array, out_layout_array, out_dtype)
 
+@relay.transform.function_pass(opt_level=1)
+class CustomPipeline:
+    """Simple test function to replace one argument to another."""
+
+    def __init__(self, layout="NHWC"):
+        self.layout = layout
+
+    # This function can define a pass.
+    def transform_function(self, func, mod, ctx):
+        obj = self
+        from tvm.relay.expr import Call, Constant
+        class ReplaceAddByBiasAdd(tvm.relay.ExprMutator):
+            def visit_call(self, call):
+                if call.op.name == 'add':
+                    axis = obj.layout.index('C')
+                    args = [self.visit(arg) for arg in call.args]
+                    return relay.nn.bias_add(*args, axis=axis)
+                return super().visit_call(call)
+
+            def visit_constant(self, c):
+                if len(c.data.shape) == 3:
+                    new_data = tvm.nd.array(c.data.asnumpy().flatten()) # [C, 1, 1] -> [C]
+                    c = Constant(new_data)
+                return c
+
+        return ReplaceAddByBiasAdd().visit(func)
+
 class ReplaceBatchNormCallback(DFPatternCallback):
     # A callback class to rewrite the matched pattern to a batch_norm op.
-    def __init__(self):
+    def __init__(self, layout="NHWC"):
         super(ReplaceBatchNormCallback, self).__init__()
+        self.layout = layout
         self.x = is_var() | wildcard()
         self.var = is_var()
         self.mean = is_var()
@@ -524,12 +552,13 @@ class ReplaceBatchNormCallback(DFPatternCallback):
         self.pattern = tuple_get_item_node
 
     def callback(self, pre, post, node_map):
+        axis = self.layout.index('C')
         x = node_map[self.x][0]
         beta = node_map[self.beta][0]
-        add = relay.add(x, beta)
+        add = relay.nn.bias_add(x, beta, axis=axis)
         return add
 
-def fuse_preprocess(f, params, target_str):
+def fuse_preprocess(f, params, target_str, layout="NHWC"):
     with tvm.target.Target(target_str):
         mod = tvm.IRModule.from_expr(f)
         mod['main'] = bind_params_by_name(mod['main'], params)
@@ -550,10 +579,17 @@ def fuse_preprocess(f, params, target_str):
                 relay.transform.FoldScaleAxis(),
                 relay.transform.CanonicalizeCast(),
                 relay.transform.CanonicalizeOps(),
+                relay.transform.ForwardFoldScaleAxis(),
+                relay.transform.BackwardFoldScaleAxis(),
             ]
         )
-        mod = seq(mod)
+        with tvm.transform.PassContext(opt_level=3):
+            mod = seq(mod)
+            new_pass = CustomPipeline(layout=layout)
+            mod = new_pass(mod)
         mod['main'] = rewrite(FusedConv2DCallback(), mod['main'])
         mod = relay.transform.InferType()(mod)
+
+        print(mod['main'])
 
     return mod
