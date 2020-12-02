@@ -4,15 +4,9 @@ def cpu_schedules(name, is_autotvm=True, tuning=False):
     # TODO: Don't use workload name to select the schedule
     if is_autotvm:
         if name == 'depth_conv':
-            if tuning:
-                from .cpu.depth_conv_fused_schedule_auto import schedule_depth_conv_fused_nchwc_auto_search as f
-            else:
-                from .cpu.depth_conv_fused_schedule_auto import schedule_depth_conv_fused_nchwc_auto_inference as f
+            from .cpu.depth_conv_fused_schedule_auto import schedule_depth_conv_fused_nchwc_auto as f
         elif name == 'conv_conv':
-            if tuning:
-                from .cpu.conv_conv_fused_schedule_auto import schedule_conv_conv_fused_nchwc_auto_search as f
-            else:
-                from .cpu.conv_conv_fused_schedule_auto import schedule_conv_conv_fused_nchwc_auto_inference as f
+            from .cpu.conv_conv_fused_schedule_auto import schedule_conv_conv_fused_nchwc_auto as f
         else: # resnet block, etc
             from .cpu.block_fused_schedule_auto import schedule_block_fused_nhwc_auto as f
     else:

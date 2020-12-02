@@ -150,8 +150,8 @@ def verify_fused(workload_name,
         FLOP = fc.get_FLOP()
         print('FLOP: {}, GFLOPS: {:.2f}.'.format(FLOP, FLOP / tcost_d / 1e9))
 
-    for target in ["llvm -mcpu=core-avx2"]:
-        check_target(target)
+    for target_str in ['llvm -mcpu=core-avx2']: # 'cuda', 'llvm -mcpu=core-avx2', 'llvm -mcpu=skylake-avx512'
+        check_target(target_str)
     print("############################################")
 
 if __name__ == '__main__':

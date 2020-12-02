@@ -133,7 +133,7 @@ def tune_and_evaluate(tuning_opt, target_str, network='mobilenet_v1', dtype='flo
     else: # GPU & NHWC
         image_shape, layout = (224, 224, 3), "NHWC"
         log_filename = 'logs/autotvm/model/gpu/{}_nhwc.log'.format(network)
-    graph_opt_sch_file = 'logs/autotvm/model/cpu/%s_graph_opt_{}.log'.format(network, 'unfused' if tuning_opt.no_fusion else 'fused')
+    graph_opt_sch_file = 'logs/autotvm/model/cpu/{}_graph_opt_{}.log'.format(network, 'unfused' if tuning_opt.no_fusion else 'fused')
     mod, params, input_shape, _ = get_network(network, batch_size=1, dtype=dtype, image_shape=image_shape, layout=layout)
     tasks = autotvm.task.extract_from_program(mod['main'], target=target_str, params=params, ops=(relay.op.get('nn.conv2d'), relay.op.get('nn.dense')))
 

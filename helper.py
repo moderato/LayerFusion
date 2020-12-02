@@ -169,12 +169,12 @@ def get_fusion_parameters_from_tasks(task1, task2, layout='NHWC'):
         param.append(workload1[2][1][0]) # 1st filter hw
         param.append(workload1[2][1][3]) # 1st filter oc
         param.append(workload1[3][0]) # 1st filter stride
-        param.append(True) # Depthwise
+        param.append('depthwise' in task1.name) # Depthwise
         param.append('relu') # TODO: Add support to bn+relu
         param.append(workload2[2][1][0]) # 2nd filter hw
         param.append(workload2[2][1][3]) # 2nd filter oc
         param.append(workload2[3][0]) # 2nd filter stride
-        param.append(False) # Not depthwise
+        param.append('depthwise' in task2.name) # Not depthwise
         param.append('relu') # TODO: Add support to bn+relu
         param.append(False) # TODO: Add support to block
     else:
@@ -186,12 +186,12 @@ def get_fusion_parameters_from_tasks(task1, task2, layout='NHWC'):
         param.append(workload1[2][1][2]) # 1st filter hw
         param.append(workload1[2][1][1]) # 1st filter oc
         param.append(workload1[3][0]) # 1st filter stride
-        param.append(True) # Depthwise
+        param.append('depthwise' in task1.name) # Depthwise
         param.append('relu') # TODO: Add support to bn+relu
         param.append(workload2[2][1][2]) # 2nd filter hw
         param.append(workload2[2][1][1]) # 2nd filter oc
         param.append(workload2[3][0]) # 2nd filter stride
-        param.append(False) # Not depthwise
+        param.append('depthwise' in task2.name) # Not depthwise
         param.append('relu') # TODO: Add support to bn+relu
         param.append(False) # TODO: Add support to block
 
