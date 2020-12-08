@@ -80,7 +80,6 @@ void benchmark_mkldnn(std::string workload_name,
     bool is_f1_depthwise, int f1_activation,
     int kernel_2, int kernel_2_out_channel, int kernel_2_stride,
     bool is_f2_depthwise, int f2_activation,
-    bool find_best_algo,
     /* if benchmark in NCHW, dummy*/ bool is_NCHW) {
 
     // Some aliases
@@ -106,7 +105,7 @@ void benchmark_mkldnn(std::string workload_name,
     int output_channel = kernel_2_out_channel;
 
     // filenames
-    std::string folder_name = "../../npy/" + workload_name + "/";
+    std::string folder_name = "../../npy/fused/" + workload_name + "/";
     std::string input_name = folder_name + "input_NCHW.npy";
     std::string kernel_1_name = folder_name + (is_f1_depthwise ? "filter_1_d_transposed.npy" : "filter_1_transposed.npy");
     std::string kernel_2_name = folder_name + "filter_2_transposed.npy";

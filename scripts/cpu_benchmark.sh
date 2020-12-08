@@ -27,23 +27,27 @@ do
       cd ../benchmark/cpu
 
       # Repeatition=1000 for runtime measurement
-      make KERNEL=../../generated_kernels/cpu/${workload_name}.asm >& /dev/null
-      numactl -l -C 0-3 ./cpu_bench "$line" 0 &> /tmp/runtime_generated.txt
-      numactl -l -C 0-3 ./cpu_bench "$line" 1 &> /tmp/runtime_mkldnn.txt
+      make KERNEL_FUSED=../../generated_kernels/cpu/fused/${workload_name}.asm \
+            KERNEL_UNFUSED_1=../../generated_kernels/cpu/unfused/${workload_name}_1.asm \
+            KERNEL_UNFUSED_2=../../generated_kernels/cpu/unfused/${workload_name}_2.asm >& /dev/null
+      numactl -l -C 0-3 ./cpu_bench "$line" 1 &> /tmp/runtime_generated.txt
+      numactl -l -C 0-3 ./cpu_bench "$line" 0 &> /tmp/runtime_mkldnn.txt
       generated_kernel_runtime="$(cat /tmp/runtime_generated.txt | grep Fusion | awk '{ printf  "%10s\n", $4 }')"
       mkldnn_runtime="$(cat /tmp/runtime_mkldnn.txt | grep 'MKLDNN runtime' | awk '{ printf  "%10s\n", $4 }')"
 
       # Flexible repeatition for flops and memory transaction measurement
-      make KERNEL=../../generated_kernels/cpu/${workload_name}.asm REPEATITION=${REP_BENCH} ENABLE_PCM=1 >& /dev/null
+      make KERNEL_FUSED=../../generated_kernels/cpu/fused/${workload_name}.asm \
+            KERNEL_UNFUSED_1=../../generated_kernels/cpu/unfused/${workload_name}_1.asm \
+            KERNEL_UNFUSED_2=../../generated_kernels/cpu/unfused/${workload_name}_2.asm REPEATITION=${REP_BENCH} ENABLE_PCM=1 >& /dev/null
       # Generated kernel
-      numactl -l -C 0-3 ./cpu_bench "$line" 0 >& /tmp/dram_generated.txt
+      numactl -l -C 0-3 ./cpu_bench "$line" 1 >& /tmp/dram_generated.txt
       rm -rf /tmp/sde_generated.out*
       sde -knl -d -iform 1 -omix /tmp/sde_generated.out -i -global_region -start_ssc_mark 111:repeat -stop_ssc_mark 222:repeat -- numactl -l -C 0-3 ./cpu_bench "$line" 0 >& /dev/null
       # rm -rf /tmp/vtune_report_generated /tmp/cpu_bench_report_generated.summary /tmp/vtune_generated.txt
       # vtune -mrte-mode=native -start-paused -r /tmp/vtune_report_generated -start-paused -q -collect memory-access -finalization-mode=none -data-limit=0 -- numactl -l -C 0-3 ./cpu_bench "$line" 0 >& /dev/null
       # vtune -report hw-events -report-knob show-issues=false -r /tmp/vtune_report_generated -q -group-by=package -format=csv -column=UNC_IMC_DRAM_DATA_READS,UNC_IMC_DRAM_DATA_WRITES -csv-delimiter=comma > /tmp/cpu_bench_report_generated.summary
       # MKLDNN
-      numactl -l -C 0-3 ./cpu_bench "$line" 1 >& /tmp/dram_mkldnn.txt
+      numactl -l -C 0-3 ./cpu_bench "$line" 0 >& /tmp/dram_mkldnn.txt
       rm -rf /tmp/sde_mkldnn.out*
       sde -knl -d -iform 1 -omix /tmp/sde_mkldnn.out -i -global_region -start_ssc_mark 111:repeat -stop_ssc_mark 222:repeat -- numactl -l -C 0-3 ./cpu_bench "$line" 1 >& /dev/null
       # rm -rf /tmp/vtune_report_mkldnn /tmp/cpu_bench_report_mkldnn.summary > /tmp/vtune_mkldnn.txt

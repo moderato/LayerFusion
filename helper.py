@@ -110,7 +110,7 @@ class FilterConfig:
         self.vlen_o = vlen_o
         OC_chunk = tvm.tir.indexdiv(self.O, vlen_o).value
         IC_chunk = tvm.tir.indexdiv(self.I, vlen_i).value
-        self.shape = (OC_chunk, IC_chunk, self.H, self.W, vlen_i, vlen_o) if not self.depthwise else (IC_chunk, 1, self.H, self.W, 1, vlen_i)
+        self.shape = (OC_chunk, IC_chunk, self.H, self.W, vlen_i, vlen_o) if not self.depthwise else (OC_chunk, 1, self.H, self.W, 1, vlen_o)
     def get_shape(self):
         return self.shape
     def get_padding_shape(self):
@@ -225,7 +225,7 @@ def get_fusion_parameters_from_fused_conv2d_attrs(attrs, inputs):
         param.append(attrs.channels_array[l] // attrs.groups_array[l])
         param.append(attrs.strides_array[l][0])
         param.append(bool(attrs.groups_array[l] > 1))
-        param.append('relu')
+        param.append(attrs.post_op_array[l])
     param.append(False)
 
     return param
@@ -259,11 +259,17 @@ def get_4D_shapes_from_params(p):
 
         if not OUTPUT:
             DATA = FeatureConfig(*p[idx:(idx+4)])
-            FILTER = FilterConfig(p[idx+4], p[idx+4], DATA.C, p[idx+5],\
+            is_depthwise = p[idx+7]
+            # Depthwise: I: 1 (channel_multiplier), O: same as data's C
+            # Normal: I: same as data's C, O: same as output's C
+            FILTER = FilterConfig(p[idx+4], p[idx+4], 1 if is_depthwise else DATA.C, DATA.C if is_depthwise else p[idx+5],\
                                             p[idx+6], *p[(idx+6):(idx+9)])
             idx += 9
         else:
             DATA = OUTPUT
+            is_depthwise = p[idx+3]
+            # Depthwise: I: 1 (channel_multiplier), O: same as data's C
+            # Normal: I: same as data's C, O: same as output's C
             FILTER = FilterConfig(p[idx], p[idx], DATA.C, p[idx+1],\
                                         p[idx+2], *p[(idx+2):(idx+5)])
             idx += 5
@@ -366,7 +372,53 @@ def get_workloads():
 
     return workloads
 
-def export_kernel_launch_config(workload_name, output_shape, best_config, target):
+# A hack to add a NCHWc version of record to the dispatch_context
+def config_nchw_to_nchwc(ctx):
+    new_inps = []
+    new_ress = []
+    for inp, res in ctx.best_by_targetkey.items():
+        args = inp[1]
+        target = res[0].target
+        task = res[0].task
+        config = res[0].config
+
+        vlen_ic, vlen_oc = -1, -1
+        config_dict = config.to_json_dict()
+        for e in config_dict['entity']:
+            if e[0] == 'tile_ic':
+                vlen_ic = int(e[2][-1])
+            if e[0] == 'tile_oc':
+                vlen_oc = int(e[2][-1])
+        assert vlen_ic != -1 and vlen_oc != -1
+
+        new_args = []
+        is_depthwise = 'depthwise' in args[0]
+        for idx, arg in enumerate(args):
+            if idx == 1:
+                n, c, h, w = arg[1]
+                new_shape = (n, c//vlen_ic, h, w, vlen_ic)
+                t = (arg[0], new_shape, arg[2])
+            elif idx == 2:
+                o, i, h, w = arg[1]
+                new_shape = (o//vlen_oc, 1, h, w, 1, vlen_oc) if is_depthwise else (o//vlen_oc, i//vlen_ic, h, w, vlen_ic, vlen_oc)
+                t = (arg[0], new_shape, arg[2])
+            else:
+                t = arg
+            new_args.append(t)
+        new_args = tuple(new_args)
+
+        from tvm.autotvm.task import Task
+        from tvm.autotvm.measure import MeasureInput
+        new_task = Task(task.name, new_args)
+        new_measure_input = MeasureInput(target, new_task, config)
+
+        new_inps.append((inp[0], new_args))
+        new_ress.append((new_measure_input, res[1]))
+
+    for inp, res in zip(new_inps, new_ress):
+        ctx.best_by_targetkey[inp] = res
+
+def export_kernel_launch_config(workload_name, output_shape, best_config, target, unfused=False):
     assert best_config is not None
     config_dict = best_config.to_json_dict()
 
@@ -397,13 +449,24 @@ def export_kernel_launch_config(workload_name, output_shape, best_config, target
         print('n: {}, ho: {}, wo: {}, recompute: {}'.format(n, ho, wo, recompute))
         print('thx: {}, thy: {}, thz: {}, blx: {}'.format(thx, thy, thz, blx))
 
-        with open('generated_kernels/gpu/kernel_launch_config/{}_config.csv'.format(workload_name), 'w') as f:
+        with open('generated_kernels/gpu/fused/kernel_launch_config/{}_config.csv'.format(workload_name), 'w') as f:
             f.write('{},{},{},{}'.format(thx, thy, thz, blx))
     else:
-        vlens = get_CPU_vlen_from_config(best_config, 'all')
-        vlens = [str(v) for v in vlens]
-        with open('generated_kernels/cpu/kernel_launch_config/{}_config.csv'.format(workload_name), 'w') as f:
-            f.write(','.join(vlens))
+        if unfused:
+            vlen_ic, vlen_oc = -1, -1
+            for e in config_dict['entity']:
+                if e[0] == 'tile_ic':
+                    vlen_ic = e[2][-1]
+                if e[0] == 'tile_oc':
+                    vlen_oc = e[2][-1]
+            assert vlen_ic != -1 and vlen_oc != -1
+            with open('generated_kernels/cpu/unfused/kernel_launch_config/{}_config.csv'.format(workload_name), 'w') as f:
+                f.write('{},{}'.format(vlen_ic, vlen_oc))
+        else:
+            vlens = get_CPU_vlen_from_config(best_config, 'all')
+            vlens = [str(v) for v in vlens]
+            with open('generated_kernels/cpu/fused/kernel_launch_config/{}_config.csv'.format(workload_name), 'w') as f:
+                f.write(','.join(vlens))
 
 def get_CPU_vlen_from_config(best_config=None, cfg_key=''):
     if best_config is None or isinstance(best_config, FallbackConfigEntity):

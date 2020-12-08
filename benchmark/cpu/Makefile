@@ -15,13 +15,17 @@ LDFLAGS := \
 	-ltvm_runtime -ldl -lpthread -lcnpy -lz -lmkldnn
 # -I${VTUNE_HOME}/include ${VTUNE_HOME}/lib64/libittnotify.a -L${VTUNE_HOME}/lib64 -littnotify 
 ASFLAGS ?= -march=corei7+fma+avx+avx2+sse3+avx512f+avx512cd+avx512vl+avx512dq # Put all potentially needed extensions here
-KERNEL ?= ../../generated_kernels/cpu/mv1_3.asm
+KERNEL_FUSED ?= ../../generated_kernels/cpu/fused/mv1_3.asm
+KERNEL_UNFUSED_1 ?= ../../generated_kernels/cpu/unfused/mv1_3_1.asm
+KERNEL_UNFUSED_2 ?= ../../generated_kernels/cpu/unfused/mv1_3_2.asm
 REPEATITION ?= 1000
 ENABLE_PCM ?= 0
 
 all: $(TARGET).cpp
-	$(ASXX) $(ASFLAGS) $(KERNEL) -o kernel.o
-	$(CXX) kernel.o -shared -fPIC -o kernel.so
+	$(ASXX) $(ASFLAGS) $(KERNEL_FUSED) -o kernel_fused.o
+	$(ASXX) $(ASFLAGS) $(KERNEL_UNFUSED_1) -o kernel_unfused_1.o
+	$(ASXX) $(ASFLAGS) $(KERNEL_UNFUSED_2) -o kernel_unfused_2.o
+	$(CXX) kernel_fused.o kernel_unfused_1.o kernel_unfused_2.o -shared -fPIC -o kernel.so
 	$(CXX) $(CXXFLAGS) \
 		-D REPEATITION=$(REPEATITION) \
 		-D ENABLE_PCM=$(ENABLE_PCM) \
@@ -32,4 +36,4 @@ all: $(TARGET).cpp
 .phony: clean
 
 clean:
-	rm $(TARGET) kernel.o kernel.so || echo -n ""
+	rm $(TARGET) kernel_fused.o kernel_unfused_1.o kernel_unfused_2.o kernel.so || echo -n ""

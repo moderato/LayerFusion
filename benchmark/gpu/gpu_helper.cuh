@@ -38,7 +38,7 @@ void getKernelConfig(std::string workload_name,
                         int& blx) {
     std::fstream fin;
 
-    std::string filename = "../../generated_kernels/gpu/kernel_launch_config/" + workload_name + "_config.csv";
+    std::string filename = "../../generated_kernels/gpu/fused/kernel_launch_config/" + workload_name + "_config.csv";
     fin.open(filename, std::ios::in);
 
     std::string line, word;

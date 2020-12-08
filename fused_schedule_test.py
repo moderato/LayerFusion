@@ -1,5 +1,5 @@
 import tvm, os, logging, sys, argparse
-import tvm.topi.testing
+from tvm.topi import testing
 import tvm.topi.tag as tag
 from tvm import autotvm
 from tvm.topi.utils import get_const_tuple
@@ -8,7 +8,7 @@ from tvm.contrib.pickle_memoize import memoize
 from helper import *
 from fusion_composer import *
 
-def verify_fused(workload_name,
+def verify_tuning(workload_name,
                     parameters,
                     tuning_opt,
                     name='depth_conv',
@@ -23,6 +23,7 @@ def verify_fused(workload_name,
     use_autotvm_skip_training = tuning_opt.use_autotvm_skip_training
     use_autotvm_transfer_learning = tuning_opt.use_autotvm_transfer_learning
     use_autotvm_trials = tuning_opt.use_autotvm_trials
+    unfused = tuning_opt.unfused
 
     def check_target(target_str):
         if not tvm.runtime.enabled(target_str):
@@ -39,116 +40,285 @@ def verify_fused(workload_name,
             device = 'gpu'
 
         fc = FusionComposer(parameters, use_autotvm=use_autotvm, target=target)
-        if use_autotvm:
-            log_name = 'logs/autotvm/layer/{}/{}_fused_{}.log'.format(device, name, workload_name)
-            print(log_name)
+        if unfused:
+            for l in range(2):
+                # 
+                input_cfg = fc.get_input_cfg(l)
+                filter_cfg= fc.get_filter_cfg(l)
 
-            # logging
-            logging.getLogger('autotvm').setLevel(logging.DEBUG)
-            logging.getLogger('autotvm').addHandler(logging.StreamHandler(sys.stdout))
+                is_depthwise = filter_cfg.depthwise
+                task_name = '{}conv2d_{}'.format('depthwise_' if is_depthwise else '', 'NHWC.cuda' if target_str == 'cuda' else 'NCHWc.x86')
+                N, H, W, C = input_cfg.get_shape()
+                data = te.placeholder((N, H, W, C) if target_str == 'cuda' else (N, C, H, W))
+                if is_depthwise:
+                    H, W, O, I = filter_cfg.get_shape()
+                else:
+                    H, W, I, O = filter_cfg.get_shape()
+                kernel = te.placeholder(filter_cfg.get_shape() if target_str == 'cuda' else (O, I, H, W))
+                stride = (filter_cfg.get_stride())
+                padding = (filter_cfg.get_padding_shape())
+                dilation = (filter_cfg.get_dilation())
+                layout = 'NHWC' if target_str == 'cuda' else 'NCHW'
+                out_layout = 'NHWC' if target_str == 'cuda' else 'NCHW'
+                out_dtype = dtype
+                data_shape = data.shape
+                kernel_shape = kernel.shape
 
-            # fused schedule auto
-            sargs = autotvm.task.topi_integration.serialize_args([parameters])
-            task = autotvm.task.create('fused_conv2d.{}'.format('cuda' if target_str == 'cuda' else 'x86'), args=sargs, target=target)
-            print(task.config_space)
-            print(task.target)
-            print(task.workload)
+                if use_autotvm:
+                    log_name = 'logs/autotvm/layer/{}/{}_{}.log'.format(device, workload_name, l+1)
+                    print(log_name)
 
-            if not use_autotvm_skip_training:
-                # autotvm setting
-                measure_option = autotvm.measure_option(
-                    builder=autotvm.LocalBuilder(),
-                    runner=autotvm.RPCRunner(
-                        TARGETS[target_str]["key"], '0.0.0.0', 9190,
-                        number=TARGETS[target_str]["config_params"]["number"],
-                        repeat=TARGETS[target_str]["config_params"]["repeat"],
-                        timeout=TARGETS[target_str]["config_params"]["timeout"][name],
-                        min_repeat_ms=TARGETS[target_str]["config_params"]["min_repeat_ms"])
-                )
-                tuner = autotvm.tuner.XGBTuner(task, feature_type="curve")
+                    # logging
+                    logging.getLogger('autotvm').setLevel(logging.DEBUG)
+                    logging.getLogger('autotvm').addHandler(logging.StreamHandler(sys.stdout))
 
-                # Transfer learning if the training log exists
-                if use_autotvm_transfer_learning and os.path.isfile(log_name):
-                    tuner.load_history(autotvm.record.load_from_file(log_name))
+                    sargs = autotvm.task.topi_integration.serialize_args([data, kernel, stride, padding, dilation, layout, out_layout, out_dtype])
+                    task = autotvm.task.create(task_name, args=sargs, target=target)
+                    print(task.config_space)
+                    print(task.target)
+                    print(task.workload)
 
-                tuner.tune(n_trial=use_autotvm_trials,
-                            measure_option=measure_option,
-                            callbacks=[autotvm.callback.progress_bar(use_autotvm_trials),
-                                        autotvm.callback.log_to_file(log_name)])
+                    if not use_autotvm_skip_training:
+                        # autotvm setting
+                        measure_option = autotvm.measure_option(
+                            builder=autotvm.LocalBuilder(),
+                            runner=autotvm.RPCRunner(
+                                TARGETS[target_str]["key"], '0.0.0.0', 9190,
+                                number=TARGETS[target_str]["config_params"]["number"],
+                                repeat=TARGETS[target_str]["config_params"]["repeat"],
+                                timeout=TARGETS[target_str]["config_params"]["timeout"][name],
+                                min_repeat_ms=TARGETS[target_str]["config_params"]["min_repeat_ms"])
+                        )
+                        tuner = autotvm.tuner.XGBTuner(task, feature_type="curve")
 
-            # inspect the best config
-            # autotvm.record.pick_best(log_name, "logs/autotvm/model/{}/test.log".format(device))
-            dispatch_context = autotvm.apply_history_best(log_name)
-            best_config = dispatch_context.query(task.target, task.workload)
-            print('\nBest config:')
-            print(best_config)
+                        # Transfer learning if the training log exists
+                        if use_autotvm_transfer_learning and os.path.isfile(log_name):
+                            tuner.load_history(autotvm.record.load_from_file(log_name))
 
-            # apply history best from log file
-            with dispatch_context:
+                        tuner.tune(n_trial=use_autotvm_trials,
+                                    measure_option=measure_option,
+                                    callbacks=[autotvm.callback.progress_bar(use_autotvm_trials),
+                                                autotvm.callback.log_to_file(log_name)])
+
+                    # inspect the best config
+                    # autotvm.record.pick_best(log_name, "logs/autotvm/model/{}/test.log".format(device))
+                    dispatch_context = autotvm.apply_history_best(log_name)
+                    config_nchw_to_nchwc(dispatch_context) # A hack to add a NCHWc version of record to the dispatch_context
+                    best_config = dispatch_context.query(task.target, task.workload)
+                    print('\nBest config:')
+                    print(best_config)
+
+                    # apply history best from log file
+                    with dispatch_context:
+                        with target:
+                            vlen_ic, vlen_oc = -1, -1
+                            config_dict = best_config.to_json_dict()
+                            for e in config_dict['entity']:
+                                if e[0] == 'tile_ic':
+                                    vlen_ic = e[2][-1]
+                                if e[0] == 'tile_oc':
+                                    vlen_oc = e[2][-1]
+                            assert vlen_ic != -1 and vlen_oc != -1
+                            n, c, h, w = data.shape
+                            data_5D = te.placeholder((n, c//vlen_ic, h, w, vlen_ic))
+                            o, i, h, w = kernel.shape
+                            kernel_6D = te.placeholder((o//vlen_oc, 1, h, w, 1, vlen_oc) if is_depthwise else (o//vlen_oc, i//vlen_ic, h, w, vlen_ic, vlen_oc))
+                            s, flatten_params = task.func(data_5D, kernel_6D, stride, padding, dilation, layout, out_layout, out_dtype)
+                            print(flatten_params)
+                else:
+                    raise Exception("Not accepting unfused kernels without AutoTVM")
+
+                if not no_print_ir:
+                    print(tvm.lower(s, flatten_params, simple_mode=True))
+                func = tvm.build(s, flatten_params, target_str, name='layer_{}'.format(l+1))
+                if print_src:
+                    if target_str == 'cuda':
+                        print(func.imported_modules[0].get_source())
+                    else:
+                        print(func.get_source('asm')) # assembly code
+                if dry_run: # Only print IR and/or source
+                    return
+                if export_code:
+                    if target_str == 'cuda':
+                        code = func.imported_modules[0].get_source()
+                        write_code(code, 'generated_kernels/gpu/unfused/{}_{}.cuh'.format(workload_name, l+1))
+                    else: # CPU
+                        code = func.get_source("asm")
+                        write_code(code, 'generated_kernels/cpu/unfused/{}_{}.asm'.format(workload_name, l+1))
+
+                        # func.export_library("benchmark/cpu/kernel.so")
+                        # func_sys = tvm.build(s, flatten_params, target_str + " --system-lib", name="fused_2_sys")
+                        # func_sys.save("benchmark/cpu/kernel_sys.o")
+
+                ref_data = []
+                nd_arrays = []
+
+                # Ridiculous return orders: depthwise_conv2d (2, 1, 0), conv2d (2, 0, 1)
+                data_np = np.random.uniform(0.0, 0.1, size=get_const_tuple(data_shape)).astype(dtype)
+                n, c, h, w = data_np.shape
+                data_np_5D = np.array(data_np.reshape((n, c//vlen_ic, vlen_ic, h, w)).transpose(0, 1, 3, 4, 2), order='C')
+                ref_data.append(data_np_5D)
+                nd_arrays.append(tvm.nd.array(data_np_5D, ctx))
+                kernel_np = np.random.uniform(0.0, 0.1, size=get_const_tuple(kernel_shape)).astype(dtype)
+                o, i, h, w = kernel_np.shape
+                kernel_np_6D = np.array(kernel_np.reshape((o//vlen_oc, vlen_oc, 1, 1, h, w) if is_depthwise else (o//vlen_oc, vlen_oc, i//vlen_ic, vlen_ic, h, w)).transpose(0, 2, 4, 5, 3, 1), order='C')
+                if is_depthwise:
+                    ref_data = [kernel_np_6D] + ref_data
+                    nd_arrays = [tvm.nd.array(kernel_np_6D, ctx)] + nd_arrays
+                    output_np = testing.depthwise_conv2d_python_nchw(data_np, kernel_np, stride=stride, padding='SAME').astype(dtype)
+                else:
+                    ref_data.append(kernel_np_6D)
+                    nd_arrays.append(tvm.nd.array(kernel_np_6D, ctx))
+                    output_np = testing.conv2d_nchw_python(data_np, kernel_np, stride=stride, padding='SAME').astype(dtype)
+
+                n, c, h, w = output_np.shape
+                output_np_5D = np.array(output_np.reshape((n, c//vlen_oc, vlen_oc, h, w)).transpose((0, 1, 3, 4, 2)), order='C')
+                ref_data = [output_np_5D] + ref_data
+                nd_arrays = [tvm.nd.array(np.zeros(get_const_tuple(output_np_5D.shape), dtype=dtype), ctx)] + nd_arrays
+
+                output_shape = output_np.shape
+                if use_autotvm:
+                    assert (best_config is not None)
+                    export_kernel_launch_config("{}_{}".format(workload_name, l+1), output_shape, best_config, target_str, unfused=unfused)
+
+                if save_data:
+                    folder_name = 'npy/unfused/{}_{}/'.format(workload_name, l+1)
+                    if not os.path.exists(folder_name):
+                        os.mkdir(folder_name)
+                    np.save('{}/input.npy'.format(folder_name), ref_data[2] if is_depthwise else ref_data[1])
+                    np.save('{}/filter.npy'.format(folder_name), ref_data[1] if is_depthwise else ref_data[2])
+                    np.save('{}/output.npy'.format(folder_name), ref_data[0])
+
+                # Measure a 'delta' time
+                run_number = 1000
+                timer_1 = func.time_evaluator(func.entry_name, ctx, number=run_number)
+                tcost_1 = timer_1(*nd_arrays).mean * run_number
+                timer_2 = func.time_evaluator(func.entry_name, ctx, number=run_number*2)
+                tcost_2 = timer_2(*nd_arrays).mean * run_number * 3
+                tcost_d = (tcost_2 - tcost_1) / (run_number * 2)
+
+                # np.testing.assert_allclose(nd_arrays[-1].asnumpy(), ref_data[0], rtol=1e-3) # Output at ref_data[0]
+                d = ~np.isclose(nd_arrays[0].asnumpy(), ref_data[0], rtol=1e-3)
+                if (np.sum(d) > 0):
+                    print('# of incorrect numbers: {}'.format(len(ref_data[-1][d])))
+                    print(nd_arrays[0].asnumpy()[d])
+                    print(ref_data[0][d])
+                    print(np.where(d))
+                # print("Error rate: {:.2f}%".format((len(d) / len(ref_data[0]) * 100)))
+                print('{} {}_{} ({}): average running time is {:.2f} us.'.format('Depthwise conv2d' if is_depthwise else 'Conv2d', workload_name, l+1, 'NCHW', tcost_d * 1e6))
+                FLOP = task.flop
+                print('FLOP: {}, GFLOPS: {:.2f}.'.format(FLOP, FLOP / tcost_d / 1e9))
+        else: # Fused
+            if use_autotvm:
+                log_name = 'logs/autotvm/layer/{}/{}_fused_{}.log'.format(device, name, workload_name)
+                print(log_name)
+
+                # logging
+                logging.getLogger('autotvm').setLevel(logging.DEBUG)
+                logging.getLogger('autotvm').addHandler(logging.StreamHandler(sys.stdout))
+
+                # fused schedule auto
+                sargs = autotvm.task.topi_integration.serialize_args([parameters])
+                task = autotvm.task.create('fused_conv2d.{}'.format('cuda' if target_str == 'cuda' else 'x86'), args=sargs, target=target)
+                print(task.config_space)
+                print(task.target)
+                print(task.workload)
+
+                if not use_autotvm_skip_training:
+                    # autotvm setting
+                    measure_option = autotvm.measure_option(
+                        builder=autotvm.LocalBuilder(),
+                        runner=autotvm.RPCRunner(
+                            TARGETS[target_str]["key"], '0.0.0.0', 9190,
+                            number=TARGETS[target_str]["config_params"]["number"],
+                            repeat=TARGETS[target_str]["config_params"]["repeat"],
+                            timeout=TARGETS[target_str]["config_params"]["timeout"][name],
+                            min_repeat_ms=TARGETS[target_str]["config_params"]["min_repeat_ms"])
+                    )
+                    tuner = autotvm.tuner.XGBTuner(task, feature_type="curve")
+
+                    # Transfer learning if the training log exists
+                    if use_autotvm_transfer_learning and os.path.isfile(log_name):
+                        tuner.load_history(autotvm.record.load_from_file(log_name))
+
+                    tuner.tune(n_trial=use_autotvm_trials,
+                                measure_option=measure_option,
+                                callbacks=[autotvm.callback.progress_bar(use_autotvm_trials),
+                                            autotvm.callback.log_to_file(log_name)])
+
+                # inspect the best config
+                # autotvm.record.pick_best(log_name, "logs/autotvm/model/{}/test.log".format(device))
+                dispatch_context = autotvm.apply_history_best(log_name)
+                best_config = dispatch_context.query(task.target, task.workload)
+                print('\nBest config:')
+                print(best_config)
+
+                # apply history best from log file
+                with dispatch_context:
+                    with target:
+                        s, flatten_params = fc.get_schedule_inference(target)
+            else:
+                best_config = None
                 with target:
                     s, flatten_params = fc.get_schedule_inference(target)
-        else:
-            best_config = None
-            with target:
-                s, flatten_params = fc.get_schedule_inference(target)
 
-        if not no_print_ir:
-            print(tvm.lower(s, flatten_params, simple_mode=True))
-        func = tvm.build(s, flatten_params, target_str, name='fused_2')
-        if print_src:
-            if target_str == 'cuda':
-                print(func.imported_modules[0].get_source())
-            else:
-                print(func.get_source('asm')) # assembly code
-        if dry_run: # Only print IR and/or source
-            return
-        if export_code:
-            if target_str == 'cuda':
-                code = func.imported_modules[0].get_source()
-                write_code(code, 'generated_kernels/gpu/{}.cuh'.format(workload_name))
-            else: # CPU
-                code = func.get_source("asm")
-                write_code(code, 'generated_kernels/cpu/{}.asm'.format(workload_name))
+            if not no_print_ir:
+                print(tvm.lower(s, flatten_params, simple_mode=True))
+            func = tvm.build(s, flatten_params, target_str, name='fused_2')
+            if print_src:
+                if target_str == 'cuda':
+                    print(func.imported_modules[0].get_source())
+                else:
+                    print(func.get_source('asm')) # assembly code
+            if dry_run: # Only print IR and/or source
+                return
+            if export_code:
+                if target_str == 'cuda':
+                    code = func.imported_modules[0].get_source()
+                    write_code(code, 'generated_kernels/gpu/fused/{}.cuh'.format(workload_name))
+                else: # CPU
+                    code = func.get_source("asm")
+                    write_code(code, 'generated_kernels/cpu/fused/{}.asm'.format(workload_name))
 
-                # func.export_library("benchmark/cpu/kernel.so")
-                # func_sys = tvm.build(s, flatten_params, target_str + " --system-lib", name="fused_2_sys")
-                # func_sys.save("benchmark/cpu/kernel_sys.o")
+                    # func.export_library("benchmark/cpu/kernel.so")
+                    # func_sys = tvm.build(s, flatten_params, target_str + " --system-lib", name="fused_2_sys")
+                    # func_sys.save("benchmark/cpu/kernel_sys.o")
 
-        # Prepare data
-        ref_data = fc.get_ref_data(workload_name, best_config, save_data=save_data)
+            # Prepare data
+            ref_data = fc.get_ref_data(workload_name, best_config, save_data=save_data)
 
-        # export kernel launch config, e.g. thxyz, blxy, vlen, etc
-        output_shape = ref_data[-1].shape
-        if use_autotvm:
-            assert (best_config is not None)
-            export_kernel_launch_config(workload_name, output_shape, best_config, target_str)
+            # export kernel launch config, e.g. thxyz, blxy, vlen, etc
+            output_shape = ref_data[-1].shape
+            if use_autotvm:
+                assert (best_config is not None)
+                export_kernel_launch_config(workload_name, output_shape, best_config, target_str)
 
-        nd_arrays = []
-        for idx, array in enumerate(ref_data):
-            if idx != len(ref_data) - 1: # Append data to nd_arrays
-                nd_arrays.append(tvm.nd.array(array, ctx))
-            else: # Leave the last nd_array as all-zero
-                nd_arrays.append(tvm.nd.array(np.zeros(get_const_tuple(array.shape), dtype=dtype), ctx)) # Append 0 output data
+            nd_arrays = []
+            for idx, array in enumerate(ref_data):
+                if idx != len(ref_data) - 1: # Append data to nd_arrays
+                    nd_arrays.append(tvm.nd.array(array, ctx))
+                else: # Leave the last nd_array as all-zero
+                    nd_arrays.append(tvm.nd.array(np.zeros(get_const_tuple(array.shape), dtype=dtype), ctx)) # Append 0 output data
 
-        # Measure a 'delta' time
-        run_number = 1000
-        timer_1 = func.time_evaluator(func.entry_name, ctx, number=run_number)
-        tcost_1 = timer_1(*nd_arrays).mean * run_number
-        timer_2 = func.time_evaluator(func.entry_name, ctx, number=run_number*2)
-        tcost_2 = timer_2(*nd_arrays).mean * run_number * 3
-        tcost_d = (tcost_2 - tcost_1) / (run_number * 2)
+            # Measure a 'delta' time
+            run_number = 1000
+            timer_1 = func.time_evaluator(func.entry_name, ctx, number=run_number)
+            tcost_1 = timer_1(*nd_arrays).mean * run_number
+            timer_2 = func.time_evaluator(func.entry_name, ctx, number=run_number*2)
+            tcost_2 = timer_2(*nd_arrays).mean * run_number * 3
+            tcost_d = (tcost_2 - tcost_1) / (run_number * 2)
 
-        # np.testing.assert_allclose(nd_arrays[-1].asnumpy(), ref_data[-1], rtol=1e-3)
-        d = ~np.isclose(nd_arrays[-1].asnumpy(), ref_data[-1], rtol=1e-3)
-        if (np.sum(d) > 0):
-            print('# of incorrect numbers: {}'.format(len(ref_data[-1][d])))
-            print(nd_arrays[-1].asnumpy()[d])
-            print(ref_data[-1][d])
-            print(np.where(d))
-        # print("Error rate: {:.2f}%".format((len(d) / len(ref_data[-1]) * 100)))
-        print('{}_fused of {} ({}): average running time is {:.2f} us.'.format(name, workload_name, 'NHWC' if target_str == 'cuda' else 'NCHWc', tcost_d * 1e6))
-        FLOP = fc.get_FLOP()
-        print('FLOP: {}, GFLOPS: {:.2f}.'.format(FLOP, FLOP / tcost_d / 1e9))
+            # np.testing.assert_allclose(nd_arrays[-1].asnumpy(), ref_data[-1], rtol=1e-3)
+            d = ~np.isclose(nd_arrays[-1].asnumpy(), ref_data[-1], rtol=1e-3)
+            if (np.sum(d) > 0):
+                print('# of incorrect numbers: {}'.format(len(ref_data[-1][d])))
+                print(nd_arrays[-1].asnumpy()[d])
+                print(ref_data[-1][d])
+                print(np.where(d))
+            # print("Error rate: {:.2f}%".format((len(d) / len(ref_data[-1]) * 100)))
+            print('{}_fused of {} ({}): average running time is {:.2f} us.'.format(name, workload_name, 'NHWC' if target_str == 'cuda' else 'NCHWc', tcost_d * 1e6))
+            FLOP = fc.get_FLOP()
+            print('FLOP: {}, GFLOPS: {:.2f}.'.format(FLOP, FLOP / tcost_d / 1e9))
 
     for target_str in ['llvm -mcpu=core-avx2']: # 'cuda', 'llvm -mcpu=core-avx2', 'llvm -mcpu=skylake-avx512'
         check_target(target_str)
@@ -171,6 +341,7 @@ if __name__ == '__main__':
         parser.add_argument("-k", "--use_autotvm_skip_training", action="store_true", help="Run AutoTVM tuned kernel.")
         parser.add_argument("-l", "--use_autotvm_transfer_learning", action="store_true", help="Load existing tuning log.")
         parser.add_argument("-t", "--use_autotvm_trials", type=int, default=32, help="Number of AutoTVM trials.")
+        parser.add_argument("-u", "--unfused", action="store_true", help="Tune separate tasks.")
         options = parser.parse_args()
         return options
 
@@ -181,7 +352,7 @@ if __name__ == '__main__':
     for t, workload in workloads.items():
         for workload_name, parameters in workload.items():
             print(workload_name, parameters)
-            verify_fused(workload_name,
+            verify_tuning(workload_name,
                             parameters,
                             options,
                             name=t)

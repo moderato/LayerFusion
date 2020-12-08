@@ -4,7 +4,7 @@ RUN apt-get update
 # General
 RUN apt-get install -y wget nano gcc make git lsb-release software-properties-common
 RUN apt-get install -y python3 python3-dev python3-setuptools python3-pip
-RUN apt-get install -y gcc libtinfo-dev zlib1g-dev build-essential cmake libedit-dev libxml2-dev tmux numactl bc
+RUN apt-get install -y gcc libtinfo-dev zlib1g-dev build-essential cmake libedit-dev libxml2-dev tmux numactl bc vim
 
 # Tmux
 RUN echo 'set -g mouse on\n' \
@@ -113,7 +113,7 @@ RUN cd ${HOME}/Documents && \
 
 # TVM
 RUN pip3 install --upgrade pip && \
-    pip3 install --user numpy decorator attrs tornado psutil xgboost cython typed_ast
+    pip3 install --user numpy decorator attrs tornado psutil xgboost cython typed_ast pytest
 RUN cd ${HOME}/Documents && \
     git clone --recursive https://github.com/moderato/incubator-tvm tvm && \
     mkdir -p tvm/build && \

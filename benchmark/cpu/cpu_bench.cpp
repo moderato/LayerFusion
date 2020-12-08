@@ -20,8 +20,9 @@
     #define SIGMOID 4
 #endif
 
-#define GENERATED_CPU 0
-#define MKLDNN 1
+#define MKLDNN 0
+#define GENERATED_CPU_FUSED 1
+#define GENERATED_CPU_UNFUSED 2
 
 // #define DEBUG 1
 
@@ -123,15 +124,15 @@ void benchmarkWithWorkloadString(std::string workload, int type) {
                         is_f1_depthwise, f1_activation,
                         kernel_2, kernel_2_out_channel, kernel_2_stride,
                         is_f2_depthwise, f2_activation,
-                        true, 0);
-    } else { // generated gpu kernel
+                        0);
+    } else { // generated gpu kernel, fused or unfused
         benchmark_generated_cpu(workload_name,
                                 input_batch, input_height, input_width, input_channel,
                                 kernel_1, kernel_1_out_channel_or_multiplier, kernel_1_stride,
                                 is_f1_depthwise, f1_activation,
                                 kernel_2, kernel_2_out_channel, kernel_2_stride,
                                 is_f2_depthwise, f2_activation,
-                                true, 0);
+                                (type == GENERATED_CPU_FUSED));
     }
 }
 

@@ -22,9 +22,12 @@ mkdir -p logs/gflops/cpu
 mkdir -p logs/gflops/gpu
 mkdir -p logs/runtime/cpu
 mkdir -p logs/runtime/gpu
-mkdir -p generated_kernels/cpu/kernel_launch_config
-mkdir -p generated_kernels/gpu/kernel_launch_config
-mkdir -p npy
+mkdir -p generated_kernels/cpu/fused/kernel_launch_config
+mkdir -p generated_kernels/cpu/unfused/kernel_launch_config
+mkdir -p generated_kernels/gpu/fused/kernel_launch_config
+mkdir -p generated_kernels/gpu/unfused/kernel_launch_config
+mkdir -p npy/fused
+mkdir -p npy/unfused
 
 # # For VTune benchmark
 # sudo ln -sf ${VTUNE_HOME}/bin64/vtune /usr/bin/vtune 

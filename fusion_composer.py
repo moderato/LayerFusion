@@ -266,7 +266,7 @@ class FusionComposer:
 
             Output = te.compute(self.output_cfg.get_shape(),
                         lambda n, h, w, c: te.sum(
-                                                (Filter[ry, rx, 0, c] *
+                                                (Filter[ry, rx, c, 0] *
                                                 Padded[n,
                                                         h * stride_h + ry * dilation_h,
                                                         w * stride_w + rx * dilation_w,
@@ -592,7 +592,7 @@ class FusionComposer:
 
         if save_data:
             # Save ref data
-            folder_name = 'npy/{}/'.format(workload_name)
+            folder_name = 'npy/fused/{}/'.format(workload_name)
             if not os.path.exists(folder_name):
                 os.mkdir(folder_name)
             for i in range(0, len(ref_data)):

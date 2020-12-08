@@ -53,10 +53,10 @@ using namespace pcm;
 // #define DEBUG 1
 
 // TODO: Generalize the vlens reading
-void getKernelConfig(std::string workload_name, int& vlen1, int& vlen2) {
+void getKernelConfigFused(std::string workload_name, int& vlen1, int& vlen2) {
     std::fstream fin;
 
-    std::string filename = "../../generated_kernels/cpu/kernel_launch_config/" + workload_name + "_config.csv";
+    std::string filename = "../../generated_kernels/cpu/fused/kernel_launch_config/" + workload_name + "_config.csv";
     fin.open(filename, std::ios::in);
 
     std::string line, word;
@@ -70,14 +70,30 @@ void getKernelConfig(std::string workload_name, int& vlen1, int& vlen2) {
     fin.close();
 }
 
-void benchmark_generated_cpu(std::string workload_name,
+void getKernelConfigUnfused(std::string workload_name, int& vlen1, int& vlen2) {
+    std::fstream fin;
+
+    std::string filename = "../../generated_kernels/cpu/unfused/kernel_launch_config/" + workload_name + "_config.csv";
+    fin.open(filename, std::ios::in);
+
+    std::string line, word;
+    fin >> line;
+    std::stringstream s(line);
+    getline(s, word, ',');
+    vlen1 = std::stoi(word);
+    getline(s, word, ',');
+    vlen2 = std::stoi(word);
+
+    fin.close();
+}
+
+
+void benchmark_generated_cpu_fused(std::string workload_name,
     int input_batch, int input_height, int input_width, int input_channel,
     int kernel_1, int kernel_1_out_channel_or_multiplier, int kernel_1_stride,
     bool is_f1_depthwise, int f1_activation,
     int kernel_2, int kernel_2_out_channel, int kernel_2_stride,
-    bool is_f2_depthwise, int f2_activation,
-    bool find_best_algo,
-    /* if benchmark in NCHW, dummy*/ bool is_NCHW) {
+    bool is_f2_depthwise, int f2_activation) {
 
     std::cout << "#######################" << std::endl;
 
@@ -100,7 +116,7 @@ void benchmark_generated_cpu(std::string workload_name,
     int output_channel = kernel_2_out_channel;
 
     // filenames
-    std::string folder_name = "../../npy/" + workload_name + "/";
+    std::string folder_name = "../../npy/fused/" + workload_name + "/";
     std::string input_name = folder_name + "input_NCHWc.npy";
     std::string kernel_1_name = folder_name + (is_f1_depthwise ? "filter_1_d_NCHWc.npy" : "filter_1_NCHWc.npy");
     std::string kernel_2_name = folder_name + "filter_2_NCHWc.npy";
@@ -142,7 +158,7 @@ void benchmark_generated_cpu(std::string workload_name,
     assert(fused_2 != nullptr);
     DLTensor *input, *filter_1, *filter_2, *output, *bias_1, *bias_2;
     int vlen1, vlen2;
-    getKernelConfig(workload_name, vlen1, vlen2);
+    getKernelConfigFused(workload_name, vlen1, vlen2);
     int dtype_code = kDLFloat;
     int dtype_bits = 32;
     int dtype_lanes = 1;
@@ -206,22 +222,22 @@ void benchmark_generated_cpu(std::string workload_name,
 #if ENABLE_PCM == 1
         SystemCounterState before_sstate = getSystemCounterState();
 #endif
-    auto elapsed = std::chrono::high_resolution_clock::now() - std::chrono::high_resolution_clock::now();
-    if (!f1_activation && !f2_activation) {
-        auto start = std::chrono::high_resolution_clock::now();
+        auto elapsed = std::chrono::high_resolution_clock::now() - std::chrono::high_resolution_clock::now();
+        if (!f1_activation && !f2_activation) {
+            auto start = std::chrono::high_resolution_clock::now();
 
-        // asm function call here
-        fused_2(input, filter_1, filter_2, output);
+            // asm function call here
+            fused_2(input, filter_1, filter_2, output);
 
-        elapsed = std::chrono::high_resolution_clock::now() - start;
-    } else {
-        auto start = std::chrono::high_resolution_clock::now();
+            elapsed = std::chrono::high_resolution_clock::now() - start;
+        } else {
+            auto start = std::chrono::high_resolution_clock::now();
 
-        // asm function call here
-        fused_2(input, filter_1, bias_1, filter_2, bias_2, output);
+            // asm function call here
+            fused_2(input, filter_1, bias_1, filter_2, bias_2, output);
 
-        elapsed = std::chrono::high_resolution_clock::now() - start;
-    }
+            elapsed = std::chrono::high_resolution_clock::now() - start;
+        }
 #if ENABLE_PCM == 1
         SystemCounterState after_sstate = getSystemCounterState();
 #endif
@@ -249,6 +265,7 @@ void benchmark_generated_cpu(std::string workload_name,
 #endif
         if (std::abs(output_element - tmp[i]) > 1e-3) // A few nums have bigger errors
             count++;
+        
     }
     printf("Output wrong count: %d\n", count);
 
@@ -256,4 +273,261 @@ void benchmark_generated_cpu(std::string workload_name,
     TVMArrayFree(filter_1);
     TVMArrayFree(filter_2);
     TVMArrayFree(output);
+}
+
+void benchmark_generated_cpu_unfused(std::string workload_name,
+    int input_batch, int input_height, int input_width, int input_channel,
+    int kernel_1, int kernel_1_out_channel_or_multiplier, int kernel_1_stride,
+    bool is_f1_depthwise, int f1_activation,
+    int kernel_2, int kernel_2_out_channel, int kernel_2_stride,
+    bool is_f2_depthwise, int f2_activation) {
+
+    std::cout << "#######################" << std::endl;
+
+    // Some aliases
+    int kernel_1_height = kernel_1, kernel_1_width = kernel_1;
+    int kernel_1_in_channel = input_channel;
+    // To be calculated
+    int inter_batch = input_batch;
+    int inter_height = kernel_1_stride == 1 ? input_height : input_height / 2; // TODO: formula to calculate input and output
+    int inter_width = kernel_1_stride == 1 ? input_width : input_width / 2;
+    int inter_channel = is_f1_depthwise ? input_channel * kernel_1_out_channel_or_multiplier : kernel_1_out_channel_or_multiplier;
+
+    // Some aliases
+    int kernel_2_height = kernel_2, kernel_2_width = kernel_2;
+    int kernel_2_in_channel = inter_channel;
+    // To be calculated
+    int output_batch = inter_batch;
+    int output_height = kernel_2_stride == 1 ? inter_height : inter_height / 2; // TODO: formula to calculate input and output
+    int output_width = kernel_2_stride == 1 ? inter_width : inter_width / 2;
+    int output_channel = kernel_2_out_channel;
+
+    // filenames
+    std::string folder_name = "../../npy/unfused/" + workload_name;
+    std::string input_1_name = folder_name + "_1/input.npy";
+    std::string kernel_1_name = folder_name + "_1/filter.npy";
+    std::string output_1_name = folder_name + "_1/output.npy";
+    std::string input_2_name = folder_name + "_2/input.npy";
+    std::string kernel_2_name = folder_name + "_2/filter.npy";
+    std::string output_2_name = folder_name + "_2/output.npy";
+
+#ifdef DEBUG
+    std::cout << "npy file names:" << std::endl;
+    std::cout << input_1_name << std::endl << kernel_1_name << std::endl << output_1_name << std::endl << input_2_name << std::endl << kernel_2_name << std::endl << output_2_name << std::endl;
+    std::cout << "input_shape: (" << input_batch << ", " << input_height << ", " << input_width << ", " << input_channel << ")" << std::endl;
+    std::cout << "kernel_1_shape: (" << kernel_1_height << ", " << kernel_1_width << ", " << kernel_1_in_channel << ", " << kernel_1_out_channel_or_multiplier << ")" << std::endl;
+    std::cout << "inter_shape: (" << inter_batch << ", " << inter_height << ", " << inter_width << ", " << inter_channel << ")" << std::endl;
+    std::cout << "kernel_2_shape: (" << kernel_2_height << ", " << kernel_2_width << ", " << kernel_2_in_channel << ", " << kernel_2_out_channel << ")" << std::endl;
+    std::cout << "output_shape: (" << output_batch << ", " << output_height << ", " << output_width << ", " << output_channel << ")" << std::endl;
+#endif
+
+    // Load data
+    cnpy::NpyArray input_1_npy = cnpy::npy_load(input_1_name);
+    cnpy::NpyArray kernel_1_npy = cnpy::npy_load(kernel_1_name);
+    cnpy::NpyArray input_2_npy = cnpy::npy_load(input_2_name);
+    cnpy::NpyArray kernel_2_npy = cnpy::npy_load(kernel_2_name);
+
+    // For verification
+    cnpy::NpyArray output_1_npy = cnpy::npy_load(output_1_name);
+    float *tmp_1 = output_1_npy.data<float>();
+    cnpy::NpyArray output_2_npy = cnpy::npy_load(output_2_name);
+    float *tmp_2 = output_2_npy.data<float>();
+
+    // For cache flushing
+    int *flush_cache = new int[BIGGER_THAN_CACHESIZE];
+
+    // DLTensor initialization
+    tvm::runtime::Module mod = tvm::runtime::Module::LoadFromFile("kernel.so");
+    tvm::runtime::PackedFunc layer_1 = mod.GetFunction("layer_1");
+    tvm::runtime::PackedFunc layer_2 = mod.GetFunction("layer_2");
+    assert(layer_1 != nullptr);
+    assert(layer_2 != nullptr);
+    DLTensor *input_1, *filter_1, *output_1, *input_2, *filter_2, *output_2;
+    int vlen1_1, vlen1_2;
+    getKernelConfigUnfused(workload_name + "_1", vlen1_1, vlen1_2);
+    int vlen2_1, vlen2_2;
+    getKernelConfigUnfused(workload_name + "_2", vlen2_1, vlen2_2);
+    int dtype_code = kDLFloat;
+    int dtype_bits = 32;
+    int dtype_lanes = 1;
+    int device_type = kDLCPU;
+    int device_id = 0;
+
+    int64_t input_1_shape_tuple[5] = {input_batch, int64_t(std::ceil(input_channel / vlen1_1)), input_height, input_width, vlen1_1};
+    int64_t filter_1_shape_tuple[6] = {int64_t(std::ceil(kernel_1_in_channel / vlen1_2)), is_f1_depthwise ? 1 : int64_t(std::ceil(kernel_1_out_channel_or_multiplier)), kernel_1_height, kernel_1_width, 1, vlen1_2};
+    int64_t output_1_shape_tuple[5] = {inter_batch, int64_t(std::ceil(kernel_1_in_channel / vlen1_2)), inter_height, inter_width, vlen1_2};
+    int64_t input_2_shape_tuple[5] = {inter_batch, int64_t(std::ceil(inter_channel / vlen2_1)), inter_height, inter_width, vlen2_1};
+    int64_t filter_2_shape_tuple[6] = {int64_t(std::ceil(kernel_2_out_channel / vlen2_2)), int64_t(std::ceil(kernel_2_in_channel / vlen2_1)), kernel_2_height, kernel_2_width, vlen2_1, vlen2_2};
+    int64_t output_2_shape_tuple[5] = {output_batch, int64_t(std::ceil(kernel_2_out_channel / vlen2_2)), output_height, output_width, vlen2_2};
+    TVMArrayAlloc(input_1_shape_tuple, 5, dtype_code, dtype_bits, dtype_lanes,
+                    device_type, device_id, &input_1);
+    TVMArrayAlloc(filter_1_shape_tuple, 6, dtype_code, dtype_bits, dtype_lanes,
+                    device_type, device_id, &filter_1);
+    TVMArrayAlloc(output_1_shape_tuple, 5, dtype_code, dtype_bits, dtype_lanes,
+                    device_type, device_id, &output_1);
+    TVMArrayAlloc(input_2_shape_tuple, 5, dtype_code, dtype_bits, dtype_lanes,
+                    device_type, device_id, &input_2);
+    TVMArrayAlloc(filter_2_shape_tuple, 6, dtype_code, dtype_bits, dtype_lanes,
+                    device_type, device_id, &filter_2);
+    TVMArrayAlloc(output_2_shape_tuple, 5, dtype_code, dtype_bits, dtype_lanes,
+                    device_type, device_id, &output_2);
+    memcpy(input_1->data, input_1_npy.data<float>(), input_batch * input_height * input_width * input_channel * sizeof(float));
+    memcpy(filter_1->data, kernel_1_npy.data<float>(), kernel_1_height * kernel_1_width * kernel_1_in_channel * kernel_1_out_channel_or_multiplier * sizeof(float));
+    memcpy(input_2->data, input_2_npy.data<float>(), inter_batch * inter_height * inter_width * inter_channel * sizeof(float));
+    memcpy(filter_2->data, kernel_2_npy.data<float>(), kernel_2_height * kernel_2_width * kernel_2_in_channel * kernel_2_out_channel * sizeof(float));
+
+#ifdef DEBUG
+    std::cout << "npy_input_1_shape: (" << input_1_shape_tuple[0] << ", " << input_1_shape_tuple[1] << ", " << input_1_shape_tuple[2] << ", " << input_1_shape_tuple[3] << ")" << std::endl;
+    std::cout << "npy_kernel_1_shape: (" << filter_1_shape_tuple[0] << ", " << filter_1_shape_tuple[1] << ", " << filter_1_shape_tuple[2] << ", " << filter_1_shape_tuple[3] << ")" << std::endl;
+    std::cout << "npy_output_2_shape: (" << output_1_shape_tuple[0] << ", " << output_1_shape_tuple[1] << ", " << output_1_shape_tuple[2] << ", " << output_1_shape_tuple[3] << ", " << output_1_shape_tuple[4] << ")" << std::endl;
+    std::cout << "npy_input_1_shape: (" << input_2_shape_tuple[0] << ", " << input_2_shape_tuple[1] << ", " << input_2_shape_tuple[2] << ", " << input_2_shape_tuple[3] << ")" << std::endl;
+    std::cout << "npy_kernel_2_shape: (" << filter_2_shape_tuple[0] << ", " << filter_2_shape_tuple[1] << ", " << filter_2_shape_tuple[2] << ", " << filter_2_shape_tuple[3] << ")" << std::endl;
+    std::cout << "npy_output_2_shape: (" << output_2_shape_tuple[0] << ", " << output_2_shape_tuple[1] << ", " << output_2_shape_tuple[2] << ", " << output_2_shape_tuple[3] << ", " << output_2_shape_tuple[4] << ")" << std::endl;
+#endif
+
+    // Benchmark
+    float runtime_us = 0.0f, runtime_1_us = 0.0f, runtime_2_us = 0.0f;
+    int output_1_shape = inter_batch * inter_height * inter_width * inter_channel;
+    int output_2_shape = output_batch * output_height * output_width * output_channel;
+
+    // Instantiate Intel PCM singleton
+    PCM *m = PCM::getInstance();
+    unsigned long dram_bytes_1 = 0, dram_bytes_2 = 0;
+
+    for (int i = 0; i < REPEATITION * 2; i++) {
+        if (i == REPEATITION) {
+            runtime_1_us = runtime_us;
+        }
+        // Flush the cache
+#if ENABLE_PCM == 1
+        memset(flush_cache, i, BIGGER_THAN_CACHESIZE * sizeof(int));
+#endif
+
+        __SSC_MARK(0x111);
+#if ENABLE_PCM == 1
+        SystemCounterState before_sstate = getSystemCounterState();
+#endif
+
+        auto elapsed = std::chrono::high_resolution_clock::now() - std::chrono::high_resolution_clock::now();
+        auto start = std::chrono::high_resolution_clock::now();
+
+        // asm function call here
+        layer_1(output_1, filter_1, input_1);
+
+        elapsed = std::chrono::high_resolution_clock::now() - start;
+#if ENABLE_PCM == 1
+        SystemCounterState after_sstate = getSystemCounterState();
+#endif
+        __SSC_MARK(0x222);
+
+        long long ns = std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count();
+        runtime_us += ns / 1000.0f / REPEATITION;
+
+#if ENABLE_PCM == 1
+        dram_bytes_1 += getBytesReadFromMC(before_sstate, after_sstate);
+#endif
+    }
+
+    printf("Stage 1 DRAM bytes: %lu.\n", dram_bytes_1 / REPEATITION / 2);
+    printf("Stage 1 runtime is %f us.\n", runtime_us - runtime_1_us);
+    m->cleanup();
+    runtime_us = 0;
+
+    for (int i = 0; i < REPEATITION * 2; i++) {
+        if (i == REPEATITION) {
+            runtime_2_us = runtime_us;
+        }
+        // Flush the cache
+#if ENABLE_PCM == 1
+        memset(flush_cache, i, BIGGER_THAN_CACHESIZE * sizeof(int));
+#endif
+
+        __SSC_MARK(0x111);
+#if ENABLE_PCM == 1
+        SystemCounterState before_sstate = getSystemCounterState();
+#endif
+
+        auto elapsed = std::chrono::high_resolution_clock::now() - std::chrono::high_resolution_clock::now();
+        auto start = std::chrono::high_resolution_clock::now();
+
+        // asm function call here
+        layer_2(output_2, input_2, filter_2);
+
+        elapsed = std::chrono::high_resolution_clock::now() - start;
+#if ENABLE_PCM == 1
+        SystemCounterState after_sstate = getSystemCounterState();
+#endif
+        __SSC_MARK(0x222);
+
+        long long ns = std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count();
+        runtime_us += ns / 1000.0f / REPEATITION;
+
+#if ENABLE_PCM == 1
+        dram_bytes_2 += getBytesReadFromMC(before_sstate, after_sstate);
+#endif
+    }
+
+
+        layer_1(output_1, filter_1, input_1);
+
+    printf("Stage 2 DRAM bytes: %lu.\n", dram_bytes_2 / REPEATITION / 2);
+    printf("Stage 2 runtime is %f us.\n", runtime_us - runtime_2_us);
+    m->cleanup();
+
+    // Verification
+    int count = 0;
+    for(int i = 0; i < output_1_shape; i++) {
+        float output_element = static_cast<float*>(output_1->data)[i];
+#ifdef DEBUG
+        printf("%d, %f, %lf\n", i, output_element, tmp_1[i]);
+        assert(std::abs(output_element - (float)tmp_1[i]) < 1e-3);
+#endif
+        if (std::abs(output_element - tmp_1[i]) > 1e-3) // A few nums have bigger errors
+            count++;
+        
+    }
+    printf("Output 1 wrong count: %d\n", count);
+    count = 0;
+    for(int i = 0; i < output_2_shape; i++) {
+        float output_element = static_cast<float*>(output_2->data)[i];
+#ifdef DEBUG
+        printf("%d, %f, %lf\n", i, output_element, tmp_2[i]);
+        assert(std::abs(output_element - (float)tmp_2[i]) < 1e-3);
+#endif
+        if (std::abs(output_element - tmp_2[i]) > 1e-3) // A few nums have bigger errors
+            count++;
+        
+    }
+    printf("Output 2 wrong count: %d\n", count);
+
+    TVMArrayFree(input_1);
+    TVMArrayFree(filter_1);
+    TVMArrayFree(output_1);
+    TVMArrayFree(input_2);
+    TVMArrayFree(filter_2);
+    TVMArrayFree(output_2);
+}
+
+void benchmark_generated_cpu(std::string workload_name,
+    int input_batch, int input_height, int input_width, int input_channel,
+    int kernel_1, int kernel_1_out_channel_or_multiplier, int kernel_1_stride,
+    bool is_f1_depthwise, int f1_activation,
+    int kernel_2, int kernel_2_out_channel, int kernel_2_stride,
+    bool is_f2_depthwise, int f2_activation,
+    bool is_fused) {
+    if (is_fused) {
+        benchmark_generated_cpu_fused(workload_name,
+                        input_batch, input_height, input_width, input_channel,
+                        kernel_1, kernel_1_out_channel_or_multiplier, kernel_1_stride,
+                        is_f1_depthwise, f1_activation,
+                        kernel_2, kernel_2_out_channel, kernel_2_stride,
+                        is_f2_depthwise, f2_activation);
+    } else {
+        benchmark_generated_cpu_unfused(workload_name,
+                        input_batch, input_height, input_width, input_channel,
+                        kernel_1, kernel_1_out_channel_or_multiplier, kernel_1_stride,
+                        is_f1_depthwise, f1_activation,
+                        kernel_2, kernel_2_out_channel, kernel_2_stride,
+                        is_f2_depthwise, f2_activation);
+    }
 }
