@@ -166,8 +166,13 @@ void benchmark_mkldnn(std::string workload_name,
     cnpy::NpyArray input_npy = cnpy::npy_load(input_name);
     cnpy::NpyArray kernel_1_npy = cnpy::npy_load(kernel_1_name);
     cnpy::NpyArray kernel_2_npy = cnpy::npy_load(kernel_2_name);
-    cnpy::NpyArray bias_1_npy = cnpy::npy_load(bias_1_name);
-    cnpy::NpyArray bias_2_npy = cnpy::npy_load(bias_2_name);
+    cnpy::NpyArray bias_1_npy, bias_2_npy;
+    if (f1_activation) {
+        bias_1_npy = cnpy::npy_load(bias_1_name);
+    }
+    if (f2_activation) {
+        bias_2_npy = cnpy::npy_load(bias_2_name);
+    }
 
     // For verification
     cnpy::NpyArray output_npy = cnpy::npy_load(output_name);
@@ -191,9 +196,17 @@ void benchmark_mkldnn(std::string workload_name,
     // Initialize buffers
     copy(input_npy.data<float>() + 0, input_npy.data<float>() + input_shape, input_data.begin());
     copy(kernel_1_npy.data<float>() + 0, kernel_1_npy.data<float>() + filter_1_shape, filter_1_data.begin());
-    copy(bias_1_npy.data<float>() + 0, bias_1_npy.data<float>() + inter_channel, bias_1_data.begin());
     copy(kernel_2_npy.data<float>() + 0, kernel_2_npy.data<float>() + filter_2_shape, filter_2_data.begin());
-    copy(bias_2_npy.data<float>() + 0, bias_2_npy.data<float>() + output_channel, bias_2_data.begin());
+    if (f1_activation) {
+        copy(bias_1_npy.data<float>() + 0, bias_1_npy.data<float>() + inter_channel, bias_1_data.begin());
+    } else {
+        fill(bias_1_data.begin(), bias_1_data.end(), 0.0f); 
+    }
+    if (f2_activation) {
+        copy(bias_2_npy.data<float>() + 0, bias_2_npy.data<float>() + output_channel, bias_2_data.begin());
+    } else {
+        fill(bias_2_data.begin(), bias_2_data.end(), 0.0f); 
+    }
 
     // Memory descriptors for arbitrary layouts.
     auto input_md = dnnl::memory::desc({input_dims}, dt::f32, tag::any);

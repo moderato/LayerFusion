@@ -115,15 +115,15 @@ RUN cd ${HOME}/Documents && \
 RUN pip3 install --upgrade pip && \
     pip3 install --user numpy decorator attrs tornado psutil xgboost cython typed_ast pytest
 RUN cd ${HOME}/Documents && \
-    git clone --recursive https://github.com/moderato/incubator-tvm tvm && \
-    mkdir -p tvm/build && \
-    cd tvm/build && \
+    git clone --recursive https://github.com/moderato/incubator-tvm && \
+    mkdir -p incubator-tvm/build && \
+    cd incubator-tvm/build && \
     cp ../cmake/config.cmake . && \
     cmake .. && \
     make -j16 && \
     cd .. && \
     make cython3
-RUN echo 'export TVM_HOME=${HOME}/Documents/tvm' >> ${HOME}/.bashrc && \
+RUN echo 'export TVM_HOME=${HOME}/Documents/incubator-tvm' >> ${HOME}/.bashrc && \
     echo 'export PYTHONPATH=${TVM_HOME}/python:${PYTHONPATH}' >> ${HOME}/.bashrc && \
     echo 'alias initialize="cd ~/Documents/LayerFusion && source ./init_vars.sh"' >> ${HOME}/.bashrc && \
     echo 'alias attach="tmux attach -t"' >> ${HOME}/.bashrc
