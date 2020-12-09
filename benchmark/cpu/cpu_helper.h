@@ -386,7 +386,7 @@ void benchmark_generated_cpu_unfused(std::string workload_name,
 #endif
 
     // Benchmark
-    float runtime_us = 0.0f, runtime_1_us = 0.0f, runtime_2_us = 0.0f;
+    float runtime_us = 0.0f, runtime_1_us = 0.0f, runtime_2_us = 0.0f, runtime_sum_us = 0.0f;
     int output_1_shape = inter_batch * inter_height * inter_width * inter_channel;
     int output_2_shape = output_batch * output_height * output_width * output_channel;
 
@@ -430,6 +430,7 @@ void benchmark_generated_cpu_unfused(std::string workload_name,
 
     printf("Stage 1 DRAM bytes: %lu.\n", dram_bytes_1 / REPEATITION / 2);
     printf("Stage 1 runtime is %f us.\n", runtime_us - runtime_1_us);
+    runtime_sum_us += runtime_us - runtime_1_us;
     m->cleanup();
     runtime_us = 0;
 
@@ -467,11 +468,10 @@ void benchmark_generated_cpu_unfused(std::string workload_name,
 #endif
     }
 
-
-        layer_1(output_1, filter_1, input_1);
-
     printf("Stage 2 DRAM bytes: %lu.\n", dram_bytes_2 / REPEATITION / 2);
     printf("Stage 2 runtime is %f us.\n", runtime_us - runtime_2_us);
+    runtime_sum_us += runtime_us - runtime_2_us;
+    printf("Total runtime is %f us.\n", runtime_sum_us);
     m->cleanup();
 
     // Verification
