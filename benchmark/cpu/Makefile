@@ -20,6 +20,8 @@ KERNEL_UNFUSED_1 ?= ../../generated_kernels/cpu/unfused/mv1_3_1.asm
 KERNEL_UNFUSED_2 ?= ../../generated_kernels/cpu/unfused/mv1_3_2.asm
 REPEATITION ?= 1000
 ENABLE_PCM ?= 0
+LAYER_1 ?= 0
+LAYER_2 ?= 0
 
 all: $(TARGET).cpp
 	$(ASXX) $(ASFLAGS) $(KERNEL_FUSED) -o kernel_fused.o
@@ -29,6 +31,8 @@ all: $(TARGET).cpp
 	$(CXX) $(CXXFLAGS) \
 		-D REPEATITION=$(REPEATITION) \
 		-D ENABLE_PCM=$(ENABLE_PCM) \
+		-D LAYER_1=$(LAYER_1) \
+		-D LAYER_2=$(LAYER_2) \
 		$(TARGET).cpp \
 		-o $(TARGET) \
 		$(LDFLAGS)

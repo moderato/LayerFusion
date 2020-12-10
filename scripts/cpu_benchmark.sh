@@ -35,40 +35,43 @@ do
       numactl -l -C 0-3 ./cpu_bench "$line" 2 &> /tmp/runtime_unfused.txt
       mkldnn_runtime="$(cat /tmp/runtime_mkldnn.txt | grep 'MKLDNN runtime' | awk '{ printf  "%10s\n", $4 }')"
       fused_kernel_runtime="$(cat /tmp/runtime_fused.txt | grep Fusion | awk '{ printf  "%10s\n", $4 }')"
-      unfused_kernel_runtime="$(cat /tmp/runtime_unfused.txt | grep 'Total' | awk '{ printf  "%10s\n", $4 }')"
+      unfused_kernel_runtime_1="$(cat /tmp/runtime_unfused.txt | grep 'Stage 1 runtime' | awk '{ printf  "%10s\n", $5 }')"
+      unfused_kernel_runtime_2="$(cat /tmp/runtime_unfused.txt | grep 'Stage 2 runtime' | awk '{ printf  "%10s\n", $5 }')"
+      unfused_total_runtime="$(cat /tmp/runtime_unfused.txt | grep 'Total' | awk '{ printf  "%10s\n", $4 }')"
 
-      # #### Roofline Analysis ####
-      # # Flexible repeatition for flops and memory transaction measurement
-      # make KERNEL_FUSED=../../generated_kernels/cpu/fused/${workload_name}.asm \
-      #       KERNEL_UNFUSED_1=../../generated_kernels/cpu/unfused/${workload_name}_1.asm \
-      #       KERNEL_UNFUSED_2=../../generated_kernels/cpu/unfused/${workload_name}_2.asm REPEATITION=${REP_BENCH} ENABLE_PCM=1 >& /dev/null
-      # # Fused kernel
-      # numactl -l -C 0-3 ./cpu_bench "$line" 1 >& /tmp/dram_generated.txt
-      # rm -rf /tmp/sde_generated.out*
-      # sde -knl -d -iform 1 -omix /tmp/sde_generated.out -i -global_region -start_ssc_mark 111:repeat -stop_ssc_mark 222:repeat -- numactl -l -C 0-3 ./cpu_bench "$line" 0 >& /dev/null
-      # # rm -rf /tmp/vtune_report_generated /tmp/cpu_bench_report_generated.summary /tmp/vtune_generated.txt
-      # # vtune -mrte-mode=native -start-paused -r /tmp/vtune_report_generated -start-paused -q -collect memory-access -finalization-mode=none -data-limit=0 -- numactl -l -C 0-3 ./cpu_bench "$line" 0 >& /dev/null
-      # # vtune -report hw-events -report-knob show-issues=false -r /tmp/vtune_report_generated -q -group-by=package -format=csv -column=UNC_IMC_DRAM_DATA_READS,UNC_IMC_DRAM_DATA_WRITES -csv-delimiter=comma > /tmp/cpu_bench_report_generated.summary
-      # # MKLDNN
-      # numactl -l -C 0-3 ./cpu_bench "$line" 0 >& /tmp/dram_mkldnn.txt
-      # rm -rf /tmp/sde_mkldnn.out*
-      # sde -knl -d -iform 1 -omix /tmp/sde_mkldnn.out -i -global_region -start_ssc_mark 111:repeat -stop_ssc_mark 222:repeat -- numactl -l -C 0-3 ./cpu_bench "$line" 1 >& /dev/null
-      # # rm -rf /tmp/vtune_report_mkldnn /tmp/cpu_bench_report_mkldnn.summary > /tmp/vtune_mkldnn.txt
-      # # vtune -mrte-mode=native -start-paused -r /tmp/vtune_report_mkldnn -start-paused -q -collect memory-access -finalization-mode=none -data-limit=0 -- numactl -l -C 0-3 ./cpu_bench "$line" 1 >& /dev/null
-      # # vtune -report hw-events -report-knob show-issues=false -r /tmp/vtune_report_mkldnn -q -group-by=package -format=csv -column=UNC_IMC_DRAM_DATA_READS,UNC_IMC_DRAM_DATA_WRITES -csv-delimiter=comma > /tmp/cpu_bench_report_mkldnn.summary
+      #### Roofline Analysis ####
+      # Flexible repeatition for flops and memory transaction measurement
+      make KERNEL_FUSED=../../generated_kernels/cpu/fused/${workload_name}.asm \
+            KERNEL_UNFUSED_1=../../generated_kernels/cpu/unfused/${workload_name}_1.asm \
+            KERNEL_UNFUSED_2=../../generated_kernels/cpu/unfused/${workload_name}_2.asm REPEATITION=${REP_BENCH} ENABLE_PCM=1 LAYER_1=1 >& /dev/null
+      setcap cap_sys_rawio=ep cpu_bench
 
-      # Parse the above results
+      # MKLDNN
+      numactl -l -C 0-3 ./cpu_bench "$line" 0 >& /tmp/dram_mkldnn.txt
+      rm -rf /tmp/sde_mkldnn.out*
+      sde -knl -d -iform 1 -omix /tmp/sde_mkldnn.out -i -global_region -start_ssc_mark 111:repeat -stop_ssc_mark 222:repeat -- numactl -l -C 0-3 ./cpu_bench "$line" 0 >& /dev/null
+
+      # Fused kernel
+      numactl -l -C 0-3 ./cpu_bench "$line" 1 >& /tmp/dram_fused.txt
+      rm -rf /tmp/sde_fused.out*
+      sde -knl -d -iform 1 -omix /tmp/sde_fused.out -i -global_region -start_ssc_mark 111:repeat -stop_ssc_mark 222:repeat -- numactl -l -C 0-3 ./cpu_bench "$line" 1 >& /dev/null
+
+      # Unfused kernel 1
+      numactl -l -C 0-3 ./cpu_bench "$line" 2 >& /tmp/dram_unfused.txt
+      rm -rf /tmp/sde_unfused_1.out*
+      sde -knl -d -iform 1 -omix /tmp/sde_unfused_1.out -i -global_region -start_ssc_mark 111:repeat -stop_ssc_mark 222:repeat -- numactl -l -C 0-3 ./cpu_bench "$line" 2 >& /dev/null
+
+      make KERNEL_FUSED=../../generated_kernels/cpu/fused/${workload_name}.asm \
+            KERNEL_UNFUSED_1=../../generated_kernels/cpu/unfused/${workload_name}_1.asm \
+            KERNEL_UNFUSED_2=../../generated_kernels/cpu/unfused/${workload_name}_2.asm REPEATITION=${REP_BENCH} ENABLE_PCM=1 LAYER_2=1 >& /dev/null
+      setcap cap_sys_rawio=ep cpu_bench
+
+      # Unfused kernel 2
+      rm -rf /tmp/sde_unfused_2.out*
+      sde -knl -d -iform 1 -omix /tmp/sde_unfused_2.out -i -global_region -start_ssc_mark 111:repeat -stop_ssc_mark 222:repeat -- numactl -l -C 0-3 ./cpu_bench "$line" 2 >& /dev/null
+
+      #### Parse the above results ####
       cd ../../scripts
-
-      ./parse_sde.sh /tmp/sde_generated.out* > /tmp/sde_generated.txt
-      generated_kernel_flop="$(cat /tmp/sde_generated.txt | grep -e 'Total single-precision FLOPs' | awk '{ printf "%s\n", $5 }')"
-      generated_kernel_flop="$( echo "scale=4; $generated_kernel_flop / (${REP_BENCH} * 2)" | bc )"
-      generated_l1_bytes="$(cat /tmp/sde_generated.txt | grep -e 'Total Bytes =' | awk '{ printf "%s\n", $4 }')"
-      generated_l1_bytes="$( echo "scale=4; $generated_l1_bytes / (${REP_BENCH} * 2)" | bc )" # Per iteration
-      generated_dram_bytes="$(cat /tmp/dram_generated.txt | grep 'DRAM bytes' | awk '{ printf  "%10s\n", $3 }')"
-      # ./parse_vtune.sh -v /tmp/cpu_bench_report_generated.summary > /tmp/vtune_generated.txt
-      # generated_dram_transactions="$(cat /tmp/vtune_generated.txt | grep -e 'Total transactions' | awk '{ printf "%s\n", $4 }')"
-      # generated_dram_bytes="$( echo "scale=4; $generated_dram_transactions * 64 / (${REP_BENCH} * 2)" | bc )" # Per iteration
 
       ./parse_sde.sh /tmp/sde_mkldnn.out* > /tmp/sde_mkldnn.txt
       mkldnn_flop="$(cat /tmp/sde_mkldnn.txt | grep -e 'Total single-precision FLOPs' | awk '{ printf "%s\n", $5 }')"
@@ -76,23 +79,29 @@ do
       mkldnn_l1_bytes="$(cat /tmp/sde_mkldnn.txt | grep -e 'Total Bytes =' | awk '{ printf "%s\n", $4 }')"
       mkldnn_l1_bytes="$( echo "scale=4; $mkldnn_l1_bytes / (${REP_BENCH} * 2)" | bc )" # Per iteration
       mkldnn_dram_bytes="$(cat /tmp/dram_mkldnn.txt | grep 'DRAM bytes' | awk '{ printf  "%10s\n", $3 }')"
-      # ./parse_vtune.sh -v /tmp/cpu_bench_report_mkldnn.summary > /tmp/vtune_mkldnn.txt
-      # mkldnn_dram_transactions="$(cat /tmp/vtune_mkldnn.txt | grep -e 'Total transactions' | awk '{ printf "%s\n", $4 }')"
-      # mkldnn_dram_bytes="$( echo "scale=4; $mkldnn_dram_transactions * 64 / (${REP_BENCH} * 2)" | bc )" # Per iteration
+
+      ./parse_sde.sh /tmp/sde_fused.out* > /tmp/sde_fused.txt
+      fused_kernel_flop="$(cat /tmp/sde_fused.txt | grep -e 'Total single-precision FLOPs' | awk '{ printf "%s\n", $5 }')"
+      fused_kernel_flop="$( echo "scale=4; $fused_kernel_flop / (${REP_BENCH} * 2)" | bc )"
+      fused_l1_bytes="$(cat /tmp/sde_fused.txt | grep -e 'Total Bytes =' | awk '{ printf "%s\n", $4 }')"
+      fused_l1_bytes="$( echo "scale=4; $fused_l1_bytes / (${REP_BENCH} * 2)" | bc )" # Per iteration
+      fused_dram_bytes="$(cat /tmp/dram_fused.txt | grep 'DRAM bytes' | awk '{ printf  "%10s\n", $3 }')"
+
+      ./parse_sde.sh /tmp/sde_unfused_1.out* > /tmp/sde_unfused_1.txt
+      unfused_kernel_flop_1="$(cat /tmp/sde_unfused_1.txt | grep -e 'Total single-precision FLOPs' | awk '{ printf "%s\n", $5 }')"
+      unfused_kernel_flop_1="$( echo "scale=4; $unfused_kernel_flop_1 / (${REP_BENCH} * 2)" | bc )"
+      unfused_l1_bytes_1="$(cat /tmp/sde_unfused_1.txt | grep -e 'Total Bytes =' | awk '{ printf "%s\n", $4 }')"
+      unfused_l1_bytes_1="$( echo "scale=4; $unfused_l1_bytes_1 / (${REP_BENCH} * 2)" | bc )" # Per iteration
+      unfused_dram_bytes_1="$(cat /tmp/dram_unfused.txt | grep 'Stage 1 DRAM bytes' | awk '{ printf  "%10s\n", $5 }')"
+
+      ./parse_sde.sh /tmp/sde_unfused_2.out* > /tmp/sde_unfused_2.txt
+      unfused_kernel_flop_2="$(cat /tmp/sde_unfused_2.txt | grep -e 'Total single-precision FLOPs' | awk '{ printf "%s\n", $5 }')"
+      unfused_kernel_flop_2="$( echo "scale=4; $unfused_kernel_flop_2 / (${REP_BENCH} * 2)" | bc )"
+      unfused_l1_bytes_2="$(cat /tmp/sde_unfused_2.txt | grep -e 'Total Bytes =' | awk '{ printf "%s\n", $4 }')"
+      unfused_l1_bytes_2="$( echo "scale=4; $unfused_l1_bytes_2 / (${REP_BENCH} * 2)" | bc )" # Per iteration
+      unfused_dram_bytes_2="$(cat /tmp/dram_unfused.txt | grep 'Stage 2 DRAM bytes' | awk '{ printf  "%10s\n", $5 }')"
 
       # GFLOPS and AI
-      generated_kernel_gflops="$( echo "scale=4; $generated_kernel_flop / $fused_kernel_runtime * 1000000 / 1000000000" | bc )"
-      generated_kernel_l1_ai="$( echo "scale=4; $generated_kernel_flop / $generated_l1_bytes" | bc )"
-      generated_kernel_dram_ai="$( echo "scale=4; $generated_kernel_flop / $generated_dram_bytes" | bc )"
-      # echo "------ Fused kernel details"
-      # echo "    Runtime: $fused_kernel_runtime"
-      # echo "    Flop: $generated_kernel_flop"
-      # echo "    GFLOPS: $generated_kernel_gflops"
-      # echo "    DRAM bytes: $generated_dram_bytes"
-      # echo "    DRAM AI: $generated_kernel_dram_ai"
-      # echo "    L1 bytes: $generated_l1_bytes"
-      # echo "    L1 AI: $generated_kernel_l1_ai"
-
       mkldnn_gflops="$( echo "scale=4; $mkldnn_flop / $mkldnn_runtime * 1000000 / 1000000000" | bc )"
       mkldnn_l1_ai="$( echo "scale=4; $mkldnn_flop / $mkldnn_l1_bytes" | bc )"
       mkldnn_dram_ai="$( echo "scale=4; $mkldnn_flop / $mkldnn_dram_bytes" | bc )"
@@ -105,68 +114,59 @@ do
       # echo "    L1 bytes: $mkldnn_l1_bytes"
       # echo "    L1 AI: $mkldnn_l1_ai"
 
-      # #### MKLDNN ####
-      # # Runtime and flops measurement
-      # numactl -l -C 0-3 benchdnn --fix-times-per-prb=1000 --conv --mode=p -v0 --mb=1 --dir=FWD_I --cfg=f32 ${layer_1_desc} ${layer_2_desc} &> /tmp/runtime_mkldnn.txt
-      # mkldnn_flop=0
-      # mkldnn_runtime=0
-      # while IFS= read -r l
-      # do
-      #   if [ "${l:0:8}" == "perf,cpu" ];
-      #   then
-      #     result="$(echo $l | awk '{ printf "%s\n", $3 }')"
-      #     IFS=',' read -ra PARAM <<< $result
-      #     mkldnn_flop="$( echo "scale=4; $mkldnn_flop + ${PARAM[1]} * 1000000000" | bc)"
-      #     mkldnn_runtime="$( echo "scale=4; $mkldnn_runtime + ${PARAM[5]} * 1000.0" | bc)" # In microseconds
-      #   fi
-      # done < "/tmp/runtime_mkldnn.txt"
+      fused_kernel_gflops="$( echo "scale=4; $fused_kernel_flop / $fused_kernel_runtime * 1000000 / 1000000000" | bc )"
+      fused_kernel_l1_ai="$( echo "scale=4; $fused_kernel_flop / $fused_l1_bytes" | bc )"
+      fused_kernel_dram_ai="$( echo "scale=4; $fused_kernel_flop / $fused_dram_bytes" | bc )"
+      # echo "------ Fused kernel details"
+      # echo "    Runtime: $fused_kernel_runtime"
+      # echo "    Flop: $fused_kernel_flop"
+      # echo "    GFLOPS: $fused_kernel_gflops"
+      # echo "    DRAM bytes: $fused_dram_bytes"
+      # echo "    DRAM AI: $fused_kernel_dram_ai"
+      # echo "    L1 bytes: $fused_l1_bytes"
+      # echo "    L1 AI: $fused_kernel_l1_ai"
 
-      # # BW measurement
-      # # Relu: --attr="post_ops='relu'"
-      # rm -rf /tmp/sde_mkldnn.out*
-      # sde -knl -d -iform 1 -omix /tmp/sde_mkldnn.out -i -global_region -start_ssc_mark 111:repeat -stop_ssc_mark 222:repeat -- numactl -l -C 0-3 benchdnn --fix-times-per-prb="$(( ${REP_BENCH} * 2 ))" --conv --mode=p -v0 --mb=1 --dir=FWD_I --cfg=f32 ${layer_1_desc} ${layer_2_desc} >& /dev/null
-      # rm -rf /tmp/vtune_report
-      # vtune -r /tmp/vtune_report -q -collect memory-access -finalization-mode=none -data-limit=0 -- numactl -l -C 0-3 benchdnn --fix-times-per-prb="$(( ${REP_BENCH} * 2 ))" --conv --mode=PC -v1 --mb=1 --dir=FWD_I --cfg=f32 --alg=AUTO ${layer_1_desc} ${layer_2_desc} &> /dev/null
-      # vtune -report hw-events -report-knob show-issues=false -r /tmp/vtune_report -q -group-by=package -format=csv -column=UNC_IMC_DRAM_DATA_READS,UNC_IMC_DRAM_DATA_WRITES -csv-delimiter=comma > /tmp/cpu_bench_report.summary
+      unfused_kernel_gflops_1="$( echo "scale=4; $unfused_kernel_flop_1 / $unfused_kernel_runtime_1 * 1000000 / 1000000000" | bc )"
+      unfused_kernel_l1_ai_1="$( echo "scale=4; $unfused_kernel_flop_1 / $unfused_l1_bytes_1" | bc )"
+      unfused_kernel_dram_ai_1="$( echo "scale=4; $unfused_kernel_flop_1 / $unfused_dram_bytes_1" | bc )"
+      # echo "------ Unfused kernel 1 details"
+      # echo "    Runtime: $fused_kernel_runtime_1"
+      # echo "    Flop: $fused_kernel_flop_1"
+      # echo "    GFLOPS: $fused_kernel_gflops_1"
+      # echo "    DRAM bytes: $fused_dram_bytes_1"
+      # echo "    DRAM AI: $fused_kernel_dram_ai_1"
+      # echo "    L1 bytes: $fused_l1_bytes_1"
+      # echo "    L1 AI: $fused_kernel_l1_ai_1"
 
-      # # Parse the above results
-      # ./parse_sde.sh /tmp/sde_mkldnn.out* > /tmp/bw_mkldnn.txt
-      # mkldnn_l1_bytes="$(cat /tmp/bw_mkldnn.txt | grep -e 'Total Bytes =' | awk '{ printf "%s\n", $4 }')"
-      # mkldnn_l1_bytes="$( echo "scale=4; $mkldnn_l1_bytes / (${REP_BENCH} * 2) " | bc )" # Per iteration
-      # ./parse_vtune.sh -v /tmp/cpu_bench_report.summary > /tmp/bw_mkldnn.txt
-      # mkldnn_dram_transactions="$(cat /tmp/bw_mkldnn.txt | grep -e 'Total transactions' | awk '{ printf "%s\n", $4 }')"
-      # mkldnn_dram_bytes="$( echo "scale=4; $mkldnn_dram_transactions * 64 / (${REP_BENCH} * 2)" | bc )" # Per iteration
-
-      # # GFLOPS and AI
-      # mkldnn_gflops="$( echo "scale=4; $mkldnn_flop / $mkldnn_runtime * 1000000 / 1000000000" | bc )"
-      # mkldnn_l1_ai="$( echo "scale=4; $mkldnn_flop / $mkldnn_l1_bytes" | bc )"
-      # mkldnn_dram_ai="$( echo "scale=4; $mkldnn_flop / $mkldnn_dram_bytes" | bc )"
-      # echo "--- MKLDNN details"
-      # echo "    Runtime: $mkldnn_runtime"
-      # echo "    Flop: $mkldnn_flop"
-      # echo "    GFLOPS: $mkldnn_gflops"
-      # echo "    DRAM bytes: $mkldnn_dram_bytes"
-      # echo "    DRAM AI: $mkldnn_dram_ai"
-      # echo "    L1 bytes: $mkldnn_l1_bytes"
-      # echo "    L1 AI: $mkldnn_l1_ai"
+      unfused_kernel_gflops_2="$( echo "scale=4; $unfused_kernel_flop_2 / $unfused_kernel_runtime_2 * 1000000 / 1000000000" | bc )"
+      unfused_kernel_l1_ai_2="$( echo "scale=4; $unfused_kernel_flop_2 / $unfused_l1_bytes_2" | bc )"
+      unfused_kernel_dram_ai_2="$( echo "scale=4; $unfused_kernel_flop_2 / $unfused_dram_bytes_2" | bc )"
+      # echo "------ Unfused kernel 2 details"
+      # echo "    Runtime: $fused_kernel_runtime_2"
+      # echo "    Flop: $fused_kernel_flop_2"
+      # echo "    GFLOPS: $fused_kernel_gflops_2"
+      # echo "    DRAM bytes: $fused_dram_bytes_2"
+      # echo "    DRAM AI: $fused_kernel_dram_ai_2"
+      # echo "    L1 bytes: $fused_l1_bytes_2"
+      # echo "    L1 AI: $fused_kernel_l1_ai_2"
 
       cd ..
       mkdir -p logs/runtime/cpu/$(( ${REP_BENCH} * 2 ))
-      echo -e "generated,mkldnn\n$fused_kernel_runtime,$mkldnn_runtime" > "logs/runtime/cpu/$(( ${REP_BENCH} * 2 ))/${workload_name}.csv"
+      echo -e "fused,unfused_1,unfused_2,mkldnn\n$fused_kernel_runtime,$unfused_kernel_runtime_1,$unfused_kernel_runtime_2,$mkldnn_runtime" > "logs/runtime/cpu/$(( ${REP_BENCH} * 2 ))/${workload_name}.csv"
       mkdir -p logs/arithmetic_intensity/cpu/$(( ${REP_BENCH} * 2 ))
-      echo -e "generated_dram,mkldnn_dram,generated_l1,mkldnn_l1\n$generated_kernel_dram_ai,$mkldnn_dram_ai,${generated_kernel_l1_ai},${mkldnn_l1_ai}" > "logs/arithmetic_intensity/cpu/$(( ${REP_BENCH} * 2 ))/${workload_name}.csv"
+      echo -e "fused_dram,unfused_1_dram,unfused_2_dram,mkldnn_dram,fused_l1,unfused_1_l1,unfused_2_l1,mkldnn_l1\n${fused_kernel_dram_ai},${unfused_kernel_dram_ai_1},${unfused_kernel_dram_ai_2},${mkldnn_dram_ai},${fused_kernel_l1_ai},${unfused_kernel_l1_ai_1},${unfused_kernel_l1_ai_2},${mkldnn_l1_ai}" > "logs/arithmetic_intensity/cpu/$(( ${REP_BENCH} * 2 ))/${workload_name}.csv"
       mkdir -p logs/gflops/cpu/$(( ${REP_BENCH} * 2 ))
-      echo -e "generated,mkldnn\n$generated_kernel_gflops,$mkldnn_gflops" > "logs/gflops/cpu/$(( ${REP_BENCH} * 2 ))/${workload_name}.csv"
+      echo -e "fused,unfused_1,unfused_2,mkldnn\n$fused_kernel_gflops,$unfused_kernel_gflops_1,$unfused_kernel_gflops_2,$mkldnn_gflops" > "logs/gflops/cpu/$(( ${REP_BENCH} * 2 ))/${workload_name}.csv"
       cd scripts
 
       # Print results
       echo "|--------------------"
       echo "| Workload name: ${workload_name}"
       echo "|--------------------"
-      echo "| Fused/Unfused/MKLDNN runtime: ${fused_kernel_runtime} us, ${unfused_kernel_runtime} us, ${mkldnn_runtime} us."
-      echo "| Fused/MKLDNN DRAM AI: ${generated_kernel_dram_ai}, ${mkldnn_dram_ai}."
-      echo "| Fused/MKLDNN L1 AI: ${generated_kernel_l1_ai}, ${mkldnn_l1_ai}."
-      echo "| Fused/MKLDNN GFLOPS: ${generated_kernel_gflops}, ${mkldnn_gflops}."
+      echo "| Fused/Unfused/MKLDNN runtime: ${fused_kernel_runtime} us, ${unfused_total_runtime} us, ${mkldnn_runtime} us."
+      echo "| Fused/Unfused_1/Unfused_2/MKLDNN DRAM AI: ${fused_kernel_dram_ai}, ${unfused_kernel_dram_ai_1}, ${unfused_kernel_dram_ai_2}, ${mkldnn_dram_ai}."
+      echo "| Fused/Unfused_1/Unfused_2/MKLDNN L1 AI: ${fused_kernel_l1_ai}, ${unfused_kernel_l1_ai_1}, ${unfused_kernel_l1_ai_2}, ${mkldnn_l1_ai}."
+      echo "| Fused/Unfused_1/Unfused_2/MKLDNN GFLOPS: ${fused_kernel_gflops}, ${unfused_kernel_gflops_1}, ${unfused_kernel_gflops_2}, ${mkldnn_gflops}."
       echo "|--------------------"
     fi
   done < "$input"

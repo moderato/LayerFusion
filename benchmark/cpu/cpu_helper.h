@@ -37,8 +37,17 @@
     #define BIGGER_THAN_CACHESIZE 3 * 1024 * 1024
 #endif
 
+// Enable PCM
 #ifndef ENABLE_PCM
   #define ENABLE_PCM 0
+#endif
+
+// Enable layer 1 and/or layer 2 profiling
+#ifndef LAYER_1
+  #define LAYER_1 0
+#endif
+#ifndef LAYER_2
+  #define LAYER_2 0
 #endif
 
 // For SDE benchmarking purpose
@@ -402,8 +411,9 @@ void benchmark_generated_cpu_unfused(std::string workload_name,
 #if ENABLE_PCM == 1
         memset(flush_cache, i, BIGGER_THAN_CACHESIZE * sizeof(int));
 #endif
-
+#if LAYER_1 == 1
         __SSC_MARK(0x111);
+#endif
 #if ENABLE_PCM == 1
         SystemCounterState before_sstate = getSystemCounterState();
 #endif
@@ -418,7 +428,9 @@ void benchmark_generated_cpu_unfused(std::string workload_name,
 #if ENABLE_PCM == 1
         SystemCounterState after_sstate = getSystemCounterState();
 #endif
+#if LAYER_1 == 1
         __SSC_MARK(0x222);
+#endif
 
         long long ns = std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count();
         runtime_us += ns / 1000.0f / REPEATITION;
@@ -442,8 +454,9 @@ void benchmark_generated_cpu_unfused(std::string workload_name,
 #if ENABLE_PCM == 1
         memset(flush_cache, i, BIGGER_THAN_CACHESIZE * sizeof(int));
 #endif
-
+#if LAYER_2 == 1
         __SSC_MARK(0x111);
+#endif
 #if ENABLE_PCM == 1
         SystemCounterState before_sstate = getSystemCounterState();
 #endif
@@ -458,7 +471,9 @@ void benchmark_generated_cpu_unfused(std::string workload_name,
 #if ENABLE_PCM == 1
         SystemCounterState after_sstate = getSystemCounterState();
 #endif
+#if LAYER_2 == 1
         __SSC_MARK(0x222);
+#endif
 
         long long ns = std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count();
         runtime_us += ns / 1000.0f / REPEATITION;
