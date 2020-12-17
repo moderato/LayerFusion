@@ -4,7 +4,7 @@ RUN apt-get update
 # General
 RUN apt-get install -y wget nano gcc make git lsb-release software-properties-common
 RUN apt-get install -y python3 python3-dev python3-setuptools python3-pip
-RUN apt-get install -y gcc libtinfo-dev zlib1g-dev build-essential cmake libedit-dev libxml2-dev tmux numactl bc vim
+RUN apt-get install -y libtinfo-dev zlib1g-dev build-essential cmake libedit-dev libxml2-dev tmux numactl bc vim
 
 # Tmux
 RUN echo 'set -g mouse on\n' \
@@ -17,7 +17,7 @@ RUN cd /tmp && \
 RUN sh -c 'echo deb https://apt.repos.intel.com/oneapi all main > /etc/apt/sources.list.d/intel-oneapi.list' && \
     apt-get clean && \
     apt-get update && \
-    apt-get install -y --allow-unauthenticated intel-oneapi-icc
+    apt-get install -y --allow-unauthenticated intel-oneapi-compiler-dpcpp-cpp
 RUN echo 'export LD_LIBRARY_PATH=/opt/intel/lib/intel64:/opt/intel/mkl/lib/intel64:$LD_LIBRARY_PATH\n' \
             'source /opt/intel/bin/compilervars.sh intel64\n' >> ${HOME}/.bashrc
 RUN sh -c 'echo deb https://apt.repos.intel.com/mkl all main > /etc/apt/sources.list.d/intel-mkl.list' && \
@@ -115,15 +115,15 @@ RUN cd ${HOME}/Documents && \
 RUN pip3 install --upgrade pip && \
     pip3 install --user numpy decorator attrs tornado psutil xgboost cython typed_ast pytest
 RUN cd ${HOME}/Documents && \
-    git clone --recursive https://github.com/moderato/incubator-tvm && \
-    mkdir -p incubator-tvm/build && \
-    cd incubator-tvm/build && \
+    git clone --recursive https://github.com/moderato/tvm && \
+    mkdir -p tvm/build && \
+    cd tvm/build && \
     cp ../cmake/config.cmake . && \
     cmake .. && \
     make -j16 && \
     cd .. && \
     make cython3
-RUN echo 'export TVM_HOME=${HOME}/Documents/incubator-tvm' >> ${HOME}/.bashrc && \
+RUN echo 'export TVM_HOME=${HOME}/Documents/tvm' >> ${HOME}/.bashrc && \
     echo 'export PYTHONPATH=${TVM_HOME}/python:${PYTHONPATH}' >> ${HOME}/.bashrc && \
     echo 'alias initialize="cd ~/Documents/LayerFusion && source ./init_vars.sh"' >> ${HOME}/.bashrc && \
     echo 'alias attach="tmux attach -t"' >> ${HOME}/.bashrc

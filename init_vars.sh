@@ -8,7 +8,7 @@ export MKLDNN_HOME=${HOME}/Documents/mkl-dnn
 export PCM_HOME=${HOME}/Documents/pcm
 export LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${TVM_HOME}/build"
 
-# icc & icpc
+# icx & icpx
 source /opt/intel/oneapi/setvars.sh >& /dev/null
 
 # Make folders

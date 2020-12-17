@@ -137,26 +137,24 @@ def tune_and_evaluate(tuning_opt, target_str, network='mobilenet_v1', dtype='flo
     mod, params, input_shape, _ = get_network(network, batch_size=1, dtype=dtype, image_shape=image_shape, layout=layout)
     tasks = autotvm.task.extract_from_program(mod['main'], target=target_str, params=params, ops=(relay.op.get('nn.conv2d'), relay.op.get('nn.dense')))
 
-    # Replace all fusable tasks to fused tasks
     print("\n### Before replacement")
     pprint(tasks)
-    tasks = fuse_tasks(tasks, tuning_opt, target_str=target_str)
-    print("\n### After replacement")
-    pprint(tasks)
-    print("\n")
 
     # Run tuning tasks
     if not tuning_opt.autotvm_skip_training:
+        if not tuning_opt.no_fusion:
+            # Replace all fusable tasks to fused tasks
+            tasks = fuse_tasks(tasks, tuning_opt, target_str=target_str) # TODO: Extract fused tasks from preprocessed graph
+            print("\n### After replacement")
+            pprint(tasks)
+            print("\n")
         tune_tasks(tasks, tuning_opt, target_str=target_str, log_filename=log_filename)
 
     # Tune graph for CPU
     if not tuning_opt.autotvm_skip_graph_tuning and ('llvm' in target_str):
         tmp_f = mod['main']
         if not tuning_opt.no_fusion:
-            # Replace BN with bias_add
-            tmp_f = rewrite(ReplaceBatchNormCallback(layout=layout), tmp_f)
-            # Fuse two conv layers
-            tmp_f = rewrite(FusedConv2DCallback(), tmp_f)
+            tmp_f = graph_tuning_preprocess(tmp_f, layout=layout)
         tune_graph(tmp_f, input_shape, target_str, log_filename, graph_opt_sch_file)
 
     # Compile kernels with history best records

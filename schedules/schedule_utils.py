@@ -66,6 +66,8 @@ def get_stages_and_cfgs(outs):
                         param_dict['{}_{}'.format('Bias', i)] = t
                     else:
                         continue
+                elif 'T_add' in name: # Handing grouping of nn.fused_conv2d and add during compilation
+                    pass
                 else:
                     print(name)
                     raise Exception("Unknown tensor type!")

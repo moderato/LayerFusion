@@ -1,4 +1,4 @@
-CXX := icpc
+CXX := icpx
 ASXX := as
 TARGET := cpu_bench
 CXXFLAGS := -std=c++14 -O2 -fPIC \
