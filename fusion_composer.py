@@ -729,7 +729,7 @@ def _alter_fused_conv2d_layout(attrs, inputs, tinfos, out_type):
                 if depthwise:
                     vlen_i = vlen_o
                 else:
-                    vlen_i = cfg['vlen_layer_input'].val
+                    vlen_i = cfg['vlen_input'].val
 
             # update new attrs
             data_layout_array[l] = "NCHW%dc" % vlen_i
@@ -787,7 +787,7 @@ def _fused_conv2d_infer_layout(workload, cfg):
     if first_filter.depthwise:
         vlen_i = cfg['vlen_layer_0'].val
     else:
-        vlen_i = cfg['vlen_layer_input'].val
+        vlen_i = cfg['vlen_input'].val
     first_feature.update_shape(vlen_i)
     in_layout = "NCHW%dc" % vlen_i
     in_shape = first_feature.shape

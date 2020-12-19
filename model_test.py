@@ -20,10 +20,10 @@ def get_network(name, batch_size, dtype="float32", image_shape=(3, 224, 224), la
     output_shape = (batch_size, 1000)
 
     if "resnet" in name:
-        n_layer = int(name.split('-')[1])
+        n_layer = int(name.split('_')[1])
         mod, params = relay.testing.resnet.get_workload(num_layers=n_layer, batch_size=batch_size, dtype=dtype, image_shape=image_shape, layout=layout)
     elif "vgg" in name:
-        n_layer = int(name.split('-')[1])
+        n_layer = int(name.split('_')[1])
         mod, params = relay.testing.vgg.get_workload(num_layers=n_layer, batch_size=batch_size, dtype=dtype)
     elif name == 'mobilenet_v1':
         mod, params = relay.testing.mobilenet.get_workload(batch_size=batch_size, dtype=dtype, image_shape=image_shape, version='v1', layout=layout)
@@ -113,27 +113,43 @@ def tune_graph(graph, dshape, target_str, records, opt_sch_file, use_DP=True):
     target = tvm.target.Target(target_str)
     target_op = [relay.op.get("nn.conv2d"), relay.op.get("nn.fused_conv2d")] # Tune fused_conv2d too.
     Tuner = DPTuner if use_DP else PBQPTuner
-    executor = Tuner(graph, {'data': dshape}, records, target_op, target)
-    executor.benchmark_layout_transform(min_exec_num=2000)
+    executor = Tuner(graph, {'data': dshape}, records, target_op, target, max_sch_num=50)
+    executor.benchmark_layout_transform(min_exec_num=3000)
     executor.run()
     executor.write_opt_sch2record_file(opt_sch_file)
 
-def tune_and_evaluate(tuning_opt, target_str, network='mobilenet_v1', dtype='float32'):
+def tune_and_evaluate(tuning_opt, dtype='float32'):
+    target_str = tuning_opt.target
+    if 'avx512' in target_str:
+        target_str = 'llvm -mcpu=skylake-avx512'
+    elif 'avx2' in target_str:
+        target_str = 'llvm -mcpu=core-avx2'
+    network = tuning_opt.network
+    assert target_str in ['cuda', 'llvm -mcpu=core-avx2', 'llvm -mcpu=skylake-avx512']
+    assert network in ['mobilenet_v1', 'mobilenet_v2', 'mnasnet_a1', 'resnet_50', 'resnet_101']
+
     # Extract workloads from relay program
     print('Extract tasks...')
     if 'llvm' in target_str: # CPU & NCHWC, use NCHW to get the network though
         image_shape, layout = (3, 224, 224), 'NCHW'
+        folder_name = 'logs/autotvm/model/cpu/{}'.format(network)
+        if not os.path.exists(folder_name):
+            os.mkdir(folder_name)
         if tuning_opt.no_fusion:
-            log_filename = 'logs/autotvm/model/cpu/{}_nchwc_unfused.log'.format(network)
+            log_filename = '{}/nchwc_unfused.log'.format(folder_name)
         else:
-            log_filename = 'logs/autotvm/model/cpu/{}_nchwc_fused.log'.format(network)
-    elif tuning_opt.use_nchw: # GPU & NCHW
-        image_shape, layout = (3, 224, 224), 'NCHW'
-        log_filename = 'logs/autotvm/model/gpu/{}_nchw.log'.format(network)
-    else: # GPU & NHWC
-        image_shape, layout = (224, 224, 3), "NHWC"
-        log_filename = 'logs/autotvm/model/gpu/{}_nhwc.log'.format(network)
-    graph_opt_sch_file = 'logs/autotvm/model/cpu/{}_graph_opt_{}.log'.format(network, 'unfused' if tuning_opt.no_fusion else 'fused')
+            log_filename = '{}/nchwc_fused.log'.format(folder_name)
+        graph_opt_sch_file = '{}/graph_opt_{}.log'.format(folder_name, 'unfused' if tuning_opt.no_fusion else 'fused')
+    else:
+        folder_name = 'logs/autotvm/model/gpu/{}'.format(network)
+        if not os.path.exists(folder_name):
+            os.mkdir(folder_name)
+        if tuning_opt.use_nchw: # GPU & NCHW
+            image_shape, layout = (3, 224, 224), 'NCHW'
+            log_filename = '{}/nchw.log'.format(folder_name)
+        else: # GPU & NHWC
+            image_shape, layout = (224, 224, 3), "NHWC"
+            log_filename = '{}/nhwc.log'.format(folder_name)
     mod, params, input_shape, _ = get_network(network, batch_size=1, dtype=dtype, image_shape=image_shape, layout=layout)
     tasks = autotvm.task.extract_from_program(mod['main'], target=target_str, params=params, ops=(relay.op.get('nn.conv2d'), relay.op.get('nn.dense')))
 
@@ -208,16 +224,16 @@ if __name__ == '__main__':
         parser = argparse.ArgumentParser(description="Parses command.")
         parser.add_argument("-c", "--use_nchw", action="store_true", help="Use NCHW as the layout for baseline.")
         parser.add_argument("-d", "--enable_debugger", action="store_true", help="Enable debugger.")
-        parser.add_argument("-e", "--autotvm_early_stopping", type=int, default=800, help="Number of AutoTVM early stopping trials")
+        parser.add_argument("-e", "--autotvm_early_stopping", type=int, default=800, help="Number of AutoTVM early stopping trials.")
         parser.add_argument("-k", "--autotvm_skip_training", action="store_true", help="Run AutoTVM tuned kernel.")
         parser.add_argument("-l", "--autotvm_transfer_learning", action="store_true", help="Load existing kernel tuning log.")
         parser.add_argument("-p", "--autotvm_skip_graph_tuning", action="store_true", help="Load existing graph tuning log.")
         parser.add_argument("-n", "--no_fusion", action="store_true", help="No fusion.")
-        parser.add_argument("-t", "--autotvm_trials", type=int, default=2000, help="Number of AutoTVM trials")
+        parser.add_argument("-t", "--autotvm_trials", type=int, default=2000, help="Number of AutoTVM trials.")
+        parser.add_argument("-g", "--target", type=str, default="llvm -mcpu=core-avx2", help="Target type.")
+        parser.add_argument("-w", "--network", type=str, default="mobilenet_v1", help="Network type.")
         options = parser.parse_args()
         return options
 
     options = get_options()
-    ### target: 'cuda', 'llvm -mcpu=core-avx2', 'llvm -mcpu=core-avx512'
-    ### network: mobilenet_v1, mobilenet_v2, mnasnet_a1
-    tune_and_evaluate(options, target_str='llvm -mcpu=core-avx2', network='mobilenet_v1')
+    tune_and_evaluate(options)
