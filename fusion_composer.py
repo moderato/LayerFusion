@@ -7,7 +7,7 @@ from tvm.topi.nn.dilate import dilate
 from tvm.topi.nn.pad import pad
 from tvm.topi.nn.utils import get_pad_tuple
 from tvm.topi.utils import get_const_tuple
-from tvm import autotvm, te
+from tvm import te, autotvm, auto_scheduler
 from tvm.autotvm.task import TaskExtractEnv, args_to_workload
 from scipy.special import expit
 from helper import get_vlen, get_CPU_vlen_from_config, get_4D_shapes_from_params
@@ -182,11 +182,15 @@ class FusionComposer:
 
         return None
 
-    def __init__(self, p, pack=None, use_autotvm=True, target=None, dtype='float32', constraints_idx=-1):
+    def __init__(self, p, pack=None, use_autotvm=True, use_auto_scheduler=False, target=None, dtype='float32', constraints_idx=-1):
         self.cfg = None
         self.parameters = p
-        self.pack = (target.kind.name != 'cuda' and target.device_name != 'tracing') if pack is None else pack
         self.use_autotvm = use_autotvm
+        self.use_auto_scheduler = use_auto_scheduler
+        if use_auto_scheduler:
+            self.pack = False
+        else:
+            self.pack = (target.kind.name != 'cuda' and target.device_name != 'tracing') if pack is None else pack
         self.target = target
         self.output_dtype=dtype
         self.task_name = 'fused_conv2d.{}'.format('cuda' if target.kind.name == 'cuda' else 'x86')
@@ -368,37 +372,37 @@ class FusionComposer:
         return Last
 
     # TODO: integrate with TOPI
-    def get_compute(self, skip_post_op=False):
-        def wrapper(input_tensors):
+    def get_compute(self, raw_compute=False, skip_post_op=False):
+        def compute(input_tensors):
+            Feature = input_tensors[0]
+            tensor_idx = 1
+            for idx in range(self.layer_num):
+                Filter = input_tensors[tensor_idx]
+
+                # Updates:
+                self.filter_cfg = self.get_filter_cfg(idx)
+                self.output_cfg = self.get_output_cfg(idx)
+                self.layer_idx = idx
+
+                if self.get_filter_cfg(idx).depthwise:
+                    Feature = self.make_depthwise_output(Feature, Filter)
+                else:
+                    Feature = self.make_conv_output(Feature, Filter)
+
+                if (self.get_post_op(idx) is not None) and (not skip_post_op):
+                    Bias = input_tensors[tensor_idx + 1]
+                    tensor_idx += 2
+                    Feature = self.process_post_ops(Feature, Bias)
+                else:
+                    tensor_idx += 1
+            return Feature
+
+        def autotvm_wrapper(input_tensors):
             task_env = TaskExtractEnv.current
             args = autotvm.task.topi_integration.serialize_args([self.parameters])
             if task_env is not None and task_env.tracing:
                 task_env.add_task(self.task_name, args)
             workload = ((self.task_name),) + autotvm.task.topi_integration.serialize_args([self.parameters])
-
-            def compute(input_tensors):
-                Feature = input_tensors[0]
-                tensor_idx = 1
-                for idx in range(self.layer_num):
-                    Filter = input_tensors[tensor_idx]
-
-                    # Updates:
-                    self.filter_cfg = self.get_filter_cfg(idx)
-                    self.output_cfg = self.get_output_cfg(idx)
-                    self.layer_idx = idx
-
-                    if self.get_filter_cfg(idx).depthwise:
-                        Feature = self.make_depthwise_output(Feature, Filter)
-                    else:
-                        Feature = self.make_conv_output(Feature, Filter)
-
-                    if (self.get_post_op(idx) is not None) and (not skip_post_op):
-                        Bias = input_tensors[tensor_idx + 1]
-                        tensor_idx += 2
-                        Feature = self.process_post_ops(Feature, Bias)
-                    else:
-                        tensor_idx += 1
-                return Feature
 
             # attach workload to return op
             node = compute(input_tensors)
@@ -429,7 +433,7 @@ class FusionComposer:
         self.output_cfg = None
         self.layer_idx = -1
 
-        return wrapper
+        return compute if raw_compute else autotvm_wrapper
 
     def get_schedule(self, target=None, tuning=False):
         assert not (not tuning and target is None)
@@ -654,6 +658,20 @@ def get_schedule_tuning_x86(parameters):
 
     s = schedule(output_tensor)
     return s, all_tensors
+
+@auto_scheduler.register_workload
+def get_auto_scheduler_task_x86(parameters):
+    target = tvm.target.Target('llvm')
+
+    fc = FusionComposer(parameters, use_autotvm=False, use_auto_scheduler=True, target=target)
+
+    # Get compute
+    compute = fc.get_compute(raw_compute=True)
+    input_tensors = fc.make_placeholders()
+    output_tensor = compute(input_tensors)
+    all_tensors = input_tensors + [output_tensor]
+
+    return all_tensors
 
 @reg.register_alter_op_layout("nn.fused_conv2d")
 def alter_op_layout_fused_conv2d(attrs, inputs, tinfos, out_type):

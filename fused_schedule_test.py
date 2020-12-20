@@ -20,9 +20,11 @@ def verify_tuning(workload_name,
     dry_run = tuning_opt.dry_run
     export_code = tuning_opt.export_code
     use_autotvm = tuning_opt.use_autotvm
-    use_autotvm_skip_training = tuning_opt.use_autotvm_skip_training
+    use_auto_scheduler = tuning_opt.use_auto_scheduler
+    skip_training = tuning_opt.skip_training
     use_autotvm_transfer_learning = tuning_opt.use_autotvm_transfer_learning
-    use_autotvm_trials = tuning_opt.use_autotvm_trials
+    tuning_trials = tuning_opt.tuning_trials
+    tuning_trials = tuning_opt.tuning_trials
     unfused = tuning_opt.unfused
 
     def check_target(target_str):
@@ -39,7 +41,7 @@ def verify_tuning(workload_name,
             target = tvm.target.Target(target_str)
             device = 'gpu'
 
-        fc = FusionComposer(parameters, use_autotvm=use_autotvm, target=target)
+        fc = FusionComposer(parameters, use_autotvm=use_autotvm, use_auto_scheduler=use_auto_scheduler, target=target)
         if unfused:
             for l in range(2):
                 # 
@@ -78,7 +80,7 @@ def verify_tuning(workload_name,
                     print(task.target)
                     print(task.workload)
 
-                    if not use_autotvm_skip_training:
+                    if not skip_training:
                         # autotvm setting
                         measure_option = autotvm.measure_option(
                             builder=autotvm.LocalBuilder(),
@@ -95,9 +97,9 @@ def verify_tuning(workload_name,
                         if use_autotvm_transfer_learning and os.path.isfile(log_name):
                             tuner.load_history(autotvm.record.load_from_file(log_name))
 
-                        tuner.tune(n_trial=use_autotvm_trials,
+                        tuner.tune(n_trial=tuning_trials,
                                     measure_option=measure_option,
-                                    callbacks=[autotvm.callback.progress_bar(use_autotvm_trials),
+                                    callbacks=[autotvm.callback.progress_bar(tuning_trials),
                                                 autotvm.callback.log_to_file(log_name)])
 
                     # inspect the best config
@@ -213,9 +215,9 @@ def verify_tuning(workload_name,
                 log_name = 'logs/autotvm/layer/{}/{}_fused_{}.log'.format(device, name, workload_name)
                 print(log_name)
 
-                # logging
-                logging.getLogger('autotvm').setLevel(logging.DEBUG)
-                logging.getLogger('autotvm').addHandler(logging.StreamHandler(sys.stdout))
+                # # logging
+                # logging.getLogger('autotvm').setLevel(logging.DEBUG)
+                # logging.getLogger('autotvm').addHandler(logging.StreamHandler(sys.stdout))
 
                 # fused schedule auto
                 sargs = autotvm.task.topi_integration.serialize_args([parameters])
@@ -224,7 +226,7 @@ def verify_tuning(workload_name,
                 print(task.target)
                 print(task.workload)
 
-                if not use_autotvm_skip_training:
+                if not skip_training:
                     # autotvm setting
                     measure_option = autotvm.measure_option(
                         builder=autotvm.LocalBuilder(),
@@ -233,7 +235,8 @@ def verify_tuning(workload_name,
                             number=TARGETS[target_str]["config_params"]["number"],
                             repeat=TARGETS[target_str]["config_params"]["repeat"],
                             timeout=TARGETS[target_str]["config_params"]["timeout"][name],
-                            min_repeat_ms=TARGETS[target_str]["config_params"]["min_repeat_ms"])
+                            min_repeat_ms=TARGETS[target_str]["config_params"]["min_repeat_ms"]
+                        )
                     )
                     tuner = autotvm.tuner.XGBTuner(task, feature_type="curve")
 
@@ -241,9 +244,9 @@ def verify_tuning(workload_name,
                     if use_autotvm_transfer_learning and os.path.isfile(log_name):
                         tuner.load_history(autotvm.record.load_from_file(log_name))
 
-                    tuner.tune(n_trial=use_autotvm_trials,
+                    tuner.tune(n_trial=tuning_trials,
                                 measure_option=measure_option,
-                                callbacks=[autotvm.callback.progress_bar(use_autotvm_trials),
+                                callbacks=[autotvm.callback.progress_bar(tuning_trials),
                                             autotvm.callback.log_to_file(log_name)])
 
                 # inspect the best config
@@ -257,6 +260,38 @@ def verify_tuning(workload_name,
                 with dispatch_context:
                     with target:
                         s, flatten_params = fc.get_schedule_inference(target)
+            elif use_auto_scheduler:
+                log_name = 'logs/auto_scheduler/layer/{}/{}_fused_{}.json'.format(device, name, workload_name)
+                print(log_name)
+
+                # logging
+                logging.getLogger('auto_scheduler').setLevel(logging.DEBUG)
+                logging.getLogger('auto_scheduler').addHandler(logging.StreamHandler(sys.stdout))
+
+                task = tvm.auto_scheduler.SearchTask(func=get_auto_scheduler_task_x86, args=[parameters], target=target)
+                print(task.compute_dag)
+                print(task.target)
+                print(task.workload_key)
+
+                if not skip_training:
+                    # auto_scheduler setting
+                    tune_option = auto_scheduler.TuningOptions(
+                        num_measure_trials=tuning_trials,
+                        measure_callbacks=[auto_scheduler.RecordToFile(log_name)],
+                        verbose=2,
+                        builder=auto_scheduler.LocalBuilder(),
+                        runner=auto_scheduler.RPCRunner(
+                            TARGETS[target_str]["key"], '0.0.0.0', 9190,
+                            number=TARGETS[target_str]["config_params"]["number"],
+                            repeat=TARGETS[target_str]["config_params"]["repeat"],
+                            timeout=TARGETS[target_str]["config_params"]["timeout"][name],
+                            min_repeat_ms=TARGETS[target_str]["config_params"]["min_repeat_ms"]
+                        )
+                    )
+                    task.tune(tune_option)
+
+                best_config = None
+                s, flatten_params = task.apply_best(log_name)
             else:
                 best_config = None
                 with target:
@@ -338,9 +373,10 @@ if __name__ == '__main__':
         parser.add_argument("-d", "--save_data", action="store_true", help="Save numpy data as npy files.")
         parser.add_argument("-c", "--export_code", action="store_true", help="Export generated kernel code.")
         parser.add_argument("-a", "--use_autotvm", action="store_true", help="AutoTVM for auto tuning.")
-        parser.add_argument("-k", "--use_autotvm_skip_training", action="store_true", help="Run AutoTVM tuned kernel.")
+        parser.add_argument("-r", "--use_auto_scheduler", action="store_true", help="Use Auto Scheduler.")
+        parser.add_argument("-k", "--skip_training", action="store_true", help="Run AutoTVM tuned kernel.")
         parser.add_argument("-l", "--use_autotvm_transfer_learning", action="store_true", help="Load existing tuning log.")
-        parser.add_argument("-t", "--use_autotvm_trials", type=int, default=32, help="Number of AutoTVM trials.")
+        parser.add_argument("-t", "--tuning_trials", type=int, default=32, help="Number of AutoTVM/AutoScheduler trials.")
         parser.add_argument("-u", "--unfused", action="store_true", help="Tune separate tasks.")
         options = parser.parse_args()
         return options

@@ -18,3 +18,4 @@ schedules/__pycache__/*
 schedules/cpu/__pycache__/*
 schedules/gpu/__pycache__/*
 .vscode
+*.tsv

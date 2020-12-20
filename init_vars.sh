@@ -18,6 +18,10 @@ mkdir -p logs/autotvm/layer/cpu
 mkdir -p logs/autotvm/layer/gpu
 mkdir -p logs/autotvm/model/cpu
 mkdir -p logs/autotvm/model/gpu
+mkdir -p logs/auto_scheduler/layer/cpu
+mkdir -p logs/auto_scheduler/layer/gpu
+mkdir -p logs/auto_scheduler/model/cpu
+mkdir -p logs/auto_scheduler/model/gpu
 mkdir -p logs/gflops/cpu
 mkdir -p logs/gflops/gpu
 mkdir -p logs/runtime/cpu

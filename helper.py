@@ -537,7 +537,9 @@ class FusedConv2DCallback(DFPatternCallback):
             if count >= self.num_layers:
                 break
             if tmp.op.name == 'nn.conv2d':
-                if count > 0 and tmp.attrs['groups'] == 1: # Don't fuse two consecutive normal convs
+                if count == 0 and list(tmp.attrs['kernel_size']) != [1, 1]: # Don't fuse with second layer being not [3, 3]
+                    return post
+                if count > 0 and list(tmp.attrs['kernel_size']) != [3, 3]: # Don't fuse with first layer being not [1, 1]
                     return post
                 strides_array = [tmp.attrs['strides']] + strides_array
                 padding_array = [tmp.attrs['padding']] + padding_array
