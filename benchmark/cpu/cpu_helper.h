@@ -1,101 +1,8 @@
-#include <string>
-#include <cstring>
-#include <iostream>
-#include <fstream>
-#include <cstdio>
-#include <chrono>
-#include <math.h>
 #include <dlpack/dlpack.h>
 #include <tvm/runtime/module.h>
 #include <tvm/runtime/registry.h>
 #include <tvm/runtime/packed_func.h>
-#include "cnpy.h"
-#include "cpucounters.h"
-
-#ifndef NONE
-    #define NONE 0
-#endif
-#ifndef BIAS
-    #define BIAS 1
-#endif
-#ifndef RELU
-    #define RELU 2
-#endif
-#ifndef RELU6
-    #define RELU6 3
-#endif
-#ifndef SIGMOID
-    #define SIGMOID 4
-#endif
-
-#ifndef REPEATITION
-  #define REPEATITION 1000
-#endif
-
-// i7_7700K L3 cache size = 12 MB. Should be < 200 MB.
-#ifndef BIGGER_THAN_CACHESIZE
-    #define BIGGER_THAN_CACHESIZE 3 * 1024 * 1024
-#endif
-
-// Enable PCM
-#ifndef ENABLE_PCM
-  #define ENABLE_PCM 0
-#endif
-
-// Enable layer 1 and/or layer 2 profiling
-#ifndef LAYER_1
-  #define LAYER_1 0
-#endif
-#ifndef LAYER_2
-  #define LAYER_2 0
-#endif
-
-// For SDE benchmarking purpose
-#ifndef __SSC_MARK
-#define __SSC_MARK(tag)                                                        \
-        __asm__ __volatile__("movl %0, %%ebx; .byte 0x64, 0x67, 0x90 "         \
-                             ::"i"(tag) : "%ebx")
-#endif
-
-using namespace pcm;
-
-// #define DEBUG 1
-
-// TODO: Generalize the vlens reading
-void getKernelConfigFused(std::string workload_name, int& vlen1, int& vlen2) {
-    std::fstream fin;
-
-    std::string filename = "../../generated_kernels/cpu/fused/kernel_launch_config/" + workload_name + "_config.csv";
-    fin.open(filename, std::ios::in);
-
-    std::string line, word;
-    fin >> line;
-    std::stringstream s(line);
-    getline(s, word, ',');
-    vlen1 = std::stoi(word);
-    getline(s, word, ',');
-    vlen2 = std::stoi(word);
-
-    fin.close();
-}
-
-void getKernelConfigUnfused(std::string workload_name, int& vlen1, int& vlen2) {
-    std::fstream fin;
-
-    std::string filename = "../../generated_kernels/cpu/unfused/kernel_launch_config/" + workload_name + "_config.csv";
-    fin.open(filename, std::ios::in);
-
-    std::string line, word;
-    fin >> line;
-    std::stringstream s(line);
-    getline(s, word, ',');
-    vlen1 = std::stoi(word);
-    getline(s, word, ',');
-    vlen2 = std::stoi(word);
-
-    fin.close();
-}
-
+#include "utils.h"
 
 void benchmark_generated_cpu_fused(std::string workload_name,
     int input_batch, int input_height, int input_width, int input_channel,
@@ -133,7 +40,7 @@ void benchmark_generated_cpu_fused(std::string workload_name,
     std::string bias_1_name = folder_name + "bias_1.npy";
     std::string bias_2_name = folder_name + "bias_2.npy";
 
-#ifdef DEBUG
+#if DEBUG == 1
     std::cout << "npy file names:" << std::endl;
     std::cout << input_name << std::endl << kernel_1_name << std::endl << kernel_2_name << std::endl << output_name << std::endl;
     std::cout << "input_shape: (" << input_batch << ", " << input_height << ", " << input_width << ", " << input_channel << ")" << std::endl;
@@ -167,7 +74,7 @@ void benchmark_generated_cpu_fused(std::string workload_name,
     assert(fused_2 != nullptr);
     DLTensor *input, *filter_1, *filter_2, *output, *bias_1, *bias_2;
     int vlen1, vlen2;
-    getKernelConfigFused(workload_name, vlen1, vlen2);
+    getKernelConfig(workload_name, vlen1, vlen2, true);
     int dtype_code = kDLFloat;
     int dtype_bits = 32;
     int dtype_lanes = 1;
@@ -202,7 +109,7 @@ void benchmark_generated_cpu_fused(std::string workload_name,
         memcpy(bias_2->data, bias_2_npy.data<float>(), output_channel * sizeof(float));
     }
 
-#ifdef DEBUG
+#if DEBUG == 1
     std::cout << "npy_input_shape: (" << input_shape_tuple[0] << ", " << input_shape_tuple[1] << ", " << input_shape_tuple[2] << ", " << input_shape_tuple[3] << ", " << input_shape_tuple[4] << ")" << std::endl;
     std::cout << "npy_kernel_1_shape: (" << filter_1_shape_tuple[0] << ", " << filter_1_shape_tuple[1] << ", " << filter_1_shape_tuple[2] << ", " << filter_1_shape_tuple[3] << ", " << filter_1_shape_tuple[4] << ", " << filter_1_shape_tuple[5] << ")" << std::endl;
     std::cout << "npy_kernel_2_shape: (" << filter_2_shape_tuple[0] << ", " << filter_2_shape_tuple[1] << ", " << filter_2_shape_tuple[2] << ", " << filter_2_shape_tuple[3] << ", " << filter_2_shape_tuple[4] << ", " << filter_2_shape_tuple[5] << ")" << std::endl;
@@ -224,11 +131,10 @@ void benchmark_generated_cpu_fused(std::string workload_name,
 
         // Flush the cache
 #if ENABLE_PCM == 1
-        memset(flush_cache, i, BIGGER_THAN_CACHESIZE * sizeof(int));
-#endif
-
+        for (int j = 0; j < BIGGER_THAN_CACHESIZE; j++) {
+            flush_cache[j] = rand();
+        }
         __SSC_MARK(0x111);
-#if ENABLE_PCM == 1
         SystemCounterState before_sstate = getSystemCounterState();
 #endif
         auto elapsed = std::chrono::high_resolution_clock::now() - std::chrono::high_resolution_clock::now();
@@ -249,26 +155,30 @@ void benchmark_generated_cpu_fused(std::string workload_name,
         }
 #if ENABLE_PCM == 1
         SystemCounterState after_sstate = getSystemCounterState();
-#endif
         __SSC_MARK(0x222);
+        dram_bytes += getBytesReadFromMC(before_sstate, after_sstate) + getBytesWrittenToMC(before_sstate, after_sstate);
+#endif
 
         long long ns = std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count();
         runtime_us += ns / 1000.0f / REPEATITION;
-
-#if ENABLE_PCM == 1
-        dram_bytes += getBytesReadFromMC(before_sstate, after_sstate);
-#endif
     }
 
-    printf("DRAM bytes: %lu.\n", dram_bytes / REPEATITION / 2);
-    printf("Fusion runtime is %f us.\n", runtime_us - runtime_1_us);
+    int theoretical_bytes_1 = bytes_accessed(input_batch, input_height, input_width, input_channel, kernel_1_height, kernel_1_width, inter_height, inter_width, inter_channel, is_f1_depthwise);
+    int theoretical_bytes_2 = bytes_accessed(input_batch, inter_height, inter_width, inter_channel, kernel_2_height, kernel_2_height, output_height, output_width, output_channel, is_f2_depthwise);
+    int theoretical_flop_1 = FLOP(input_batch, input_height, input_width, input_channel, kernel_1_height, kernel_1_width, inter_height, inter_width, inter_channel, is_f1_depthwise);
+    int theoretical_flop_2 = FLOP(input_batch, inter_height, inter_width, inter_channel, kernel_2_height, kernel_2_height, output_height, output_width, output_channel, is_f2_depthwise);
+
+    printf("Theoretical DRAM bytes: %d .\n", theoretical_bytes_1 + theoretical_bytes_2 - 4 * (input_batch * inter_height * inter_width * inter_channel));
+    printf("Theoretical FLOP: %d .\n", theoretical_flop_1 + theoretical_flop_2);
+    printf("Total DRAM bytes: %lu .\n", dram_bytes / REPEATITION / 2);
+    printf("Fusion runtime is %f us .\n", runtime_us - runtime_1_us);
     m->cleanup();
 
     // Verification
     int count = 0;
     for(int i = 0; i < output_shape; i++) {
         float output_element = static_cast<float*>(output->data)[i];
-#ifdef DEBUG
+#if DEBUG == 1
         printf("%d, %f, %lf\n", i, output_element, tmp[i]);
         assert(std::abs(output_element - (float)tmp[i]) < 1e-3);
 #endif
@@ -292,6 +202,8 @@ void benchmark_generated_cpu_unfused(std::string workload_name,
     bool is_f2_depthwise, int f2_activation) {
 
     std::cout << "#######################" << std::endl;
+    /* initialize random seed: */
+    srand(time(NULL));
 
     // Some aliases
     int kernel_1_height = kernel_1, kernel_1_width = kernel_1;
@@ -320,7 +232,7 @@ void benchmark_generated_cpu_unfused(std::string workload_name,
     std::string kernel_2_name = folder_name + "_2/filter.npy";
     std::string output_2_name = folder_name + "_2/output.npy";
 
-#ifdef DEBUG
+#if DEBUG == 1
     std::cout << "npy file names:" << std::endl;
     std::cout << input_1_name << std::endl << kernel_1_name << std::endl << output_1_name << std::endl << input_2_name << std::endl << kernel_2_name << std::endl << output_2_name << std::endl;
     std::cout << "input_shape: (" << input_batch << ", " << input_height << ", " << input_width << ", " << input_channel << ")" << std::endl;
@@ -353,9 +265,9 @@ void benchmark_generated_cpu_unfused(std::string workload_name,
     assert(layer_2 != nullptr);
     DLTensor *input_1, *filter_1, *output_1, *input_2, *filter_2, *output_2;
     int vlen1_1, vlen1_2;
-    getKernelConfigUnfused(workload_name + "_1", vlen1_1, vlen1_2);
+    getKernelConfig(workload_name + "_1", vlen1_1, vlen1_2, false);
     int vlen2_1, vlen2_2;
-    getKernelConfigUnfused(workload_name + "_2", vlen2_1, vlen2_2);
+    getKernelConfig(workload_name + "_2", vlen2_1, vlen2_2, false);
     int dtype_code = kDLFloat;
     int dtype_bits = 32;
     int dtype_lanes = 1;
@@ -385,7 +297,7 @@ void benchmark_generated_cpu_unfused(std::string workload_name,
     memcpy(input_2->data, input_2_npy.data<float>(), inter_batch * inter_height * inter_width * inter_channel * sizeof(float));
     memcpy(filter_2->data, kernel_2_npy.data<float>(), kernel_2_height * kernel_2_width * kernel_2_in_channel * kernel_2_out_channel * sizeof(float));
 
-#ifdef DEBUG
+#if DEBUG == 1
     std::cout << "npy_input_1_shape: (" << input_1_shape_tuple[0] << ", " << input_1_shape_tuple[1] << ", " << input_1_shape_tuple[2] << ", " << input_1_shape_tuple[3] << ")" << std::endl;
     std::cout << "npy_kernel_1_shape: (" << filter_1_shape_tuple[0] << ", " << filter_1_shape_tuple[1] << ", " << filter_1_shape_tuple[2] << ", " << filter_1_shape_tuple[3] << ")" << std::endl;
     std::cout << "npy_output_2_shape: (" << output_1_shape_tuple[0] << ", " << output_1_shape_tuple[1] << ", " << output_1_shape_tuple[2] << ", " << output_1_shape_tuple[3] << ", " << output_1_shape_tuple[4] << ")" << std::endl;
@@ -409,15 +321,14 @@ void benchmark_generated_cpu_unfused(std::string workload_name,
         }
         // Flush the cache
 #if ENABLE_PCM == 1
-        memset(flush_cache, i, BIGGER_THAN_CACHESIZE * sizeof(int));
-#endif
+        for (int j = 0; j < BIGGER_THAN_CACHESIZE; j++) {
+            flush_cache[j] = rand();
+        }
 #if LAYER_1 == 1
         __SSC_MARK(0x111);
 #endif
-#if ENABLE_PCM == 1
         SystemCounterState before_sstate = getSystemCounterState();
 #endif
-
         auto elapsed = std::chrono::high_resolution_clock::now() - std::chrono::high_resolution_clock::now();
         auto start = std::chrono::high_resolution_clock::now();
 
@@ -427,23 +338,24 @@ void benchmark_generated_cpu_unfused(std::string workload_name,
         elapsed = std::chrono::high_resolution_clock::now() - start;
 #if ENABLE_PCM == 1
         SystemCounterState after_sstate = getSystemCounterState();
-#endif
 #if LAYER_1 == 1
         __SSC_MARK(0x222);
+#endif
+        dram_bytes_1 += getBytesReadFromMC(before_sstate, after_sstate) + getBytesWrittenToMC(before_sstate, after_sstate);
 #endif
 
         long long ns = std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count();
         runtime_us += ns / 1000.0f / REPEATITION;
-
-#if ENABLE_PCM == 1
-        dram_bytes_1 += getBytesReadFromMC(before_sstate, after_sstate);
-#endif
     }
 
-    printf("Stage 1 DRAM bytes: %lu.\n", dram_bytes_1 / REPEATITION / 2);
-    printf("Stage 1 runtime is %f us.\n", runtime_us - runtime_1_us);
+    int theoretical_bytes_1 = bytes_accessed(input_batch, input_height, input_width, input_channel, kernel_1_height, kernel_1_width, inter_height, inter_width, inter_channel, is_f1_depthwise);
+    int theoretical_flop_1 = FLOP(input_batch, input_height, input_width, input_channel, kernel_1_height, kernel_1_width, inter_height, inter_width, inter_channel, is_f1_depthwise);
+
+    printf("Stage 1 Theoretical DRAM bytes: %d .\n", theoretical_bytes_1);
+    printf("Stage 1 Theoretical FLOP: %d .\n", theoretical_flop_1);
+    printf("Stage 1 DRAM bytes: %lu .\n", dram_bytes_1 / REPEATITION / 2);
+    printf("Stage 1 runtime is %f us .\n", runtime_us - runtime_1_us);
     runtime_sum_us += runtime_us - runtime_1_us;
-    m->cleanup();
     runtime_us = 0;
 
     for (int i = 0; i < REPEATITION * 2; i++) {
@@ -452,12 +364,12 @@ void benchmark_generated_cpu_unfused(std::string workload_name,
         }
         // Flush the cache
 #if ENABLE_PCM == 1
-        memset(flush_cache, i, BIGGER_THAN_CACHESIZE * sizeof(int));
-#endif
+        for (int j = 0; j < BIGGER_THAN_CACHESIZE; j++) {
+            flush_cache[j] = rand();
+        }
 #if LAYER_2 == 1
         __SSC_MARK(0x111);
 #endif
-#if ENABLE_PCM == 1
         SystemCounterState before_sstate = getSystemCounterState();
 #endif
 
@@ -470,21 +382,23 @@ void benchmark_generated_cpu_unfused(std::string workload_name,
         elapsed = std::chrono::high_resolution_clock::now() - start;
 #if ENABLE_PCM == 1
         SystemCounterState after_sstate = getSystemCounterState();
-#endif
 #if LAYER_2 == 1
         __SSC_MARK(0x222);
+#endif
+        dram_bytes_2 += getBytesReadFromMC(before_sstate, after_sstate) + getBytesWrittenToMC(before_sstate, after_sstate);
 #endif
 
         long long ns = std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count();
         runtime_us += ns / 1000.0f / REPEATITION;
-
-#if ENABLE_PCM == 1
-        dram_bytes_2 += getBytesReadFromMC(before_sstate, after_sstate);
-#endif
     }
 
-    printf("Stage 2 DRAM bytes: %lu.\n", dram_bytes_2 / REPEATITION / 2);
-    printf("Stage 2 runtime is %f us.\n", runtime_us - runtime_2_us);
+    int theoretical_bytes_2 = bytes_accessed(input_batch, inter_height, inter_width, inter_channel, kernel_2_height, kernel_2_height, output_height, output_width, output_channel, is_f2_depthwise);
+    int theoretical_flop_2 = FLOP(input_batch, inter_height, inter_width, inter_channel, kernel_2_height, kernel_2_height, output_height, output_width, output_channel, is_f2_depthwise);
+
+    printf("Stage 2 Theoretical DRAM bytes: %d .\n", theoretical_bytes_2);
+    printf("Stage 2 Theoretical FLOP: %d .\n", theoretical_flop_2);
+    printf("Stage 2 DRAM bytes: %lu .\n", dram_bytes_2 / REPEATITION / 2);
+    printf("Stage 2 runtime is %f us .\n", runtime_us - runtime_2_us);
     runtime_sum_us += runtime_us - runtime_2_us;
     printf("Total runtime is %f us.\n", runtime_sum_us);
     m->cleanup();
@@ -493,7 +407,7 @@ void benchmark_generated_cpu_unfused(std::string workload_name,
     int count = 0;
     for(int i = 0; i < output_1_shape; i++) {
         float output_element = static_cast<float*>(output_1->data)[i];
-#ifdef DEBUG
+#if DEBUG == 1
         printf("%d, %f, %lf\n", i, output_element, tmp_1[i]);
         assert(std::abs(output_element - (float)tmp_1[i]) < 1e-3);
 #endif
@@ -505,7 +419,7 @@ void benchmark_generated_cpu_unfused(std::string workload_name,
     count = 0;
     for(int i = 0; i < output_2_shape; i++) {
         float output_element = static_cast<float*>(output_2->data)[i];
-#ifdef DEBUG
+#if DEBUG == 1
         printf("%d, %f, %lf\n", i, output_element, tmp_2[i]);
         assert(std::abs(output_element - (float)tmp_2[i]) < 1e-3);
 #endif
@@ -521,6 +435,7 @@ void benchmark_generated_cpu_unfused(std::string workload_name,
     TVMArrayFree(input_2);
     TVMArrayFree(filter_2);
     TVMArrayFree(output_2);
+    delete[] flush_cache;
 }
 
 void benchmark_generated_cpu(std::string workload_name,

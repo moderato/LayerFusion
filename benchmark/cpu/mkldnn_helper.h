@@ -1,54 +1,7 @@
-#include <iostream>
-#include <string>
-#include <cstring>
-#include <cstdlib>
-#include <cassert>
-#include <chrono>
-#include <math.h>
 #include <mkldnn.hpp>
-#include "cnpy.h"
-#include "cpucounters.h"
-
-#ifndef NONE
-    #define NONE 0
-#endif
-#ifndef BIAS
-    #define BIAS 1
-#endif
-#ifndef RELU
-    #define RELU 2
-#endif
-#ifndef RELU6
-    #define RELU6 3
-#endif
-#ifndef SIGMOID
-    #define SIGMOID 4
-#endif
-
-#ifndef REPEATITION
-  #define REPEATITION 1000
-#endif
-
-// i7_7700K L3 cache size = 12 MB. Should be < 200 MB.
-#ifndef BIGGER_THAN_CACHESIZE
-    #define BIGGER_THAN_CACHESIZE 3 * 1024 * 1024
-#endif
-
-#ifndef ENABLE_PCM
-  #define ENABLE_PCM 0
-#endif
-
-// For SDE benchmarking purpose
-#ifndef __SSC_MARK
-#define __SSC_MARK(tag)                                                        \
-        __asm__ __volatile__("movl %0, %%ebx; .byte 0x64, 0x67, 0x90 "         \
-                             ::"i"(tag) : "%ebx")
-#endif
-
-// #define DEBUG 1
+#include "utils.h"
 
 using namespace dnnl;
-using namespace pcm;
 using tag = dnnl::memory::format_tag;
 using dt = dnnl::memory::data_type;
 
@@ -119,7 +72,7 @@ void benchmark_mkldnn(std::string workload_name,
         bias_2_name = folder_name + "bias_2.npy";
     }
 
-#ifdef DEBUG
+#if DEBUG == 1
     std::cout << "npy file names:" << std::endl;
     std::cout << input_name << std::endl << kernel_1_name << std::endl << kernel_2_name << std::endl << output_name << std::endl;
     std::cout << "input_shape: (" << input_batch << ", " << input_height << ", " << input_width << ", " << input_channel << ")" << std::endl;
@@ -155,7 +108,7 @@ void benchmark_mkldnn(std::string workload_name,
     dnnl::memory::dims padding_1_dims = {padding_1_h, padding_1_w};
     dnnl::memory::dims padding_2_dims = {padding_2_h, padding_2_w};
 
-#ifdef DEBUG
+#if DEBUG == 1
     std::cout << "npy_input_shape: (" << input_dims[0] << ", " << input_dims[1] << ", " << input_dims[2] << ", " << input_dims[3] << ")" << std::endl;
     std::cout << "npy_kernel_1_shape: (" << filter_1_dims[0] << ", " << filter_1_dims[1] << ", " << filter_1_dims[2] << ", " << filter_1_dims[3] << ", " << filter_1_dims[4] << ")" << std::endl;
     std::cout << "npy_kernel_2_shape: (" << filter_2_dims[0] << ", " << filter_2_dims[1] << ", " << filter_2_dims[2] << ", " << filter_2_dims[3] << ")" << std::endl;
@@ -302,6 +255,7 @@ void benchmark_mkldnn(std::string workload_name,
     if (conv_pd_2.src_desc() != conv_pd_1.dst_desc()) {
         std::cout << "reorder intermediate" << std::endl;
         tmp_inter_mem = dnnl::memory(conv_pd_2.src_desc(), engine);
+        /* If profile separately, layout transform shouldn't be profiled */
         pr_profile.push_back(dnnl::reorder(conv_inter_mem, tmp_inter_mem)); // Layout transformation of intermediate should be profiled
         pr_profile_args.push_back({{MKLDNN_ARG_FROM, conv_inter_mem}, {MKLDNN_ARG_TO, tmp_inter_mem}});
     } else {
@@ -336,70 +290,111 @@ void benchmark_mkldnn(std::string workload_name,
     }
 
     // Benchmark
-    float runtime_us = 0.0f, runtime_1_us = 0.0f;
+    float runtime_us = 0.0f, runtime_1_us = 0.0f, runtime_2_us = 0.0f, runtime_sum_us = 0.0f, runtime_1_sum_us = 0.0f, runtime_2_sum_us = 0.0f;
     assert(pr_profile.size() == pr_profile_args.size() && "something is missing");
     assert(pr_not_profile.size() == pr_not_profile_args.size() && "something is missing");
     std::cout << "Profile: " << pr_profile.size() << ", not profile: " << pr_not_profile.size() << std::endl;
 
-#if ENABLE_PCM == 1
     // Instantiate Intel PCM singleton
     PCM *m = PCM::getInstance();
-    unsigned long dram_bytes = 0;
-#endif
+    unsigned long dram_bytes_1 = 0, dram_bytes_2 = 0;
 
     for (int i = 0; i < REPEATITION * 2; i++) {
         if (i == REPEATITION) {
-            runtime_1_us = runtime_us;
+            runtime_us = runtime_sum_us;
+            runtime_1_us = runtime_1_sum_us;
+            runtime_2_us = runtime_2_sum_us;
         }
 
         for (size_t j = 0; j < pr_not_profile.size(); ++j) {
             pr_not_profile.at(j).execute(engine_stream, pr_not_profile_args.at(j));
         }
 
-        // Wait for the computation to finalize.
-        // engine_stream.wait();
-
-        // Flush the cache
-#if ENABLE_PCM == 1
-        memset(flush_cache, i, BIGGER_THAN_CACHESIZE * sizeof(int));
-#endif
-
         // Initialize time point
+        SystemCounterState before_sstate, after_sstate;
+        long long ns;
         auto start = std::chrono::high_resolution_clock::now();
-        auto elapsed = std::chrono::high_resolution_clock::now() - std::chrono::high_resolution_clock::now();
+        auto elapsed_1 = std::chrono::high_resolution_clock::now() - std::chrono::high_resolution_clock::now();
+        auto elapsed_2 = std::chrono::high_resolution_clock::now() - std::chrono::high_resolution_clock::now();
         // Execute primitives
-        for (size_t j = 0; j < pr_profile.size(); ++j) {
-            __SSC_MARK(0x111);
+// ################### Layer 1 ###################
 #if ENABLE_PCM == 1
-            SystemCounterState before_sstate = getSystemCounterState();
+        for (int j = 0; j < BIGGER_THAN_CACHESIZE; j++) {
+            flush_cache[j] = rand();
+        }
+#if LAYER_1 == 1
+        __SSC_MARK(0x111);
 #endif
-            start = std::chrono::high_resolution_clock::now();
+        before_sstate = getSystemCounterState();
+#endif
+        start = std::chrono::high_resolution_clock::now();
 
-            pr_profile.at(j).execute(engine_stream, pr_profile_args.at(j));
+        pr_profile.at(0).execute(engine_stream, pr_profile_args.at(0));
 
-            elapsed += std::chrono::high_resolution_clock::now() - start;
+        elapsed_1 += std::chrono::high_resolution_clock::now() - start;
 #if ENABLE_PCM == 1
-            SystemCounterState after_sstate = getSystemCounterState();
+        after_sstate = getSystemCounterState();
+#if LAYER_1 == 1
+        __SSC_MARK(0x222);
 #endif
-            __SSC_MARK(0x222);
+        dram_bytes_1 += getBytesReadFromMC(before_sstate, after_sstate) + getBytesWrittenToMC(before_sstate, after_sstate);
+#endif
 
-#if ENABLE_PCM == 1
-            dram_bytes += getBytesReadFromMC(before_sstate, after_sstate);
-#endif
+        if (pr_profile.size() == 3) {
+            std::cout << "Need layout transformation." << std::endl;
+            pr_profile.at(1).execute(engine_stream, pr_profile_args.at(1));
         }
 
-        long long ns = std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count();
-        runtime_us += ns / 1000.0f / REPEATITION;
+// ################### Layer 2 ###################
+#if ENABLE_PCM == 1
+        for (int j = 0; j < BIGGER_THAN_CACHESIZE; j++) {
+            flush_cache[j] = rand();
+        }
+#if LAYER_2 == 1
+        __SSC_MARK(0x111);
+#endif
+        before_sstate = getSystemCounterState();
+#endif
+        start = std::chrono::high_resolution_clock::now();
+
+        pr_profile.at(pr_profile.size() - 1).execute(engine_stream, pr_profile_args.at(pr_profile.size() - 1));
+
+        elapsed_2 += std::chrono::high_resolution_clock::now() - start;
+#if ENABLE_PCM == 1
+        after_sstate = getSystemCounterState();
+#if LAYER_2 == 1
+        __SSC_MARK(0x222);
+#endif
+        dram_bytes_2 += getBytesReadFromMC(before_sstate, after_sstate) + getBytesWrittenToMC(before_sstate, after_sstate);
+#endif
+
+        ns = std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed_1).count();
+        runtime_1_sum_us += ns / 1000.0f / REPEATITION;
+        runtime_sum_us += ns / 1000.0f / REPEATITION;
+
+        ns = std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed_2).count();
+        runtime_2_sum_us += ns / 1000.0f / REPEATITION;
+        runtime_sum_us += ns / 1000.0f / REPEATITION;
 
         // Wait for the computation to finalize.
         engine_stream.wait();
     }
 
-#if ENABLE_PCM == 1
-    printf("DRAM bytes: %lu.\n", dram_bytes / REPEATITION / 2);
+    int theoretical_bytes_1 = bytes_accessed(input_batch, input_height, input_width, input_channel, kernel_1_height, kernel_1_width, inter_height, inter_width, inter_channel, is_f1_depthwise);
+    int theoretical_bytes_2 = bytes_accessed(input_batch, inter_height, inter_width, inter_channel, kernel_2_height, kernel_2_height, output_height, output_width, output_channel, is_f2_depthwise);
+    int theoretical_flop_1 = FLOP(input_batch, input_height, input_width, input_channel, kernel_1_height, kernel_1_width, inter_height, inter_width, inter_channel, is_f1_depthwise);
+    int theoretical_flop_2 = FLOP(input_batch, inter_height, inter_width, inter_channel, kernel_2_height, kernel_2_height, output_height, output_width, output_channel, is_f2_depthwise);
+
+    printf("Stage 1 Theoretical DRAM bytes: %d .\n", theoretical_bytes_1);
+    printf("Stage 1 Theoretical FLOP: %d .\n", theoretical_flop_1);
+    printf("Stage 1 DRAM bytes: %lu .\n", dram_bytes_1 / REPEATITION / 2);
+    printf("Stage 1 runtime is %f us .\n", runtime_1_sum_us - runtime_1_us);
+    printf("Stage 2 Theoretical DRAM bytes: %d .\n", theoretical_bytes_2);
+    printf("Stage 2 Theoretical FLOP: %d .\n", theoretical_flop_2);
+    printf("Stage 2 DRAM bytes: %lu .\n", dram_bytes_2 / REPEATITION / 2);
+    printf("Stage 2 runtime is %f us .\n", runtime_2_sum_us - runtime_2_us);
+    printf("Total runtime is %f us .\n", runtime_sum_us - runtime_us);
     m->cleanup();
-#endif
-    printf("MKLDNN runtime is %f us.\n", runtime_us - runtime_1_us);
 
     // Read data from memory object's handle.
     read_from_dnnl_memory(output_data.data(), output_mem);
@@ -408,7 +403,7 @@ void benchmark_mkldnn(std::string workload_name,
     int count = 0;
     for(int i = 0; i < output_shape; i++) {
         float output_element = output_data[i];
-#ifdef DEBUG
+#if DEBUG == 1
         printf("%d, %f, %lf\n", i, output_element, tmp[i]);
         // assert(std::abs(output_element - (float)tmp[i]) < 1e-3);
 #endif
@@ -416,5 +411,6 @@ void benchmark_mkldnn(std::string workload_name,
             count++;
     }
     printf("Output wrong count: %d\n", count);
-}
 
+    delete[] flush_cache;
+}

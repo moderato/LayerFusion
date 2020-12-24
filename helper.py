@@ -424,6 +424,8 @@ def export_kernel_launch_config(workload_name, output_shape, best_config, target
     config_dict = best_config.to_json_dict()
 
     if target == 'cuda':
+        if not os.path.exists('generated_kernels/gpu/fused/kernel_launch_config'):
+            os.mkdir('generated_kernels/gpu/fused/kernel_launch_config')
         n = output_shape[0]
         ho = output_shape[1]
         wo = output_shape[2]
@@ -453,6 +455,8 @@ def export_kernel_launch_config(workload_name, output_shape, best_config, target
         with open('generated_kernels/gpu/fused/kernel_launch_config/{}_config.csv'.format(workload_name), 'w') as f:
             f.write('{},{},{},{}'.format(thx, thy, thz, blx))
     else:
+        if not os.path.exists('generated_kernels/cpu/{}/kernel_launch_config'.format('unfused' if unfused else 'fused')):
+            os.mkdir('generated_kernels/cpu/{}/kernel_launch_config'.format('unfused' if unfused else 'fused'))
         if unfused:
             vlen_ic, vlen_oc = -1, -1
             for e in config_dict['entity']:

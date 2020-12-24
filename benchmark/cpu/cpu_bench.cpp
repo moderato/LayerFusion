@@ -4,28 +4,6 @@
 #include "mkldnn_helper.h"
 #include "cpu_helper.h"
 
-#ifndef NONE
-    #define NONE 0
-#endif
-#ifndef BIAS
-    #define BIAS 1
-#endif
-#ifndef RELU
-    #define RELU 2
-#endif
-#ifndef RELU6
-    #define RELU6 3
-#endif
-#ifndef SIGMOID
-    #define SIGMOID 4
-#endif
-
-#define MKLDNN 0
-#define GENERATED_CPU_FUSED 1
-#define GENERATED_CPU_UNFUSED 2
-
-// #define DEBUG 1
-
 void benchmarkWithWorkloadString(std::string workload, int type) {
     std::string token;
     std::istringstream tokenStream(workload);

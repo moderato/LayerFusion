@@ -70,9 +70,9 @@ def verify_tuning(workload_name,
                     log_name = 'logs/autotvm/layer/{}/{}_{}.log'.format(device, workload_name, l+1)
                     print(log_name)
 
-                    # logging
-                    logging.getLogger('autotvm').setLevel(logging.DEBUG)
-                    logging.getLogger('autotvm').addHandler(logging.StreamHandler(sys.stdout))
+                    # # logging
+                    # logging.getLogger('autotvm').setLevel(logging.DEBUG)
+                    # logging.getLogger('autotvm').addHandler(logging.StreamHandler(sys.stdout))
 
                     sargs = autotvm.task.topi_integration.serialize_args([data, kernel, stride, padding, dilation, layout, out_layout, out_dtype])
                     task = autotvm.task.create(task_name, args=sargs, target=target)
@@ -99,7 +99,7 @@ def verify_tuning(workload_name,
 
                         tuner.tune(n_trial=tuning_trials,
                                     measure_option=measure_option,
-                                    callbacks=[autotvm.callback.progress_bar(tuning_trials),
+                                    callbacks=[autotvm.callback.progress_bar(min(tuning_trials, len(task.config_space))),
                                                 autotvm.callback.log_to_file(log_name)])
 
                     # inspect the best config
@@ -246,7 +246,7 @@ def verify_tuning(workload_name,
 
                     tuner.tune(n_trial=tuning_trials,
                                 measure_option=measure_option,
-                                callbacks=[autotvm.callback.progress_bar(tuning_trials),
+                                callbacks=[autotvm.callback.progress_bar(min(tuning_trials, len(task.config_space))),
                                             autotvm.callback.log_to_file(log_name)])
 
                 # inspect the best config
