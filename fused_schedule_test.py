@@ -307,7 +307,16 @@ def verify_tuning(workload_name,
                     print(func.get_source('asm')) # assembly code
             if dry_run: # Only print IR and/or source
                 return
+
+            # Prepare data
+            ref_data = fc.get_ref_data(workload_name, best_config, save_data=save_data)
+
             if export_code:
+                # export kernel launch config, e.g. thxyz, blxy, vlen, etc
+                output_shape = ref_data[-1].shape
+                if use_autotvm:
+                    assert (best_config is not None)
+                    export_kernel_launch_config(workload_name, output_shape, best_config, target_str)
                 if target_str == 'cuda':
                     code = func.imported_modules[0].get_source()
                     write_code(code, 'generated_kernels/gpu/fused/{}.cuh'.format(workload_name))
@@ -318,15 +327,6 @@ def verify_tuning(workload_name,
                     # func.export_library("benchmark/cpu/kernel.so")
                     # func_sys = tvm.build(s, flatten_params, target_str + " --system-lib", name="fused_2_sys")
                     # func_sys.save("benchmark/cpu/kernel_sys.o")
-
-            # Prepare data
-            ref_data = fc.get_ref_data(workload_name, best_config, save_data=save_data)
-
-            # export kernel launch config, e.g. thxyz, blxy, vlen, etc
-            output_shape = ref_data[-1].shape
-            if use_autotvm:
-                assert (best_config is not None)
-                export_kernel_launch_config(workload_name, output_shape, best_config, target_str)
 
             nd_arrays = []
             for idx, array in enumerate(ref_data):

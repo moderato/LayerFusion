@@ -464,7 +464,7 @@ class FusionComposer:
                     from schedules.schedule_utils import gpu_schedules as sch
                 else:
                     from schedules.schedule_utils import cpu_schedules as sch
-                return sch(self.pattern, (cfg is not None))
+                return sch(self.pattern, (cfg is not None), tuning=tuning)
             f = raw_schedule()
             if self.pack:
                 inputs_cfg = {}
@@ -645,6 +645,14 @@ def get_schedule_tuning_cuda(parameters):
 def get_schedule_tuning_x86(parameters):
     target = tvm.target.Target('llvm')
 
+    # A workaround for CPU autotuning
+    tmp = []
+    for idx in range(len(parameters)):
+        if parameters[idx] == 'relu' or parameters[idx] == 'relu6' or parameters[idx] == 'bias':
+            tmp.append(None)
+        else:
+            tmp.append(parameters[idx])
+    parameters = tmp
     fc = FusionComposer(parameters, target=target)
 
     # Get schedule
