@@ -488,6 +488,41 @@ def get_CPU_vlen_from_config(best_config=None, cfg_key=''):
             vlens.append(vlens_dict[k])
         return vlens
 
+def duplicate_fusion_logs(logfile, post_ops=['relu', 'relu']):
+    records = autotvm.record.load_from_file(logfile)
+    d1 = {}
+    d2 = {}
+    for k, v in records:
+        d1[k] = v
+
+    s = set([(k.task.args, k.config.index) for k in d1.keys()])
+    for k, v in d1.items():
+        tgt, tsk, config = k.target, k.task, k.config
+        name, args = tsk.name, tsk.args
+        if 'fused' not in name:
+            continue
+        new_args = list(args[0])
+        c = 0
+        while 8 + 5*c < len(new_args):
+            if args[0][8 + 5*c] is None:
+                new_args[8 + 5*c] = post_ops[c]
+            else:
+                new_args[8 + 5*c] = None
+            c += 1
+        new_args = (tuple(new_args),)
+        new_tsk = autotvm.task.Task(name, new_args)
+        new_mi = autotvm.MeasureInput(tgt, new_tsk, config)
+
+        if (new_args, config.index) not in s:
+            d2[new_mi] = v
+
+    # print(len(d1.keys()))
+    # print(len(d2.keys()))
+
+    with open(logfile, "a") as f:
+        for k, v in d2.items():
+            f.write(autotvm.record.encode(k, v) + "\n")
+
 # Print IR utility function. To be specified.
 def print_ir(mod, info, is_before=True):
     """Print the name of the pass, the IR, only before passes execute."""
