@@ -168,7 +168,8 @@ def tune_and_evaluate(tuning_opt, dtype='float32'):
         tasks, task_weights = auto_scheduler.extract_tasks(mod["main"], params, target_str)
 
         print('Tuning...')
-        tune_auto_scheduler_tasks(tasks, task_weights, tuning_opt, target_str, log_filename)
+        if not tuning_opt.skip_tuning:
+            tune_auto_scheduler_tasks(tasks, task_weights, tuning_opt, target_str, log_filename)
 
         print("############### Compile... ###############")
         with auto_scheduler.ApplyHistoryBest(log_filename):
@@ -203,7 +204,7 @@ def tune_and_evaluate(tuning_opt, dtype='float32'):
         pprint(tasks)
 
         # Run tuning tasks
-        if not tuning_opt.autotvm_skip_training:
+        if not tuning_opt.skip_tuning:
             if not tuning_opt.no_fusion:
                 # Replace all fusable tasks to fused tasks
                 tasks = fuse_tasks(tasks, tuning_opt, target_str=target_str) # TODO: Extract fused tasks from preprocessed graph
@@ -270,7 +271,7 @@ if __name__ == '__main__':
         parser.add_argument("-c", "--use_nchw", action="store_true", help="Use NCHW as the layout for baseline.")
         parser.add_argument("-d", "--enable_debugger", action="store_true", help="Enable debugger.")
         parser.add_argument("-e", "--autotvm_early_stopping", type=int, default=800, help="Number of AutoTVM early stopping trials.")
-        parser.add_argument("-k", "--autotvm_skip_training", action="store_true", help="Run AutoTVM tuned kernel.")
+        parser.add_argument("-k", "--skip_tuning", action="store_true", help="Run AutoTVM/AutoScheduler tuned kernel.")
         parser.add_argument("-l", "--autotvm_transfer_learning", action="store_true", help="Load existing kernel tuning log.")
         parser.add_argument("-p", "--autotvm_skip_graph_tuning", action="store_true", help="Load existing graph tuning log.")
         parser.add_argument("-n", "--no_fusion", action="store_true", help="No fusion.")
