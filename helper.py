@@ -489,6 +489,8 @@ def get_CPU_vlen_from_config(best_config=None, cfg_key=''):
         return vlens
 
 def duplicate_fusion_logs(logfile, post_ops=['relu', 'relu']):
+    if not os.path.isfile(logfile):
+        return
     records = autotvm.record.load_from_file(logfile)
     d1 = {}
     d2 = {}
@@ -509,7 +511,10 @@ def duplicate_fusion_logs(logfile, post_ops=['relu', 'relu']):
             else:
                 new_args[8 + 5*c] = None
             c += 1
-        new_args = (tuple(new_args),)
+        if len(args) == 1:
+            new_args = (tuple(new_args),)
+        else:
+            new_args = (tuple(new_args), args[1])
         new_tsk = autotvm.task.Task(name, new_args)
         new_mi = autotvm.MeasureInput(tgt, new_tsk, config)
 
@@ -521,6 +526,47 @@ def duplicate_fusion_logs(logfile, post_ops=['relu', 'relu']):
 
     with open(logfile, "a") as f:
         for k, v in d2.items():
+            f.write(autotvm.record.encode(k, v) + "\n")
+
+def update_fusion_logs_with_axis(log_dir, log_name, axis):
+    logfile = '{}/fused_{}/{}'.format(log_dir, axis, log_name)
+    if not os.path.isfile(logfile):
+        return
+    print(logfile)
+    new_logfile = '{}/fused/{}'.format(log_dir, log_name)
+
+    d1 = {}
+    records = autotvm.record.load_from_file(logfile)
+    for k, v in records:
+        d1[k] = v
+
+    d2 = {}
+    if os.path.isfile(new_logfile):
+        records = autotvm.record.load_from_file(new_logfile)
+        for k, v in records:
+            d2[k] = v
+
+    d3 = {}
+    for k, v in d1.items():
+        tgt, tsk, config = k.target, k.task, k.config
+        name, args = tsk.name, tsk.args
+        if 'fused' not in name:
+            continue
+        if len(args) != 1:
+            continue
+        new_args = tuple([args[0], axis])
+        new_tsk = autotvm.task.Task(name, new_args)
+        new_mi = autotvm.MeasureInput(tgt, new_tsk, config)
+
+        if new_mi not in d2.keys():
+            d3[new_mi] = v
+
+    print(len(d1.keys()))
+    print(len(d2.keys()))
+    print(len(d3.keys()))
+
+    with open(new_logfile, "a") as f:
+        for k, v in d3.items():
             f.write(autotvm.record.encode(k, v) + "\n")
 
 # Print IR utility function. To be specified.
