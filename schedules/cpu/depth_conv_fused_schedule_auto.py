@@ -108,6 +108,10 @@ def schedule_depth_conv_fused_nchwc_auto_search(cfg, outs, *args, **kwargs):
     inputs_cfg = kwargs['inputs_cfg']
     filters_cfg = kwargs['filters_cfg']
     outputs_cfg = kwargs['outputs_cfg']
+    axis = 'w'
+    if 'bind_axis' in kwargs.keys():
+        axis = kwargs['bind_axis']
+    print(axis)
 
     n, oc_chunk, h, w, oc = s[layer_output_dict['Layer_1']].op.axis
     oc_chunk_o, oc_chunk_i = cfg['split_layer_1_c'].apply(s, layer_output_dict['Layer_1'], oc_chunk)
@@ -155,7 +159,15 @@ def schedule_depth_conv_fused_nchwc_auto_search(cfg, outs, *args, **kwargs):
     s[layer_output_dict['Layer_1']].tensorize(tensorize_axis, libxsmm_tensorize)
 
     # ######## Intermediate output
-    s[layer_output_dict['Layer_0']].compute_at(s[layer_output_dict['Layer_1']], wo)
+    if axis == 'w':
+        bind_axis = wo
+    elif axis == 'h':
+        bind_axis = ho
+    elif axis == 'oc':
+        bind_axis = oc_chunk_i
+    else: # ic
+        bind_axis = ic_chunk_o
+    s[layer_output_dict['Layer_0']].compute_at(s[layer_output_dict['Layer_1']], bind_axis)
     n, c_chunk, h, w, c_vec = s[layer_output_dict['Layer_0']].op.axis
     ry, rx = s[layer_output_dict['Layer_0']].op.reduce_axis
     s[layer_output_dict['Layer_0']].reorder(n, c_chunk, h, ry, rx, w, c_vec)
@@ -181,6 +193,10 @@ def schedule_depth_conv_fused_nchwc_auto_inference(cfg, outs, *args, **kwargs):
     inputs_cfg = kwargs['inputs_cfg']
     filters_cfg = kwargs['filters_cfg']
     outputs_cfg = kwargs['outputs_cfg']
+    axis = 'w'
+    if 'bind_axis' in kwargs.keys():
+        axis = kwargs['bind_axis']
+    print(axis)
 
     ######## Final output
     n, oc_chunk, h, w, oc = s[layer_output_dict['Layer_1']].op.axis
@@ -229,13 +245,14 @@ def schedule_depth_conv_fused_nchwc_auto_inference(cfg, outs, *args, **kwargs):
     # Split h and w if they're not yet split
     axes = []
     for label in axis_labels[ic_idx:]: # ic should be the first axis here
+        if label == axis:
+            prev_consumer = stage_dict['Output_1']
         if label == 'h':
             ho, h = s[stage_dict['Output_1']].split(h, cfg['split_layer_1_h'].size[-1])
             axes.append(ho)
         if label == 'w':
             wo, w = s[stage_dict['Output_1']].split(w, cfg['split_layer_1_w'].size[-1])
             axes.append(wo)
-            prev_consumer = stage_dict['Output_1']
         if label == 'oc':
             axes.append(oc_chunk_i)
         if label == 'ic':
@@ -274,11 +291,19 @@ def schedule_depth_conv_fused_nchwc_auto_inference(cfg, outs, *args, **kwargs):
     s[stage_dict['Output_1']].tensorize(tensorize_axis, libxsmm_tensorize)
 
     ######## Intermediate output
-    s[layer_output_dict['Layer_0']].compute_at(s[prev_consumer], wo)
+    if axis == 'w':
+        bind_axis = wo
+    elif axis == 'h':
+        bind_axis = ho
+    elif axis == 'oc':
+        bind_axis = oc_chunk_i
+    else: # ic
+        bind_axis = ic_chunk_o
+    s[layer_output_dict['Layer_0']].compute_at(s[prev_consumer], bind_axis)
     _, _, h, w, c_vec = s[layer_output_dict['Layer_0']].op.axis
     if post_ops[0]:
         s[layer_output_dict['Layer_0']].vectorize(c_vec)
-        s[stage_dict['Output_0']].compute_at(s[prev_consumer], wo)
+        s[stage_dict['Output_0']].compute_at(s[prev_consumer], bind_axis)
         if post_ops[0] != 'bias':
             s[stage_dict['Output_0_BiasAdd']].compute_inline()
     n, c_chunk, h, w, c_vec = s[stage_dict['Output_0']].op.axis
