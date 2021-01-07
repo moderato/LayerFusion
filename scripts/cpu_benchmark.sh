@@ -6,7 +6,7 @@ then
 fi
 echo "$(( ${REP_BENCH} * 2 )) iterations for profiling."
 
-for input in "../workloads/depth_conv_workloads.csv"
+for input in "../workloads/depth_conv_workloads.csv" "../workloads/conv_conv_workloads.csv"
 do
   line_count=0
   while IFS= read -r line

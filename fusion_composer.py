@@ -182,7 +182,10 @@ class FusionComposer:
 
         return None
 
-    def __init__(self, p, pack=None, use_autotvm=True, use_auto_scheduler=False, target=None, dtype='float32', constraints_idx=-1):
+    def get_reorder_axes(self):
+        return self.reorder_axes
+
+    def __init__(self, p, pack=None, use_autotvm=True, use_auto_scheduler=False, target=None, dtype='float32', workload_name=None):
         self.cfg = None
         self.parameters = p
         self.use_autotvm = use_autotvm
@@ -200,14 +203,19 @@ class FusionComposer:
 
         self.layers = get_4D_shapes_from_params(p)
         self.layer_num = len(self.layers) - 1 # Excluding input
-
-        # Logic for pattern
-        self.pattern = self.get_pattern() # TODO: Add logic to it
+        self.workload_name = workload_name # mv1_1, res_2x, etc
+        self.reorder_axes = ['oc', 'ic', 'h', 'w'] # For CPU
 
         # Temporary variables for composing compute
         self.filter_cfg = None
         self.output_cfg = None
         self.layer_idx = -1
+
+        # Temporary variables for returning the best_config
+        self.cfg = None
+        device = 'cpu' if 'llvm' in target.kind.name else 'gpu'
+        self.dir_name = 'logs/{}/layer/{}'.format('auto_scheduler' if use_auto_scheduler else 'autotvm', device)
+        self.log_name = '{}_fused_{}.log'.format(self.get_pattern(), self.workload_name)
 
     def padding(self, Input, Filter):
         if self.pack:
@@ -435,28 +443,53 @@ class FusionComposer:
 
         return compute if raw_compute else autotvm_wrapper
 
-    def get_schedule(self, target=None, tuning=False):
+    def get_schedule(self, target=None, tuning=False, bind_axis='w'):
         assert not (not tuning and target is None)
         task_env = TaskExtractEnv.current
 
         if not self.use_autotvm:
             cfg = None
             self.update_all_shapes_from_best_cfg(cfg)
-        elif tuning:
-            # Define search space
-            self.cfg = autotvm.get_config()
-            self.define_search_space()
-            cfg = self.cfg
+            best_axis = bind_axis
         else:
-            workload = ((self.task_name),) + autotvm.task.topi_integration.serialize_args([self.parameters])
-            dispatch_ctx = autotvm.task.DispatchContext.current
-            cfg = dispatch_ctx.query(target, workload)
-            assert cfg is not None
-            if cfg.is_fallback and task_env and not task_env.tracing:
-                print("---[[[ AutoTVM cfg not found! ]]]---")
+            if tuning:
+                # Define search space
+                self.cfg = autotvm.get_config()
+                self.define_search_space()
+                cfg = self.cfg
+                best_axis = bind_axis
+            else: # inference
+                log_name = '{}/fused/{}'.format(self.dir_name, self.log_name)
+                dispatch_ctx = autotvm.apply_history_best(log_name)
+                if self.reorder_axes:
+                    lowest_cost = 1e10
+                    best_cfg = None
+                    best_axis = None
+                    for axis in self.reorder_axes:
+                        workload = ((self.task_name),) + autotvm.task.topi_integration.serialize_args([self.parameters, axis])
+                        cfg = dispatch_ctx.query(target, workload)
+                        if cfg.cost is None:
+                            continue
+                        if cfg.cost < lowest_cost:
+                            best_cfg = cfg
+                            lowest_cost = cfg.cost
+                            best_axis = axis
+                            print(best_axis, lowest_cost)
+                    cfg = best_cfg
+                    print(cfg)
+                else:
+                    workload = ((self.task_name),) + autotvm.task.topi_integration.serialize_args([self.parameters])
+                    cfg = dispatch_ctx.query(target, workload)
 
-            # Update the tensor shapes with the best config
-            self.update_all_shapes_from_best_cfg(cfg)
+                assert cfg is not None
+                if cfg.is_fallback and task_env and not task_env.tracing:
+                    print("---[[[ AutoTVM cfg not found! ]]]---")
+
+                # Update the tensor shapes with the best config
+                self.update_all_shapes_from_best_cfg(cfg)
+        
+        # Pass this to the get_schedule_inference function. TODO: Figure out a better way.
+        self.cfg = cfg
 
         def wrapper(outs):
             def raw_schedule():
@@ -464,7 +497,7 @@ class FusionComposer:
                     from schedules.schedule_utils import gpu_schedules as sch
                 else:
                     from schedules.schedule_utils import cpu_schedules as sch
-                return sch(self.pattern, (cfg is not None), tuning=tuning)
+                return sch(self.get_pattern(), (cfg is not None), tuning=tuning)
             f = raw_schedule()
             if self.pack:
                 inputs_cfg = {}
@@ -475,9 +508,9 @@ class FusionComposer:
                     filters_cfg['Layer_{}'.format(l)] = self.get_filter_cfg(l)
                     outputs_cfg['Layer_{}'.format(l)] = self.get_output_cfg(l)
                 if cfg is not None:
-                    s = f(cfg, outs, inputs_cfg=inputs_cfg, filters_cfg=filters_cfg, outputs_cfg=outputs_cfg)
+                    s = f(cfg, outs, inputs_cfg=inputs_cfg, filters_cfg=filters_cfg, outputs_cfg=outputs_cfg, bind_axis=best_axis)
                 else:
-                    s = f(outs, inputs_cfg=inputs_cfg, filters_cfg=filters_cfg, outputs_cfg=outputs_cfg)
+                    s = f(outs, inputs_cfg=inputs_cfg, filters_cfg=filters_cfg, outputs_cfg=outputs_cfg, bind_axis=best_axis)
             elif self.target.kind.name == 'cuda': # CUDA
                 if cfg is not None:
                     s = f(cfg, outs)
@@ -504,7 +537,7 @@ class FusionComposer:
         all_tensors = input_tensors + [output_tensor]
 
         s = schedule(output_tensor)
-        return s, all_tensors
+        return s, all_tensors, self.cfg
 
     def print_info(self):
         for i in range(self.layer_num):
@@ -642,7 +675,7 @@ def get_schedule_tuning_cuda(parameters):
     return s, all_tensors
 
 @autotvm.template('fused_conv2d.x86')
-def get_schedule_tuning_x86(parameters):
+def get_schedule_tuning_x86(parameters, bind_axis):
     target = tvm.target.Target('llvm')
 
     # A workaround for CPU autotuning
@@ -656,7 +689,7 @@ def get_schedule_tuning_x86(parameters):
     fc = FusionComposer(parameters, target=target)
 
     # Get schedule
-    schedule = fc.get_schedule(tuning=True)
+    schedule = fc.get_schedule(tuning=True, bind_axis=bind_axis)
 
     # Get compute
     compute = fc.get_compute()

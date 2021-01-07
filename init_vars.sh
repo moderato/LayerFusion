@@ -14,8 +14,10 @@ source /opt/intel/oneapi/setvars.sh >& /dev/null
 # Make folders
 mkdir -p logs/arithmetic_intensity/cpu
 mkdir -p logs/arithmetic_intensity/gpu
-mkdir -p logs/autotvm/layer/cpu
-mkdir -p logs/autotvm/layer/gpu
+mkdir -p logs/autotvm/layer/cpu/fused
+mkdir -p logs/autotvm/layer/cpu/unfused
+mkdir -p logs/autotvm/layer/gpu/fused
+mkdir -p logs/autotvm/layer/gpu/unfused
 mkdir -p logs/autotvm/model/cpu
 mkdir -p logs/autotvm/model/gpu
 mkdir -p logs/auto_scheduler/layer/cpu
