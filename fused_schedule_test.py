@@ -214,10 +214,10 @@ def verify_tuning(workload_name,
             if use_autotvm:
                 bind_axes = fc.get_reorder_axes()
                 for axis in bind_axes:
-                    log_name = 'logs/autotvm/layer/{}/fused_{}/{}_fused_{}.log'.format(device, axis, name, workload_name)
-                    print(log_name)
-
                     if not skip_training:
+                        log_name = 'logs/autotvm/layer/{}/fused/{}_fused_{}.log'.format(device, name, workload_name)
+                        print(log_name)
+
                         # # logging
                         # logging.getLogger('autotvm').setLevel(logging.DEBUG)
                         # logging.getLogger('autotvm').addHandler(logging.StreamHandler(sys.stdout))

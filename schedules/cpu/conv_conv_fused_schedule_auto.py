@@ -18,7 +18,6 @@ def schedule_conv_conv_fused_nchwc_auto_search(cfg, outs, *args, **kwargs):
     axis = 'w'
     if 'bind_axis' in kwargs.keys():
         axis = kwargs['bind_axis']
-    print(axis)
 
     ######## Final output
     n, oc_chunk, h, w, oc = s[layer_output_dict['Layer_1']].op.axis

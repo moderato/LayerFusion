@@ -111,7 +111,6 @@ def schedule_depth_conv_fused_nchwc_auto_search(cfg, outs, *args, **kwargs):
     axis = 'w'
     if 'bind_axis' in kwargs.keys():
         axis = kwargs['bind_axis']
-    print(axis)
 
     n, oc_chunk, h, w, oc = s[layer_output_dict['Layer_1']].op.axis
     oc_chunk_o, oc_chunk_i = cfg['split_layer_1_c'].apply(s, layer_output_dict['Layer_1'], oc_chunk)

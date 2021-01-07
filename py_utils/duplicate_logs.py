@@ -18,7 +18,7 @@ if __name__ == '__main__':
         'mv1': ['relu', 'relu'],
         'mv2': ['relu6', 'bias'],
         'mna1': ['relu', 'bias'],
-        'res': ['relu', 'relu']
+        'res': ['relu', 'bias']
     }
 
     for axis in axes:
