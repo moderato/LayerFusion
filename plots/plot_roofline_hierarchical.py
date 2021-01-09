@@ -12,8 +12,56 @@ def flatten_list(lst):
         []
     )
 
-def flatten_dict_values(dictionary):
-    return chain.from_iterable(dictionary.values())
+def get_FLOP(parameters):
+    N, H, W, C = parameters[:4]
+    start = 4
+    FLOP = 0
+    while 1:
+        if start >= len(parameters) - 1:
+            break
+        f = parameters[start]
+        oc = parameters[start+1]
+        s = parameters[start+2]
+        is_depthwise = parameters[start+3]
+        post_ops = parameters[start+4]
+
+        OH, OW = H / s, W / s
+        OC = oc if not is_depthwise else C * oc
+        FLOP += 2 * N * OH * OW * OC * f * f * (oc if is_depthwise else C)
+
+        if post_ops:
+            FLOP += N * OH * OW * OC
+
+        N, H, W, C = N, OH, OW, OC
+        start += 5
+    return FLOP
+
+def get_theoretical_mem_bytes(parameters):
+    N, H, W, C = parameters[:4]
+    start = 4
+    layer = 0
+    mem = 4 * (N * H * W * C)
+    while 1:
+        if start >= len(parameters) - 1:
+            break
+        f = parameters[start]
+        oc = parameters[start+1]
+        s = parameters[start+2]
+        is_depthwise = parameters[start+3]
+        post_ops = parameters[start+4]
+
+        OH, OW = H / s, W / s
+        OC = oc if not is_depthwise else C * oc
+        mem += 4 * (f * f * C * oc)
+        if post_ops:
+            mem += 4 * OC
+        N, H, W, C = N, OH, OW, OC
+        start += 5
+        layer += 1
+
+    mem += 4 * (N * H * W * C)
+    return mem
+
 
 markersize = 12
 num_layers = 2
@@ -62,6 +110,7 @@ for device in devices:
         gflops_roof_name = []
         BW_roof = []
         BW_roof_name = []
+        peaks_ai = []
 
         has_L2 = False
         read_empirical = False # Whether read empirical or theoretical roofs
@@ -77,20 +126,34 @@ for device in devices:
                     with open('{}/logs/arithmetic_intensity/{}/{}/{}.csv'.format(HOME, device, iter, workload_name), 'r') as ff:
                         lls = ff.readlines()
                         for l in lls[1:]: # skip header
-                            splitted = [float(s) for s in l.strip().split(',')]
-                            AI.append(splitted[:5])
-                            if len(splitted) == 10:
+                            sp = [float(s) for s in l.strip().split(',')]
+                            AI.append(sp[:5])
+                            if len(sp) == 10:
                                 has_L2 = True
-                                AI[-1].extend(splitted[5:])
+                                AI[-1].extend(sp[5:])
                     # Read FLOPS
                     with open('{}/logs/gflops/{}/{}/{}.csv'.format(HOME, device, iter, workload_name), 'r') as ff:
                         lls = ff.readlines()
                         for l in lls[1:]: # skip header
-                            splitted = [float(s) for s in l.strip().split(',')]
-                            FLOPS.append(splitted)
+                            sp = [float(s) for s in l.strip().split(',')]
+                            FLOPS.append(sp)
                             
                     # Labels
                     labels.append(workload_name)
+
+                    parameters = []
+                    for idx, s in enumerate(splitted[1:]):
+                        if idx == 8 or idx == 13:
+                            if s == '':
+                                parameters.append(None)
+                            else:
+                                parameters.append(s)
+                        else:
+                            parameters.append(int(s))
+                    flop = get_FLOP(parameters)
+                    mem = get_theoretical_mem_bytes(parameters)
+                    peaks_ai.append(flop * 1.0 / mem)
+            print(peaks_ai)
 
             if read_empirical:
                 device_info_file_dir = device_empirical[device]
@@ -135,7 +198,7 @@ for device in devices:
                 ymin = min(flatten_list(FLOPS)) / 1.1 # 160.0
                 ymax = max(gflops_roof) * 1.1 # 600.0
                 xmin = math.log10(min(flatten_list(AI)) / 1.4) # -0.4
-                xmax = math.log10(max(flatten_list(AI)) * 2.1) # 3.1
+                xmax = math.log10(max(max(flatten_list(AI)), peaks_ai[idx]) * 2.1) # 3.1
                 text_distance_scale = 1.02
                 print(ymin, ymax, xmin, xmax)
 
@@ -238,6 +301,8 @@ for device in devices:
                     #     ax.arrow(x0, y0, scaled_dx, scaled_dy, linestyle=(0, (1, 6)))
                     #     ax.annotate('', xy=(x0 + dx, y0 + dy), xytext=(x0, y0), arrowprops=arrowprops)
                     #     # ax.text(x0 * (0.98 if dx > 0 else 1.02), y0 * 0.98, labels[i], fontsize=8)
+
+                ax.axvline(x=peaks_ai[idx], ymin=0, ymax=ymax, linestyle='--')
 
                 #### Plot roofline
                 # for roof in gflops_roof:
