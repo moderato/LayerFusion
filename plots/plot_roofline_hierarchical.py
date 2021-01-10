@@ -1,12 +1,67 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
+from itertools import chain
 import sys, os, json, math
 font = {'size' : 15}
 plt.rc('font', **font)
 
 def flatten_list(lst):
-    return sum(([x] if not isinstance(x, list) else flatten_list(x) for x in lst), [])
+    return sum(
+        ([x] if not isinstance(x, list) else flatten_list(x) for x in lst), 
+        []
+    )
+
+def get_FLOP(parameters):
+    N, H, W, C = parameters[:4]
+    start = 4
+    FLOP = 0
+    while 1:
+        if start >= len(parameters) - 1:
+            break
+        f = parameters[start]
+        oc = parameters[start+1]
+        s = parameters[start+2]
+        is_depthwise = parameters[start+3]
+        post_ops = parameters[start+4]
+
+        OH, OW = H / s, W / s
+        OC = oc if not is_depthwise else C * oc
+        FLOP += 2 * N * OH * OW * OC * f * f * (oc if is_depthwise else C)
+
+        if post_ops:
+            FLOP += N * OH * OW * OC
+
+        N, H, W, C = N, OH, OW, OC
+        start += 5
+    return FLOP
+
+def get_theoretical_mem_bytes(parameters):
+    N, H, W, C = parameters[:4]
+    start = 4
+    layer = 0
+    mem = 4 * (N * H * W * C)
+    while 1:
+        if start >= len(parameters) - 1:
+            break
+        f = parameters[start]
+        oc = parameters[start+1]
+        s = parameters[start+2]
+        is_depthwise = parameters[start+3]
+        post_ops = parameters[start+4]
+
+        OH, OW = H / s, W / s
+        OC = oc if not is_depthwise else C * oc
+        mem += 4 * (f * f * C * oc)
+        if post_ops:
+            mem += 4 * OC
+        N, H, W, C = N, OH, OW, OC
+        start += 5
+        layer += 1
+
+    mem += 4 * (N * H * W * C)
+    return mem
+
 
 markersize = 12
 num_layers = 2
@@ -14,7 +69,7 @@ colors = ['b','g','r','y','m','c']
 styles = ['o','s','v','^','D','>','<','*','h','H','+','1','2','3','4','8','p','d','|','_','.',',']
 devices = ['cpu']
 workload_types = ['depth_conv']
-iterations = [2000]
+iterations = [20]
 device_empirical = {
     'cpu': '/home/zhongyilin/Documents/experimental/cs-roofline-toolkit/Empirical_Roofline_Tool-1.1.0/Results.i7-7700K/Run.001/roofline.json',
     'gpu': '/home/zhongyilin/Documents/experimental/cs-roofline-toolkit/Empirical_Roofline_Tool-1.1.0/Results.1050Ti-cuda-fp32.01/Run.001/roofline.json'
@@ -47,26 +102,15 @@ for device in devices:
     for iter in iterations:
         filename = '{}_{}_plot'.format(device_name[device], iter)
 
-        AI = {}
-        AI['dram'] = {}
-        AI['cache'] = {}
-        for mem in AI.keys():
-            AI[mem]['fused'] = []
-            AI[mem][library_name[device]] = []
-            for layer in range(num_layers):
-                AI[mem]['layer_{}'.format(layer)] = []
-
-        FLOPS = {}
-        FLOPS['fused'] = []
-        FLOPS[library_name[device]] = []
-        for layer in range(num_layers):
-            FLOPS['layer_{}'.format(layer)] = []
+        AI = []
+        FLOPS = []
 
         labels = []
         gflops_roof = []
         gflops_roof_name = []
         BW_roof = []
         BW_roof_name = []
+        peaks_ai = []
 
         has_L2 = False
         read_empirical = False # Whether read empirical or theoretical roofs
@@ -82,31 +126,34 @@ for device in devices:
                     with open('{}/logs/arithmetic_intensity/{}/{}/{}.csv'.format(HOME, device, iter, workload_name), 'r') as ff:
                         lls = ff.readlines()
                         for l in lls[1:]: # skip header
-                            splitted = l.strip().split(',')
-                            AI['dram']['fused'].append(float(splitted[0]))
-                            AI['dram']['layer_0'].append(float(splitted[1]))
-                            AI['dram']['layer_1'].append(float(splitted[2]))
-                            AI['dram'][library_name[device]].append(float(splitted[3]))
-                            if len(splitted) == 8:
+                            sp = [float(s) for s in l.strip().split(',')]
+                            AI.append(sp[:5])
+                            if len(sp) == 10:
                                 has_L2 = True
-                                AI['cache']['fused'].append(float(splitted[4]))
-                                AI['cache']['layer_0'].append(float(splitted[5]))
-                                AI['cache']['layer_1'].append(float(splitted[6]))
-                                AI['cache'][library_name[device]].append(float(splitted[7]))
+                                AI[-1].extend(sp[5:])
                     # Read FLOPS
                     with open('{}/logs/gflops/{}/{}/{}.csv'.format(HOME, device, iter, workload_name), 'r') as ff:
                         lls = ff.readlines()
                         for l in lls[1:]: # skip header
-                            splitted = l.strip().split(',')
-                            FLOPS['fused'].append(float(splitted[0]))
-                            FLOPS['layer_0'].append(float(splitted[1]))
-                            FLOPS['layer_1'].append(float(splitted[2]))
-                            FLOPS[library_name[device]].append(float(splitted[3]))
+                            sp = [float(s) for s in l.strip().split(',')]
+                            FLOPS.append(sp)
+                            
                     # Labels
                     labels.append(workload_name)
 
-                    # if idx >= 5:
-                    #     break
+                    parameters = []
+                    for idx, s in enumerate(splitted[1:]):
+                        if idx == 8 or idx == 13:
+                            if s == '':
+                                parameters.append(None)
+                            else:
+                                parameters.append(s)
+                        else:
+                            parameters.append(int(s))
+                    flop = get_FLOP(parameters)
+                    mem = get_theoretical_mem_bytes(parameters)
+                    peaks_ai.append(flop * 1.0 / mem)
+            print(peaks_ai)
 
             if read_empirical:
                 device_info_file_dir = device_empirical[device]
@@ -135,8 +182,7 @@ for device in devices:
                     gflops_roof_name.append('FP32')
                     gflops_roof.append(device_info['FP32 GFLOPS'])
 
-            print(AI['dram']['fused'], AI['dram'][library_name[device]], AI['cache']['fused'], AI['cache'][library_name[device]], \
-                    FLOPS['fused'], FLOPS[library_name[device]], \
+            print(AI, FLOPS, \
                     labels, \
                     gflops_roof, gflops_roof_name, \
                     BW_roof, BW_roof_name)
@@ -149,11 +195,12 @@ for device in devices:
                 xmax = 2.3
                 text_distance_scale = 1.1
             else:
-                ymin = min(flatten_list(list(FLOPS.values()))) / 1.4 # 160.0
+                ymin = min(flatten_list(FLOPS)) / 1.1 # 160.0
                 ymax = max(gflops_roof) * 1.1 # 600.0
-                xmin = math.log10(min(flatten_list([list(AI['dram'].values()), list(AI['cache'].values())])) / 1.4) # -0.4
-                xmax = math.log10(max(flatten_list([list(AI['dram'].values()), list(AI['cache'].values())])) * 2) # 3.1
+                xmin = math.log10(min(flatten_list(AI)) / 1.4) # -0.4
+                xmax = math.log10(max(max(flatten_list(AI)), peaks_ai[idx]) * 2.1) # 3.1
                 text_distance_scale = 1.02
+                print(ymin, ymax, xmin, xmax)
 
             label_count = len(labels)
             cols = 5
@@ -207,16 +254,19 @@ for device in devices:
 
                 # workload: marker styles
                 # generated/library: colors
-                ax.plot(float(AI['dram']['fused'][idx]), float(FLOPS['fused'][idx]), c=colors[0], marker='*', linestyle='None', ms=markersize, label=label)
+                ax.plot(float(AI[idx][0]), float(FLOPS[idx][0]), c=colors[0], marker='*', linestyle='None', ms=markersize, label=label)
                 marker_handles.append(ax.plot([], [], c='gray', marker='*', linestyle='None', ms=markersize, label=label)[0])
 
-                ax.plot(float(AI['dram']['layer_0'][idx]), float(FLOPS['layer_0'][idx]), c=colors[1], marker='*', linestyle='None', ms=markersize, label=label)
+                ax.plot(float(AI[idx][1]), float(FLOPS[idx][1]), c=colors[1], marker='*', linestyle='None', ms=markersize, label=label)
                 marker_handles.append(ax.plot([], [], c='gray', marker='*', linestyle='None', ms=markersize, label=label)[0])
 
-                ax.plot(float(AI['dram']['layer_1'][idx]), float(FLOPS['layer_1'][idx]), c=colors[1], marker='*', linestyle='None', ms=markersize, label=label)
+                ax.plot(float(AI[idx][2]), float(FLOPS[idx][2]), c=colors[1], marker='*', linestyle='None', ms=markersize, label=label)
                 marker_handles.append(ax.plot([], [], c='gray', marker='*', linestyle='None', ms=markersize, label=label)[0])
 
-                ax.plot(float(AI['dram'][library_name[device]][idx]), float(FLOPS[library_name[device]][idx]), c=colors[2], marker='*', linestyle='None', ms=markersize, label=label)
+                ax.plot(float(AI[idx][3]), float(FLOPS[idx][3]), c=colors[2], marker='*', linestyle='None', ms=markersize, label=label)
+                marker_handles.append(ax.plot([], [], c='gray', marker='*', linestyle='None', ms=markersize, label=label)[0])
+
+                ax.plot(float(AI[idx][4]), float(FLOPS[idx][4]), c=colors[2], marker='*', linestyle='None', ms=markersize, label=label)
                 marker_handles.append(ax.plot([], [], c='gray', marker='*', linestyle='None', ms=markersize, label=label)[0])
 
                 # # Mark the roofline shift from unfused to fused
@@ -233,13 +283,11 @@ for device in devices:
                 #     ax.text(x0 * (0.98 if dx > 0 else 1.02), y0 * 0.98, labels[i], fontsize=8)
 
                 if has_L2:
-                    ax.plot(float(AI['cache']['fused'][idx]),float(FLOPS['fused'][idx]),c=colors[3],marker='+',linestyle='None',ms=markersize,label=label)
-
-                    ax.plot(float(AI['cache']['layer_0'][idx]),float(FLOPS['layer_0'][idx]),c=colors[4],marker='+',linestyle='None',ms=markersize,label=label)
-
-                    ax.plot(float(AI['cache']['layer_1'][idx]),float(FLOPS['layer_1'][idx]),c=colors[4],marker='+',linestyle='None',ms=markersize,label=label)
-
-                    ax.plot(float(AI['cache'][library_name[device]][idx]),float(FLOPS[library_name[device]][idx]),c=colors[5],marker='+',linestyle='None',ms=markersize,label=label)
+                    ax.plot(float(AI[idx][5]),float(FLOPS[idx][0]),c=colors[3],marker='+',linestyle='None',ms=markersize,label=label)
+                    ax.plot(float(AI[idx][6]),float(FLOPS[idx][1]),c=colors[4],marker='+',linestyle='None',ms=markersize,label=label)
+                    ax.plot(float(AI[idx][7]),float(FLOPS[idx][2]),c=colors[4],marker='+',linestyle='None',ms=markersize,label=label)
+                    ax.plot(float(AI[idx][8]),float(FLOPS[idx][3]),c=colors[5],marker='+',linestyle='None',ms=markersize,label=label)
+                    ax.plot(float(AI[idx][9]),float(FLOPS[idx][4]),c=colors[5],marker='+',linestyle='None',ms=markersize,label=label)
 
                     # # Mark the roofline shift from unfused to fused
                     # for i in range(0, len(AI['cache']['fused'])):
@@ -253,6 +301,8 @@ for device in devices:
                     #     ax.arrow(x0, y0, scaled_dx, scaled_dy, linestyle=(0, (1, 6)))
                     #     ax.annotate('', xy=(x0 + dx, y0 + dy), xytext=(x0, y0), arrowprops=arrowprops)
                     #     # ax.text(x0 * (0.98 if dx > 0 else 1.02), y0 * 0.98, labels[i], fontsize=8)
+
+                ax.axvline(x=peaks_ai[idx], ymin=0, ymax=ymax, linestyle='--')
 
                 #### Plot roofline
                 # for roof in gflops_roof:
@@ -297,11 +347,11 @@ for device in devices:
             fig.text(0.1, 0.5, 'Performance [GFLOP/sec]', va='center', rotation='vertical')
 
             handles = list()
-            src_name = ['fused (DRAM)', 'layer_0 (DRAM)', 'layer_1 (DRAM)', 'library (DRAM)', 'fused (Cache)', 'layer_0 (Cache)', 'layer_1 (Cache)', 'library (Cache)']
+            src_name = ['fused (DRAM)', 'TVM layer_0 (DRAM)', 'TVM layer_1 (DRAM)', 'Library layer_0 (DRAM)', 'Library layer_1 (DRAM)', 'fused (Cache)', 'TVM layer_0 (Cache)', 'TVM layer_1 (Cache)', 'Library layer_0 (Cache)', 'Library layer_1 (Cache)']
             j = 0
             for i in range(0, len(src_name)):
                 handles.append(Line2D([], [], color=colors[j], marker='*' if i < len(src_name) // 2 else '+', linestyle='None', markersize=markersize))
-                if i % 4 != 1:
+                if not ((i % 5 == 1) or (i % 5 == 3)):
                     j += 1
             leg2 = fig.legend(handles, src_name, loc='lower right', bbox_to_anchor=(0.80, 0.05))
             plt.savefig(filename + '.png', bbox_inches='tight')
