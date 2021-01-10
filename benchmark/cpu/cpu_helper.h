@@ -73,17 +73,26 @@ void benchmark_generated_cpu_fused(std::string workload_name,
     tvm::runtime::PackedFunc fused_2 = mod.GetFunction("fused_2");
     assert(fused_2 != nullptr);
     DLTensor *input, *filter_1, *filter_2, *output, *bias_1, *bias_2;
-    int vlen1, vlen2;
-    getKernelConfig(workload_name, vlen1, vlen2, true);
+    int vlen1, vlen2, vlen3;
+    getFusedKernelConfig(workload_name, vlen1, vlen2, vlen3, is_f1_depthwise, true);
     int dtype_code = kDLFloat;
     int dtype_bits = 32;
     int dtype_lanes = 1;
     int device_type = kDLCPU;
     int device_id = 0;
     int64_t input_shape_tuple[5] = {input_batch, int64_t(std::ceil(input_channel / vlen1)), input_height, input_width, vlen1};
-    int64_t filter_1_shape_tuple[6] = {int64_t(std::ceil(kernel_1_in_channel / vlen1)), is_f1_depthwise ? 1 : int64_t(std::ceil(kernel_1_out_channel_or_multiplier)), kernel_1_height, kernel_1_width, 1, vlen1};
-    int64_t filter_2_shape_tuple[6] = {int64_t(std::ceil(kernel_2_out_channel / vlen2)), int64_t(std::ceil(kernel_2_in_channel / vlen1)), kernel_2_height, kernel_2_width, vlen1, vlen2};
-    int64_t output_shape_tuple[5] = {output_batch, int64_t(std::ceil(output_channel / vlen2)), output_height, output_width, vlen2};
+    int64_t oc_chunk, ic_chunk, ic, oc;
+    oc_chunk = is_f1_depthwise ? int64_t(std::ceil(kernel_1_in_channel / vlen1)) : int64_t(std::ceil(kernel_1_out_channel_or_multiplier / vlen2));
+    ic_chunk = is_f1_depthwise ? 1 : int64_t(std::ceil(kernel_1_in_channel / vlen1));
+    ic = is_f1_depthwise ? 1: vlen1;
+    oc = is_f1_depthwise ? vlen1: vlen2;
+    int64_t filter_1_shape_tuple[6] = {oc_chunk, ic_chunk, kernel_1_height, kernel_1_width, ic, oc};
+    oc_chunk = is_f1_depthwise ? int64_t(std::ceil(kernel_2_out_channel / vlen2)) : int64_t(std::ceil(kernel_2_out_channel / vlen3));
+    ic_chunk = is_f1_depthwise ? int64_t(std::ceil(kernel_2_in_channel / vlen1)) : int64_t(std::ceil(kernel_2_in_channel / vlen2));
+    ic = is_f1_depthwise ? vlen1: vlen2;
+    oc = is_f1_depthwise ? vlen2: vlen3;
+    int64_t filter_2_shape_tuple[6] = {oc_chunk, ic_chunk, kernel_2_height, kernel_2_width, ic, oc};
+    int64_t output_shape_tuple[5] = {output_batch, int64_t(std::ceil(output_channel / oc)), output_height, output_width, oc};
     int64_t bias_1_shape_tuple[1] = {inter_channel};
     int64_t bias_2_shape_tuple[1] = {output_channel};
     TVMArrayAlloc(input_shape_tuple, 5, dtype_code, dtype_bits, dtype_lanes,
@@ -265,9 +274,9 @@ void benchmark_generated_cpu_unfused(std::string workload_name,
     assert(layer_2 != nullptr);
     DLTensor *input_1, *filter_1, *output_1, *input_2, *filter_2, *output_2;
     int vlen1_1, vlen1_2;
-    getKernelConfig(workload_name + "_1", vlen1_1, vlen1_2, false);
+    getUnfusedKernelConfig(workload_name + "_1", vlen1_1, vlen1_2, false);
     int vlen2_1, vlen2_2;
-    getKernelConfig(workload_name + "_2", vlen2_1, vlen2_2, false);
+    getUnfusedKernelConfig(workload_name + "_2", vlen2_1, vlen2_2, false);
     int dtype_code = kDLFloat;
     int dtype_bits = 32;
     int dtype_lanes = 1;
@@ -275,7 +284,12 @@ void benchmark_generated_cpu_unfused(std::string workload_name,
     int device_id = 0;
 
     int64_t input_1_shape_tuple[5] = {input_batch, int64_t(std::ceil(input_channel / vlen1_1)), input_height, input_width, vlen1_1};
-    int64_t filter_1_shape_tuple[6] = {int64_t(std::ceil(kernel_1_in_channel / vlen1_2)), is_f1_depthwise ? 1 : int64_t(std::ceil(kernel_1_out_channel_or_multiplier)), kernel_1_height, kernel_1_width, 1, vlen1_2};
+    int64_t oc_chunk, ic_chunk, ic, oc;
+    oc_chunk = is_f1_depthwise ? int64_t(std::ceil(kernel_1_in_channel / vlen1_1)) : int64_t(std::ceil(kernel_1_out_channel_or_multiplier / vlen1_2));
+    ic_chunk = is_f1_depthwise ? 1 : int64_t(std::ceil(kernel_1_in_channel / vlen1_1));
+    ic = is_f1_depthwise ? 1: vlen1_1;
+    oc = is_f1_depthwise ? vlen1_1: vlen1_2;
+    int64_t filter_1_shape_tuple[6] = {oc_chunk, ic_chunk, kernel_1_height, kernel_1_width, ic, oc};
     int64_t output_1_shape_tuple[5] = {inter_batch, int64_t(std::ceil(kernel_1_in_channel / vlen1_2)), inter_height, inter_width, vlen1_2};
     int64_t input_2_shape_tuple[5] = {inter_batch, int64_t(std::ceil(inter_channel / vlen2_1)), inter_height, inter_width, vlen2_1};
     int64_t filter_2_shape_tuple[6] = {int64_t(std::ceil(kernel_2_out_channel / vlen2_2)), int64_t(std::ceil(kernel_2_in_channel / vlen2_1)), kernel_2_height, kernel_2_width, vlen2_1, vlen2_2};
@@ -298,11 +312,11 @@ void benchmark_generated_cpu_unfused(std::string workload_name,
     memcpy(filter_2->data, kernel_2_npy.data<float>(), kernel_2_height * kernel_2_width * kernel_2_in_channel * kernel_2_out_channel * sizeof(float));
 
 #if DEBUG == 1
-    std::cout << "npy_input_1_shape: (" << input_1_shape_tuple[0] << ", " << input_1_shape_tuple[1] << ", " << input_1_shape_tuple[2] << ", " << input_1_shape_tuple[3] << ")" << std::endl;
-    std::cout << "npy_kernel_1_shape: (" << filter_1_shape_tuple[0] << ", " << filter_1_shape_tuple[1] << ", " << filter_1_shape_tuple[2] << ", " << filter_1_shape_tuple[3] << ")" << std::endl;
+    std::cout << "npy_input_1_shape: (" << input_1_shape_tuple[0] << ", " << input_1_shape_tuple[1] << ", " << input_1_shape_tuple[2] << ", " << input_1_shape_tuple[3] << ", " << input_1_shape_tuple[4] << ")" << std::endl;
+    std::cout << "npy_kernel_1_shape: (" << filter_1_shape_tuple[0] << ", " << filter_1_shape_tuple[1] << ", " << filter_1_shape_tuple[2] << ", " << filter_1_shape_tuple[3] << ", " << filter_1_shape_tuple[4] << ", " << filter_1_shape_tuple[5] << ")" << std::endl;
     std::cout << "npy_output_2_shape: (" << output_1_shape_tuple[0] << ", " << output_1_shape_tuple[1] << ", " << output_1_shape_tuple[2] << ", " << output_1_shape_tuple[3] << ", " << output_1_shape_tuple[4] << ")" << std::endl;
-    std::cout << "npy_input_1_shape: (" << input_2_shape_tuple[0] << ", " << input_2_shape_tuple[1] << ", " << input_2_shape_tuple[2] << ", " << input_2_shape_tuple[3] << ")" << std::endl;
-    std::cout << "npy_kernel_2_shape: (" << filter_2_shape_tuple[0] << ", " << filter_2_shape_tuple[1] << ", " << filter_2_shape_tuple[2] << ", " << filter_2_shape_tuple[3] << ")" << std::endl;
+    std::cout << "npy_input_1_shape: (" << input_2_shape_tuple[0] << ", " << input_2_shape_tuple[1] << ", " << input_2_shape_tuple[2] << ", " << input_2_shape_tuple[3] << ", " << input_2_shape_tuple[4] << ")" << std::endl;
+    std::cout << "npy_kernel_2_shape: (" << filter_2_shape_tuple[0] << ", " << filter_2_shape_tuple[1] << ", " << filter_2_shape_tuple[2] << ", " << filter_2_shape_tuple[3] << ", " << filter_2_shape_tuple[4] << ", " << filter_2_shape_tuple[5] << ")" << std::endl;
     std::cout << "npy_output_2_shape: (" << output_2_shape_tuple[0] << ", " << output_2_shape_tuple[1] << ", " << output_2_shape_tuple[2] << ", " << output_2_shape_tuple[3] << ", " << output_2_shape_tuple[4] << ")" << std::endl;
 #endif
 

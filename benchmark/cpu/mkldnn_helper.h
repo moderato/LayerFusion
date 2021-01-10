@@ -96,7 +96,12 @@ void benchmark_mkldnn(std::string workload_name,
 
     // Dims.
     dnnl::memory::dims input_dims = {input_batch, input_channel, input_height, input_width};
-    dnnl::memory::dims filter_1_dims = {kernel_1_out_channel_or_multiplier * input_channel, 1, 1, kernel_1_height, kernel_1_width}; // 5D for depthwise
+    dnnl::memory::dims filter_1_dims;
+    if (is_f1_depthwise)
+        filter_1_dims = dnnl::memory::dims({kernel_1_out_channel_or_multiplier * input_channel, 1, 1, kernel_1_height, kernel_1_width}); // 5D for depthwise
+    else
+        filter_1_dims = dnnl::memory::dims({kernel_1_out_channel_or_multiplier, kernel_1_in_channel, kernel_1_height, kernel_1_width});
+    
     dnnl::memory::dims bias_1_dims = {inter_channel};
     dnnl::memory::dims inter_dims = {inter_batch, inter_channel, inter_height, inter_width};
     dnnl::memory::dims filter_2_dims = {kernel_2_out_channel, kernel_2_in_channel, kernel_2_height, kernel_2_width};
@@ -182,7 +187,7 @@ void benchmark_mkldnn(std::string workload_name,
 
     // Memory objects.
     auto input_mem = dnnl::memory({{input_dims}, dt::f32, tag::nchw}, engine);
-    auto filter_1_mem = dnnl::memory({{filter_1_dims}, dt::f32, tag::goihw}, engine); // goihw for depthwise convolution
+    auto filter_1_mem = dnnl::memory({{filter_1_dims}, dt::f32, is_f1_depthwise ? tag::goihw : tag::oihw}, engine); // goihw for depthwise convolution
     auto bias_1_mem = dnnl::memory(bias_1_md, engine);
     auto inter_mem = dnnl::memory({{inter_dims}, dt::f32, tag::nchw}, engine); // No data
     auto filter_2_mem = dnnl::memory({{filter_2_dims}, dt::f32, tag::oihw}, engine);

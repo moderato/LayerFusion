@@ -68,7 +68,7 @@
 using namespace pcm;
 
 // TODO: Generalize the vlens reading
-void getKernelConfig(std::string workload_name, int& vlen1, int& vlen2, bool fused) {
+void getUnfusedKernelConfig(std::string workload_name, int& vlen1, int& vlen2, bool fused) {
     std::fstream fin;
     std::string is_fused = (fused ? "fused" : "unfused");
 
@@ -82,6 +82,28 @@ void getKernelConfig(std::string workload_name, int& vlen1, int& vlen2, bool fus
     vlen1 = std::stoi(word);
     getline(s, word, ',');
     vlen2 = std::stoi(word);
+
+    fin.close();
+}
+
+void getFusedKernelConfig(std::string workload_name, int& vlen1, int& vlen2, int& vlen3, bool depthwise, bool fused) {
+    std::fstream fin;
+    std::string is_fused = (fused ? "fused" : "unfused");
+
+    std::string filename = "../../generated_kernels/cpu/" + is_fused + "/kernel_launch_config/" + workload_name + "_config.csv";
+    fin.open(filename, std::ios::in);
+
+    std::string line, word;
+    fin >> line;
+    std::stringstream s(line);
+    getline(s, word, ',');
+    vlen1 = std::stoi(word);
+    getline(s, word, ',');
+    vlen2 = std::stoi(word);
+    if (!depthwise) {
+        getline(s, word, ',');
+        vlen3 = std::stoi(word);
+    }
 
     fin.close();
 }
