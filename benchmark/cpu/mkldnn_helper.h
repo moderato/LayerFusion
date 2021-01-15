@@ -295,38 +295,42 @@ void benchmark_mkldnn(std::string workload_name,
     }
 
     // Benchmark
-    float runtime_us = 0.0f, runtime_1_us = 0.0f, runtime_2_us = 0.0f, runtime_sum_us = 0.0f, runtime_1_sum_us = 0.0f, runtime_2_sum_us = 0.0f;
+    PCM *m = PCM::getInstance();
+    unsigned long dram_bytes_1 = 0, dram_bytes_2 = 0;
+    float runtime_1_tmp_us = 0.0f, runtime_2_tmp_us = 0.0f, runtime_1_us = 0.0f, runtime_2_us = 0.0f;
     assert(pr_profile.size() == pr_profile_args.size() && "something is missing");
     assert(pr_not_profile.size() == pr_not_profile_args.size() && "something is missing");
     std::cout << "Profile: " << pr_profile.size() << ", not profile: " << pr_not_profile.size() << std::endl;
-
-    // Instantiate Intel PCM singleton
-    PCM *m = PCM::getInstance();
-    unsigned long dram_bytes_1 = 0, dram_bytes_2 = 0;
+    int mysum = 0;
 
     for (int i = 0; i < REPEATITION * 2; i++) {
-        if (i == REPEATITION) {
-            runtime_us = runtime_sum_us;
-            runtime_1_us = runtime_1_sum_us;
-            runtime_2_us = runtime_2_sum_us;
-        }
-
         for (size_t j = 0; j < pr_not_profile.size(); ++j) {
             pr_not_profile.at(j).execute(engine_stream, pr_not_profile_args.at(j));
         }
 
-        // Initialize time point
+        if (i == REPEATITION) {
+            runtime_1_tmp_us = runtime_1_us;
+            runtime_2_tmp_us = runtime_2_us;
+        }
+
+        // Flush the cache
+        for (int j = 0; j < BIGGER_THAN_CACHESIZE; j++) {
+            flush_cache[j] = rand();
+        }
+        for (int j = 0; j < BIGGER_THAN_CACHESIZE; j++) {
+            mysum += flush_cache[j];
+        }
+        printf("%d\n", mysum);
+
+        // States and times
         SystemCounterState before_sstate, after_sstate;
         long long ns;
         auto start = std::chrono::high_resolution_clock::now();
         auto elapsed_1 = std::chrono::high_resolution_clock::now() - std::chrono::high_resolution_clock::now();
         auto elapsed_2 = std::chrono::high_resolution_clock::now() - std::chrono::high_resolution_clock::now();
-        // Execute primitives
+
 // ################### Layer 1 ###################
 #if ENABLE_PCM == 1
-        for (int j = 0; j < BIGGER_THAN_CACHESIZE; j++) {
-            flush_cache[j] = rand();
-        }
 #if LAYER_1 == 1
         __SSC_MARK(0x111);
 #endif
@@ -336,7 +340,7 @@ void benchmark_mkldnn(std::string workload_name,
 
         pr_profile.at(0).execute(engine_stream, pr_profile_args.at(0));
 
-        elapsed_1 += std::chrono::high_resolution_clock::now() - start;
+        elapsed_1 = std::chrono::high_resolution_clock::now() - start;
 #if ENABLE_PCM == 1
         after_sstate = getSystemCounterState();
 #if LAYER_1 == 1
@@ -352,9 +356,6 @@ void benchmark_mkldnn(std::string workload_name,
 
 // ################### Layer 2 ###################
 #if ENABLE_PCM == 1
-        for (int j = 0; j < BIGGER_THAN_CACHESIZE; j++) {
-            flush_cache[j] = rand();
-        }
 #if LAYER_2 == 1
         __SSC_MARK(0x111);
 #endif
@@ -364,7 +365,7 @@ void benchmark_mkldnn(std::string workload_name,
 
         pr_profile.at(pr_profile.size() - 1).execute(engine_stream, pr_profile_args.at(pr_profile.size() - 1));
 
-        elapsed_2 += std::chrono::high_resolution_clock::now() - start;
+        elapsed_2 = std::chrono::high_resolution_clock::now() - start;
 #if ENABLE_PCM == 1
         after_sstate = getSystemCounterState();
 #if LAYER_2 == 1
@@ -374,31 +375,28 @@ void benchmark_mkldnn(std::string workload_name,
 #endif
 
         ns = std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed_1).count();
-        runtime_1_sum_us += ns / 1000.0f / REPEATITION;
-        runtime_sum_us += ns / 1000.0f / REPEATITION;
-
+        runtime_1_us += ns / 1000.0f / REPEATITION;
         ns = std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed_2).count();
-        runtime_2_sum_us += ns / 1000.0f / REPEATITION;
-        runtime_sum_us += ns / 1000.0f / REPEATITION;
+        runtime_2_us += ns / 1000.0f / REPEATITION;
 
         // Wait for the computation to finalize.
         engine_stream.wait();
     }
 
     int theoretical_bytes_1 = bytes_accessed(input_batch, input_height, input_width, input_channel, kernel_1_height, kernel_1_width, inter_height, inter_width, inter_channel, is_f1_depthwise);
-    int theoretical_bytes_2 = bytes_accessed(input_batch, inter_height, inter_width, inter_channel, kernel_2_height, kernel_2_height, output_height, output_width, output_channel, is_f2_depthwise);
     int theoretical_flop_1 = FLOP(input_batch, input_height, input_width, input_channel, kernel_1_height, kernel_1_width, inter_height, inter_width, inter_channel, is_f1_depthwise);
-    int theoretical_flop_2 = FLOP(input_batch, inter_height, inter_width, inter_channel, kernel_2_height, kernel_2_height, output_height, output_width, output_channel, is_f2_depthwise);
+    int theoretical_bytes_2 = bytes_accessed(inter_batch, inter_height, inter_width, inter_channel, kernel_2_height, kernel_2_height, output_height, output_width, output_channel, is_f2_depthwise);
+    int theoretical_flop_2 = FLOP(inter_batch, inter_height, inter_width, inter_channel, kernel_2_height, kernel_2_height, output_height, output_width, output_channel, is_f2_depthwise);
 
     printf("Stage 1 Theoretical DRAM bytes: %d .\n", theoretical_bytes_1);
     printf("Stage 1 Theoretical FLOP: %d .\n", theoretical_flop_1);
     printf("Stage 1 DRAM bytes: %lu .\n", dram_bytes_1 / REPEATITION / 2);
-    printf("Stage 1 runtime is %f us .\n", runtime_1_sum_us - runtime_1_us);
+    printf("Stage 1 runtime is %f us .\n", runtime_1_us - runtime_1_tmp_us);
     printf("Stage 2 Theoretical DRAM bytes: %d .\n", theoretical_bytes_2);
     printf("Stage 2 Theoretical FLOP: %d .\n", theoretical_flop_2);
     printf("Stage 2 DRAM bytes: %lu .\n", dram_bytes_2 / REPEATITION / 2);
-    printf("Stage 2 runtime is %f us .\n", runtime_2_sum_us - runtime_2_us);
-    printf("Total runtime is %f us .\n", runtime_sum_us - runtime_us);
+    printf("Stage 2 runtime is %f us .\n", runtime_2_us - runtime_2_tmp_us);
+    printf("Total runtime is %f us.\n", (runtime_1_us - runtime_1_tmp_us) + (runtime_2_us - runtime_2_tmp_us));
     m->cleanup();
 
     // Read data from memory object's handle.

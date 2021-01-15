@@ -29,12 +29,12 @@
 #endif
 
 #ifndef REPEATITION
-  #define REPEATITION 1000
+  #define REPEATITION 100
 #endif
 
-// i7_7700K L3 cache size = 12 MB.
+// i7_7700K L3 cache size = 8 MB; GCP cascade_lake L3 cache size = 24.75MB.
 #ifndef BIGGER_THAN_CACHESIZE
-    #define BIGGER_THAN_CACHESIZE 128 * 1024 * 1024
+    #define BIGGER_THAN_CACHESIZE 48 * 1024 * 1024
 #endif
 
 // Enable PCM

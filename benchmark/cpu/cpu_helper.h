@@ -132,6 +132,7 @@ void benchmark_generated_cpu_fused(std::string workload_name,
     // Instantiate Intel PCM singleton
     PCM *m = PCM::getInstance();
     unsigned long dram_bytes = 0;
+    int mysum = 0;
 
     for (int i = 0; i < REPEATITION * 2; i++) {
         if (i == REPEATITION) {
@@ -139,10 +140,14 @@ void benchmark_generated_cpu_fused(std::string workload_name,
         }
 
         // Flush the cache
-#if ENABLE_PCM == 1
         for (int j = 0; j < BIGGER_THAN_CACHESIZE; j++) {
             flush_cache[j] = rand();
         }
+        for (int j = 0; j < BIGGER_THAN_CACHESIZE; j++) {
+            mysum += flush_cache[j];
+        }
+        printf("%d\n", mysum);
+#if ENABLE_PCM == 1
         __SSC_MARK(0x111);
         SystemCounterState before_sstate = getSystemCounterState();
 #endif
@@ -321,100 +326,95 @@ void benchmark_generated_cpu_unfused(std::string workload_name,
 #endif
 
     // Benchmark
-    float runtime_us = 0.0f, runtime_1_us = 0.0f, runtime_2_us = 0.0f, runtime_sum_us = 0.0f;
-    int output_1_shape = inter_batch * inter_height * inter_width * inter_channel;
-    int output_2_shape = output_batch * output_height * output_width * output_channel;
-
-    // Instantiate Intel PCM singleton
     PCM *m = PCM::getInstance();
     unsigned long dram_bytes_1 = 0, dram_bytes_2 = 0;
+    float runtime_1_tmp_us = 0.0f, runtime_2_tmp_us = 0.0f, runtime_1_us = 0.0f, runtime_2_us = 0.0f;
+    int output_1_shape = inter_batch * inter_height * inter_width * inter_channel;
+    int output_2_shape = output_batch * output_height * output_width * output_channel;
+    int mysum = 0;
 
     for (int i = 0; i < REPEATITION * 2; i++) {
         if (i == REPEATITION) {
-            runtime_1_us = runtime_us;
+            runtime_1_tmp_us = runtime_1_us;
+            runtime_2_tmp_us = runtime_2_us;
         }
+
         // Flush the cache
-#if ENABLE_PCM == 1
         for (int j = 0; j < BIGGER_THAN_CACHESIZE; j++) {
             flush_cache[j] = rand();
         }
+        for (int j = 0; j < BIGGER_THAN_CACHESIZE; j++) {
+            mysum += flush_cache[j];
+        }
+        printf("%d\n", mysum);
+
+        // States and times
+        SystemCounterState before_sstate, after_sstate;
+        long long ns;
+        auto start = std::chrono::high_resolution_clock::now();
+        auto elapsed_1 = std::chrono::high_resolution_clock::now() - std::chrono::high_resolution_clock::now();
+        auto elapsed_2 = std::chrono::high_resolution_clock::now() - std::chrono::high_resolution_clock::now();
+
+// ################### Layer 1 ###################
+#if ENABLE_PCM == 1
 #if LAYER_1 == 1
         __SSC_MARK(0x111);
 #endif
-        SystemCounterState before_sstate = getSystemCounterState();
+        before_sstate = getSystemCounterState();
 #endif
-        auto elapsed = std::chrono::high_resolution_clock::now() - std::chrono::high_resolution_clock::now();
-        auto start = std::chrono::high_resolution_clock::now();
+        start = std::chrono::high_resolution_clock::now();
 
-        // asm function call here
         layer_1(output_1, filter_1, input_1);
 
-        elapsed = std::chrono::high_resolution_clock::now() - start;
+        elapsed_1 = std::chrono::high_resolution_clock::now() - start;
 #if ENABLE_PCM == 1
-        SystemCounterState after_sstate = getSystemCounterState();
+        after_sstate = getSystemCounterState();
 #if LAYER_1 == 1
         __SSC_MARK(0x222);
 #endif
         dram_bytes_1 += getBytesReadFromMC(before_sstate, after_sstate) + getBytesWrittenToMC(before_sstate, after_sstate);
 #endif
 
-        long long ns = std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count();
-        runtime_us += ns / 1000.0f / REPEATITION;
-    }
-
-    int theoretical_bytes_1 = bytes_accessed(input_batch, input_height, input_width, input_channel, kernel_1_height, kernel_1_width, inter_height, inter_width, inter_channel, is_f1_depthwise);
-    int theoretical_flop_1 = FLOP(input_batch, input_height, input_width, input_channel, kernel_1_height, kernel_1_width, inter_height, inter_width, inter_channel, is_f1_depthwise);
-
-    printf("Stage 1 Theoretical DRAM bytes: %d .\n", theoretical_bytes_1);
-    printf("Stage 1 Theoretical FLOP: %d .\n", theoretical_flop_1);
-    printf("Stage 1 DRAM bytes: %lu .\n", dram_bytes_1 / REPEATITION / 2);
-    printf("Stage 1 runtime is %f us .\n", runtime_us - runtime_1_us);
-    runtime_sum_us += runtime_us - runtime_1_us;
-    runtime_us = 0;
-
-    for (int i = 0; i < REPEATITION * 2; i++) {
-        if (i == REPEATITION) {
-            runtime_2_us = runtime_us;
-        }
-        // Flush the cache
+// ################### Layer 2 ###################
 #if ENABLE_PCM == 1
-        for (int j = 0; j < BIGGER_THAN_CACHESIZE; j++) {
-            flush_cache[j] = rand();
-        }
 #if LAYER_2 == 1
         __SSC_MARK(0x111);
 #endif
-        SystemCounterState before_sstate = getSystemCounterState();
+        before_sstate = getSystemCounterState();
 #endif
+        start = std::chrono::high_resolution_clock::now();
 
-        auto elapsed = std::chrono::high_resolution_clock::now() - std::chrono::high_resolution_clock::now();
-        auto start = std::chrono::high_resolution_clock::now();
-
-        // asm function call here
         layer_2(output_2, input_2, filter_2);
 
-        elapsed = std::chrono::high_resolution_clock::now() - start;
+        elapsed_2 = std::chrono::high_resolution_clock::now() - start;
 #if ENABLE_PCM == 1
-        SystemCounterState after_sstate = getSystemCounterState();
+        after_sstate = getSystemCounterState();
 #if LAYER_2 == 1
         __SSC_MARK(0x222);
 #endif
         dram_bytes_2 += getBytesReadFromMC(before_sstate, after_sstate) + getBytesWrittenToMC(before_sstate, after_sstate);
 #endif
 
-        long long ns = std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count();
-        runtime_us += ns / 1000.0f / REPEATITION;
+        ns = std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed_1).count();
+        runtime_1_us += ns / 1000.0f / REPEATITION;
+        ns = std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed_2).count();
+        runtime_2_us += ns / 1000.0f / REPEATITION;
     }
 
-    int theoretical_bytes_2 = bytes_accessed(input_batch, inter_height, inter_width, inter_channel, kernel_2_height, kernel_2_height, output_height, output_width, output_channel, is_f2_depthwise);
-    int theoretical_flop_2 = FLOP(input_batch, inter_height, inter_width, inter_channel, kernel_2_height, kernel_2_height, output_height, output_width, output_channel, is_f2_depthwise);
+    int theoretical_bytes_1 = bytes_accessed(input_batch, input_height, input_width, input_channel, kernel_1_height, kernel_1_width, inter_height, inter_width, inter_channel, is_f1_depthwise);
+    int theoretical_flop_1 = FLOP(input_batch, input_height, input_width, input_channel, kernel_1_height, kernel_1_width, inter_height, inter_width, inter_channel, is_f1_depthwise);
+    int theoretical_bytes_2 = bytes_accessed(inter_batch, inter_height, inter_width, inter_channel, kernel_2_height, kernel_2_height, output_height, output_width, output_channel, is_f2_depthwise);
+    int theoretical_flop_2 = FLOP(inter_batch, inter_height, inter_width, inter_channel, kernel_2_height, kernel_2_height, output_height, output_width, output_channel, is_f2_depthwise);
 
+    printf("Stage 1 Theoretical DRAM bytes: %d .\n", theoretical_bytes_1);
+    printf("Stage 1 Theoretical FLOP: %d .\n", theoretical_flop_1);
+    printf("Stage 1 DRAM bytes: %lu .\n", dram_bytes_1 / REPEATITION / 2);
+    printf("Stage 1 runtime is %f us .\n", runtime_1_us - runtime_1_tmp_us);
     printf("Stage 2 Theoretical DRAM bytes: %d .\n", theoretical_bytes_2);
     printf("Stage 2 Theoretical FLOP: %d .\n", theoretical_flop_2);
     printf("Stage 2 DRAM bytes: %lu .\n", dram_bytes_2 / REPEATITION / 2);
-    printf("Stage 2 runtime is %f us .\n", runtime_us - runtime_2_us);
-    runtime_sum_us += runtime_us - runtime_2_us;
-    printf("Total runtime is %f us.\n", runtime_sum_us);
+    printf("Stage 2 runtime is %f us .\n", runtime_2_us - runtime_2_tmp_us);
+    printf("Total runtime is %f us.\n", (runtime_1_us - runtime_1_tmp_us) + (runtime_2_us - runtime_2_tmp_us));
     m->cleanup();
 
     // Verification

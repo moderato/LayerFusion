@@ -213,7 +213,7 @@ def verify_tuning(workload_name,
         else: # Fused
             if use_autotvm:
                 bind_axes = fc.get_reorder_axes()
-                for axis in bind_axes:
+                for axis in ['ic']:
                     if not skip_training:
                         log_name = 'logs/autotvm/layer/{}/fused/{}_fused_{}.log'.format(device, name, workload_name)
                         print(log_name)
@@ -386,8 +386,8 @@ if __name__ == '__main__':
         return options
 
     options = get_options()
-    # workloads = get_workloads()
-    workloads = get_workloads_from_file()
+    workloads = get_workloads()
+    # workloads = get_workloads_from_file()
 
     for t, workload in workloads.items():
         for workload_name, parameters in workload.items():

@@ -26,6 +26,8 @@ mkdir -p logs/auto_scheduler/model/cpu
 mkdir -p logs/auto_scheduler/model/gpu
 mkdir -p logs/gflops/cpu
 mkdir -p logs/gflops/gpu
+mkdir -p logs/flop/cpu
+mkdir -p logs/flop/gpu
 mkdir -p logs/runtime/cpu
 mkdir -p logs/runtime/gpu
 mkdir -p generated_kernels/cpu/fused/kernel_launch_config

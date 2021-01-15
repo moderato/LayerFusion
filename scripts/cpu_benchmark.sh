@@ -209,6 +209,8 @@ do
       echo -e "fused_dram,unfused_1_dram,unfused_2_dram,mkldnn_dram_1,mkldnn_dram_2,fused_l1,unfused_1_l1,unfused_2_l1,mkldnn_l1_1,mkldnn_l1_2\n${fused_kernel_dram_ai},${unfused_kernel_dram_ai_1},${unfused_kernel_dram_ai_2},${mkldnn_dram_ai_1},${mkldnn_dram_ai_2},${fused_kernel_l1_ai},${unfused_kernel_l1_ai_1},${unfused_kernel_l1_ai_2},${mkldnn_l1_ai_1},${mkldnn_l1_ai_2}" > "logs/arithmetic_intensity/cpu/$(( ${REP_BENCH} * 2 ))/${workload_name}.csv"
       mkdir -p logs/gflops/cpu/$(( ${REP_BENCH} * 2 ))
       echo -e "fused,unfused_1,unfused_2,mkldnn_1,mkldnn_2\n$fused_kernel_gflops,$unfused_kernel_gflops_1,$unfused_kernel_gflops_2,$mkldnn_gflops_1,$mkldnn_gflops_2" > "logs/gflops/cpu/$(( ${REP_BENCH} * 2 ))/${workload_name}.csv"
+      mkdir -p logs/flop/cpu/$(( ${REP_BENCH} * 2 ))
+      echo -e "fused,unfused_1,unfused_2,mkldnn_1,mkldnn_2\n$fused_kernel_flop,$unfused_kernel_flop_1,$unfused_kernel_flop_2,$mkldnn_flop_1,$mkldnn_flop_2" > "logs/flop/cpu/$(( ${REP_BENCH} * 2 ))/${workload_name}.csv"
       cd scripts
 
       # Print results

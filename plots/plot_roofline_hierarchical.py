@@ -198,7 +198,7 @@ for device in devices:
                 ymin = min(flatten_list(FLOPS)) / 1.1 # 160.0
                 ymax = max(gflops_roof) * 1.1 # 600.0
                 xmin = math.log10(min(flatten_list(AI)) / 1.4) # -0.4
-                xmax = math.log10(max(max(flatten_list(AI)), peaks_ai[idx]) * 2.1) # 3.1
+                xmax = math.log10(max(flatten_list(AI)) * 2.1) # 3.1
                 text_distance_scale = 1.02
                 print(ymin, ymax, xmin, xmax)
 
