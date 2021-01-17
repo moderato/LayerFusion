@@ -43,6 +43,10 @@ def verify_tuning(workload_name,
 
         fc = FusionComposer(parameters, use_autotvm=use_autotvm, use_auto_scheduler=use_auto_scheduler, target=target, workload_name=workload_name)
         if unfused:
+            log_names = []
+            tasks = []
+            depthwises = []
+            params = []
             for l in range(2):
                 # 
                 input_cfg = fc.get_input_cfg(l)
@@ -63,11 +67,12 @@ def verify_tuning(workload_name,
                 layout = 'NHWC' if target_str == 'cuda' else 'NCHW'
                 out_layout = 'NHWC' if target_str == 'cuda' else 'NCHW'
                 out_dtype = dtype
-                data_shape = data.shape
-                kernel_shape = kernel.shape
+                params.append([data, kernel, stride, padding, dilation, layout, out_layout, out_dtype])
+                depthwises.append(is_depthwise)
 
                 if use_autotvm:
                     log_name = 'logs/autotvm/layer/{}/unfused/{}_{}.log'.format(device, workload_name, l+1)
+                    log_names.append(log_name)
                     print(log_name)
 
                     # # logging
@@ -79,6 +84,7 @@ def verify_tuning(workload_name,
                     print(task.config_space)
                     print(task.target)
                     print(task.workload)
+                    tasks.append(task)
 
                     if not skip_training:
                         # autotvm setting
@@ -101,34 +107,73 @@ def verify_tuning(workload_name,
                                     measure_option=measure_option,
                                     callbacks=[autotvm.callback.progress_bar(min(tuning_trials, len(task.config_space))),
                                                 autotvm.callback.log_to_file(log_name)])
-
-                    # inspect the best config
-                    # autotvm.record.pick_best(log_name, "logs/autotvm/model/{}/test.log".format(device))
-                    dispatch_context = autotvm.apply_history_best(log_name)
-                    config_nchw_to_nchwc(dispatch_context) # A hack to add a NCHWc version of record to the dispatch_context
-                    best_config = dispatch_context.query(task.target, task.workload)
-                    print('\nBest config:')
-                    print(best_config)
-
-                    # apply history best from log file
-                    with dispatch_context:
-                        with target:
-                            vlen_ic, vlen_oc = -1, -1
-                            config_dict = best_config.to_json_dict()
-                            for e in config_dict['entity']:
-                                if e[0] == 'tile_ic':
-                                    vlen_ic = e[2][-1]
-                                if e[0] == 'tile_oc':
-                                    vlen_oc = e[2][-1]
-                            assert vlen_ic != -1 and vlen_oc != -1
-                            n, c, h, w = data.shape
-                            data_5D = te.placeholder((n, c//vlen_ic, h, w, vlen_ic))
-                            o, i, h, w = kernel.shape
-                            kernel_6D = te.placeholder((o//vlen_oc, 1, h, w, 1, vlen_oc) if is_depthwise else (o//vlen_oc, i//vlen_ic, h, w, vlen_ic, vlen_oc))
-                            s, flatten_params = task.func(data_5D, kernel_6D, stride, padding, dilation, layout, out_layout, out_dtype)
-                            print(flatten_params)
                 else:
                     raise Exception("Not accepting unfused kernels without AutoTVM")
+
+            best_1 = autotvm.record.pick_best_batch(log_names[0], batch=100)
+            best_2 = autotvm.record.pick_best_batch(log_names[1], batch=100)
+            best_pair = None
+            best_workloads = None
+            best_cost = 1e10
+            for b in best_1:
+                inp_1, res_1 = b
+                config_1 = inp_1.config
+                config_dict = config_1.to_json_dict()
+                vlen_oc = -1
+                for e in config_dict['entity']:
+                    if e[0] == 'tile_oc':
+                        vlen_oc = int(e[2][-1])
+                        break
+                assert vlen_oc != -1
+                cost_1 = config_1.cost
+                for bb in best_2:
+                    inp_2, res_2 = bb
+                    config_2 = inp_2.config
+                    config_dict = config_2.to_json_dict()
+                    vlen_ic = -1
+                    for e in config_dict['entity']:
+                        if e[0] == 'tile_ic':
+                            vlen_ic = int(e[2][-1])
+                            break
+                    if vlen_ic != vlen_oc:
+                        continue
+                    cost_2 = config_2.cost
+                    if cost_1 + cost_2 < best_cost:
+                        new_pair_1, new_workload_1 = create_nchwc_config(inp_1, res_1)
+                        new_pair_2, new_workload_2 = create_nchwc_config(inp_2, res_2)
+                        best_pair = (new_pair_1, new_pair_2)
+                        best_workloads = (new_workload_1, new_workload_2)
+                        best_cost = cost_1 + cost_2
+            assert best_pair is not None
+
+            prev_out = None
+            for l in range(2):
+                # inspect the best config
+                # autotvm.record.pick_best(log_name, "logs/autotvm/model/{}/test.log".format(device))
+                dispatch_context = autotvm.apply_history_best(log_names[l])
+                new_key = (target.keys[0], best_workloads[l])
+                dispatch_context.best_by_targetkey[new_key] = best_pair[l]
+                best_config = dispatch_context.query(target, best_workloads[l])
+                print('\nBest config:')
+                print(best_config)
+
+                # apply history best from log file
+                with dispatch_context:
+                    with target:
+                        vlen_ic, vlen_oc = -1, -1
+                        config_dict = best_config.to_json_dict()
+                        for e in config_dict['entity']:
+                            if e[0] == 'tile_ic':
+                                vlen_ic = e[2][-1]
+                            if e[0] == 'tile_oc':
+                                vlen_oc = e[2][-1]
+                        assert vlen_ic != -1 and vlen_oc != -1
+                        n, c, h, w = params[l][0].shape
+                        data_5D = te.placeholder((n, c//vlen_ic, h, w, vlen_ic))
+                        o, i, h, w = params[l][1].shape
+                        kernel_6D = te.placeholder((o//vlen_oc, 1, h, w, 1, vlen_oc) if depthwises[l] else (o//vlen_oc, i//vlen_ic, h, w, vlen_ic, vlen_oc))
+                        s, flatten_params = tasks[l].func(data_5D, kernel_6D, *params[l][2:])
+                        print(flatten_params)
 
                 if not no_print_ir:
                     print(tvm.lower(s, flatten_params, simple_mode=True))
@@ -156,22 +201,28 @@ def verify_tuning(workload_name,
                 nd_arrays = []
 
                 # Ridiculous return orders: depthwise_conv2d (2, 1, 0), conv2d (2, 0, 1)
-                data_np = np.random.uniform(0.0, 0.1, size=get_const_tuple(data_shape)).astype(dtype)
+                if prev_out is None:
+                    data_np = np.random.uniform(0.0, 0.1, size=get_const_tuple(params[l][0].shape)).astype(dtype)
+                else:
+                    data_np = prev_out
                 n, c, h, w = data_np.shape
                 data_np_5D = np.array(data_np.reshape((n, c//vlen_ic, vlen_ic, h, w)).transpose(0, 1, 3, 4, 2), order='C')
                 ref_data.append(data_np_5D)
                 nd_arrays.append(tvm.nd.array(data_np_5D, ctx))
-                kernel_np = np.random.uniform(0.0, 0.1, size=get_const_tuple(kernel_shape)).astype(dtype)
+                kernel_np = np.random.uniform(0.0, 0.1, size=get_const_tuple(params[l][1].shape)).astype(dtype)
                 o, i, h, w = kernel_np.shape
-                kernel_np_6D = np.array(kernel_np.reshape((o//vlen_oc, vlen_oc, 1, 1, h, w) if is_depthwise else (o//vlen_oc, vlen_oc, i//vlen_ic, vlen_ic, h, w)).transpose(0, 2, 4, 5, 3, 1), order='C')
-                if is_depthwise:
+                kernel_np_6D = np.array(kernel_np.reshape((o//vlen_oc, vlen_oc, 1, 1, h, w) if depthwises[l] else (o//vlen_oc, vlen_oc, i//vlen_ic, vlen_ic, h, w)).transpose(0, 2, 4, 5, 3, 1), order='C')
+                if l == 0:
                     ref_data = [kernel_np_6D] + ref_data
                     nd_arrays = [tvm.nd.array(kernel_np_6D, ctx)] + nd_arrays
-                    output_np = testing.depthwise_conv2d_python_nchw(data_np, kernel_np, stride=stride, padding='SAME').astype(dtype)
                 else:
                     ref_data.append(kernel_np_6D)
                     nd_arrays.append(tvm.nd.array(kernel_np_6D, ctx))
-                    output_np = testing.conv2d_nchw_python(data_np, kernel_np, stride=stride, padding='SAME').astype(dtype)
+                if depthwises[l]:
+                    output_np = testing.depthwise_conv2d_python_nchw(data_np, kernel_np, stride=params[l][2], padding='SAME').astype(dtype)
+                else:
+                    output_np = testing.conv2d_nchw_python(data_np, kernel_np, stride=params[l][2], padding='SAME').astype(dtype)
+                prev_out = output_np
 
                 n, c, h, w = output_np.shape
                 output_np_5D = np.array(output_np.reshape((n, c//vlen_oc, vlen_oc, h, w)).transpose((0, 1, 3, 4, 2)), order='C')
@@ -187,8 +238,8 @@ def verify_tuning(workload_name,
                     folder_name = 'npy/unfused/{}_{}/'.format(workload_name, l+1)
                     if not os.path.exists(folder_name):
                         os.mkdir(folder_name)
-                    np.save('{}/input.npy'.format(folder_name), ref_data[2] if is_depthwise else ref_data[1])
-                    np.save('{}/filter.npy'.format(folder_name), ref_data[1] if is_depthwise else ref_data[2])
+                    np.save('{}/input.npy'.format(folder_name), ref_data[2] if l == 0 else ref_data[1])
+                    np.save('{}/filter.npy'.format(folder_name), ref_data[1] if l == 0 else ref_data[2])
                     np.save('{}/output.npy'.format(folder_name), ref_data[0])
 
                 # Measure a 'delta' time

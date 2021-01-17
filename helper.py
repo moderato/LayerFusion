@@ -403,51 +403,44 @@ def get_workloads():
 
     return workloads
 
-# A hack to add a NCHWc version of record to the dispatch_context
-def config_nchw_to_nchwc(ctx):
-    new_inps = []
-    new_ress = []
-    for inp, res in ctx.best_by_targetkey.items():
-        args = inp[1]
-        target = res[0].target
-        task = res[0].task
-        config = res[0].config
+# A hack to create nchwc config from nchw
+def create_nchwc_config(inp, res):
+    target = inp.target
+    task = inp.task
+    config = inp.config
+    workload = task.workload
 
-        vlen_ic, vlen_oc = -1, -1
-        config_dict = config.to_json_dict()
-        for e in config_dict['entity']:
-            if e[0] == 'tile_ic':
-                vlen_ic = int(e[2][-1])
-            if e[0] == 'tile_oc':
-                vlen_oc = int(e[2][-1])
-        assert vlen_ic != -1 and vlen_oc != -1
+    vlen_ic, vlen_oc = -1, -1
+    config_dict = config.to_json_dict()
+    for e in config_dict['entity']:
+        if e[0] == 'tile_ic':
+            vlen_ic = int(e[2][-1])
+        if e[0] == 'tile_oc':
+            vlen_oc = int(e[2][-1])
+    assert vlen_ic != -1 and vlen_oc != -1
 
-        new_args = []
-        is_depthwise = 'depthwise' in args[0]
-        for idx, arg in enumerate(args):
-            if idx == 1:
-                n, c, h, w = arg[1]
-                new_shape = (n, c//vlen_ic, h, w, vlen_ic)
-                t = (arg[0], new_shape, arg[2])
-            elif idx == 2:
-                o, i, h, w = arg[1]
-                new_shape = (o//vlen_oc, 1, h, w, 1, vlen_oc) if is_depthwise else (o//vlen_oc, i//vlen_ic, h, w, vlen_ic, vlen_oc)
-                t = (arg[0], new_shape, arg[2])
-            else:
-                t = arg
-            new_args.append(t)
-        new_args = tuple(new_args)
+    new_workload = []
+    is_depthwise = 'depthwise' in workload[0]
+    for idx, arg in enumerate(workload):
+        if idx == 1:
+            n, c, h, w = arg[1]
+            new_shape = (n, c//vlen_ic, h, w, vlen_ic)
+            t = (arg[0], new_shape, arg[2])
+        elif idx == 2:
+            o, i, h, w = arg[1]
+            new_shape = (o//vlen_oc, 1, h, w, 1, vlen_oc) if is_depthwise else (o//vlen_oc, i//vlen_ic, h, w, vlen_ic, vlen_oc)
+            t = (arg[0], new_shape, arg[2])
+        else:
+            t = arg
+        new_workload.append(t)
+    new_workload = tuple(new_workload)
 
-        from tvm.autotvm.task import Task
-        from tvm.autotvm.measure import MeasureInput
-        new_task = Task(task.name, new_args)
-        new_measure_input = MeasureInput(target, new_task, config)
-
-        new_inps.append((inp[0], new_args))
-        new_ress.append((new_measure_input, res[1]))
-
-    for inp, res in zip(new_inps, new_ress):
-        ctx.best_by_targetkey[inp] = res
+    from tvm.autotvm.task import Task
+    from tvm.autotvm.measure import MeasureInput
+    new_task = Task(task.name, new_workload)
+    new_measure_input = MeasureInput(target, new_task, config)
+    new_pair = (new_measure_input, res)
+    return new_pair, new_workload
 
 def export_kernel_launch_config(workload_name, output_shape, best_config, target, unfused=False):
     assert best_config is not None

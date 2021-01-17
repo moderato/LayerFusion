@@ -384,7 +384,7 @@ void benchmark_generated_cpu_unfused(std::string workload_name,
 #endif
         start = std::chrono::high_resolution_clock::now();
 
-        layer_2(output_2, input_2, filter_2);
+        layer_2(output_2, output_1, filter_2);
 
         elapsed_2 = std::chrono::high_resolution_clock::now() - start;
 #if ENABLE_PCM == 1
