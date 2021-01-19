@@ -290,10 +290,10 @@ void benchmark_generated_cpu_unfused(std::string workload_name,
 
     int64_t input_1_shape_tuple[5] = {input_batch, int64_t(std::ceil(input_channel / vlen1_1)), input_height, input_width, vlen1_1};
     int64_t oc_chunk, ic_chunk, ic, oc;
-    oc_chunk = is_f1_depthwise ? int64_t(std::ceil(kernel_1_in_channel / vlen1_1)) : int64_t(std::ceil(kernel_1_out_channel_or_multiplier / vlen1_2));
+    oc_chunk = is_f1_depthwise ? int64_t(std::ceil(input_channel * kernel_1_out_channel_or_multiplier / vlen1_2)) : int64_t(std::ceil(kernel_1_out_channel_or_multiplier / vlen1_2));
     ic_chunk = is_f1_depthwise ? 1 : int64_t(std::ceil(kernel_1_in_channel / vlen1_1));
     ic = is_f1_depthwise ? 1: vlen1_1;
-    oc = is_f1_depthwise ? vlen1_1: vlen1_2;
+    oc = vlen1_2;
     int64_t filter_1_shape_tuple[6] = {oc_chunk, ic_chunk, kernel_1_height, kernel_1_width, ic, oc};
     int64_t output_1_shape_tuple[5] = {inter_batch, int64_t(std::ceil(kernel_1_in_channel / vlen1_2)), inter_height, inter_width, vlen1_2};
     int64_t input_2_shape_tuple[5] = {inter_batch, int64_t(std::ceil(inter_channel / vlen2_1)), inter_height, inter_width, vlen2_1};
@@ -375,6 +375,10 @@ void benchmark_generated_cpu_unfused(std::string workload_name,
         dram_bytes_1 += getBytesReadFromMC(before_sstate, after_sstate) + getBytesWrittenToMC(before_sstate, after_sstate);
 #endif
 
+#if DEBUG == 1
+        std::cout << "Layer 1 completed!" << std::endl;
+#endif
+
 // ################### Layer 2 ###################
 #if ENABLE_PCM == 1
 #if LAYER_2 == 1
@@ -401,6 +405,10 @@ void benchmark_generated_cpu_unfused(std::string workload_name,
         runtime_2_us += ns / 1000.0f / REPEATITION;
     }
 
+#if DEBUG == 1
+        std::cout << "Layer 2 completed!" << std::endl;
+#endif
+
     int theoretical_bytes_1 = bytes_accessed(input_batch, input_height, input_width, input_channel, kernel_1_height, kernel_1_width, inter_height, inter_width, inter_channel, is_f1_depthwise);
     int theoretical_flop_1 = FLOP(input_batch, input_height, input_width, input_channel, kernel_1_height, kernel_1_width, inter_height, inter_width, inter_channel, is_f1_depthwise);
     int theoretical_bytes_2 = bytes_accessed(inter_batch, inter_height, inter_width, inter_channel, kernel_2_height, kernel_2_height, output_height, output_width, output_channel, is_f2_depthwise);
@@ -422,8 +430,10 @@ void benchmark_generated_cpu_unfused(std::string workload_name,
     for(int i = 0; i < output_1_shape; i++) {
         float output_element = static_cast<float*>(output_1->data)[i];
 #if DEBUG == 1
-        printf("%d, %f, %lf\n", i, output_element, tmp_1[i]);
-        assert(std::abs(output_element - (float)tmp_1[i]) < 1e-3);
+        if (i < 100) {
+            printf("%d, %f, %lf\n", i, output_element, tmp_1[i]);
+            assert(std::abs(output_element - (float)tmp_1[i]) < 1e-3);
+        }
 #endif
         if (std::abs(output_element - tmp_1[i]) > 1e-3) // A few nums have bigger errors
             count++;
@@ -434,8 +444,10 @@ void benchmark_generated_cpu_unfused(std::string workload_name,
     for(int i = 0; i < output_2_shape; i++) {
         float output_element = static_cast<float*>(output_2->data)[i];
 #if DEBUG == 1
-        printf("%d, %f, %lf\n", i, output_element, tmp_2[i]);
-        assert(std::abs(output_element - (float)tmp_2[i]) < 1e-3);
+        if (i < 100) {
+            printf("%d, %f, %lf\n", i, output_element, tmp_2[i]);
+            assert(std::abs(output_element - (float)tmp_2[i]) < 1e-3);
+        }
 #endif
         if (std::abs(output_element - tmp_2[i]) > 1e-3) // A few nums have bigger errors
             count++;
