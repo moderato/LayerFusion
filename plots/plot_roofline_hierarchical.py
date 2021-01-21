@@ -98,12 +98,15 @@ arrowprops = dict(arrowstyle="-|>,head_width=0.15,head_length=0.55", linewidth="
 
 HOME = os.getenv('LF_HOME')
 
+merge = False
+
 for device in devices:
     for iter in iterations:
         filename = '{}_{}_plot'.format(device_name[device], iter)
 
         AI = []
         FLOPS = []
+        times = []
 
         labels = []
         gflops_roof = []
@@ -122,24 +125,44 @@ for device in devices:
                 for idx, line in enumerate(lines[1:]): # skip header
                     splitted = line.strip().split(',')
                     workload_name = splitted[0]
+                    # Read times
+                    with open('{}/logs/runtime/{}/{}/{}.csv'.format(HOME, device, iter, workload_name), 'r') as ff:
+                        lls = ff.readlines()
+                        for l in lls[1:]: # skip header
+                            sp = [float(s) for s in l.strip().split(',')]
+                            times.append(sp)
                     # Read AI
                     with open('{}/logs/arithmetic_intensity/{}/{}/{}.csv'.format(HOME, device, iter, workload_name), 'r') as ff:
-                        lls = ff.readlines()
-                        for l in lls[1:]: # skip header
-                            sp = [float(s) for s in l.strip().split(',')]
-                            AI.append(sp[:5])
-                            if len(sp) == 10:
-                                has_L2 = True
-                                AI[-1].extend(sp[5:])
+                        l = ff.readlines()[1] # skip header
+                        sp = [float(s) for s in l.strip().split(',')]
+                        AI.append(sp[:5])
+                        if len(sp) == 10:
+                            has_L2 = True
+                            AI[-1].extend(sp[5:])
                     # Read FLOPS
                     with open('{}/logs/gflops/{}/{}/{}.csv'.format(HOME, device, iter, workload_name), 'r') as ff:
-                        lls = ff.readlines()
-                        for l in lls[1:]: # skip header
-                            sp = [float(s) for s in l.strip().split(',')]
-                            FLOPS.append(sp)
-                            
+                        l = ff.readlines()[1] # skip header
+                        sp = [float(s) for s in l.strip().split(',')]
+                        FLOPS.append(sp)
                     # Labels
                     labels.append(workload_name)
+
+                    ####### If plot fused AI and FLOPS for every workload
+                    # Read FLOP
+                    if merge:
+                        with open('{}/logs/flop/{}/{}/{}.csv'.format(HOME, device, iter, workload_name), 'r') as ff:
+                            l = ff.readlines()[1] # skip header
+                            sp = [float(s) for s in l.strip().split(',')]
+                            ai = AI[-1]
+                            t = times[-1]
+                            dram_mem = [f / a for a, f in zip(ai[:5], sp)] # mem = FLOP / AI
+                            tmp_ai = [sp[0] / dram_mem[0], (sp[1] + sp[2]) / (dram_mem[1] + dram_mem[2]), (sp[3] + sp[4]) / (dram_mem[3] + dram_mem[4])] # AI = FLOP / mem
+                            tmp_flops = [sp[0] / t[0] / 1e3, (sp[1] + sp[2]) / (t[1] + t[2]) / 1e3, (sp[3] + sp[4]) / (t[3] + t[4]) / 1e3] # flops = FLOP / time
+                            if has_L2:
+                                cache_mem = [f / a for a, f in zip(ai[5:], sp)]
+                                tmp_ai.extend([sp[0] / cache_mem[4], (sp[1] + sp[2]) / (cache_mem[3] + cache_mem[4]), (sp[3] + sp[4]) / (cache_mem[3] + cache_mem[4])])
+                            AI[-1] = tmp_ai
+                            FLOPS[-1] = tmp_flops
 
                     parameters = []
                     for idx, s in enumerate(splitted[1:]):
@@ -254,21 +277,32 @@ for device in devices:
 
                 # workload: marker styles
                 # generated/library: colors
-                ax.plot(float(AI[idx][0]), float(FLOPS[idx][0]), c=colors[0], marker='*', linestyle='None', ms=markersize, label=label)
-                marker_handles.append(ax.plot([], [], c='gray', marker='*', linestyle='None', ms=markersize, label=label)[0])
+                if merge:
+                    ax.plot(float(AI[idx][0]), float(FLOPS[idx][0]), c=colors[0], marker='*', linestyle='None', ms=markersize, label=label)
+                    marker_handles.append(ax.plot([], [], c='gray', marker='*', linestyle='None', ms=markersize, label=label)[0])
 
-                ax.plot(float(AI[idx][1]), float(FLOPS[idx][1]), c=colors[1], marker='*', linestyle='None', ms=markersize, label=label)
-                marker_handles.append(ax.plot([], [], c='gray', marker='*', linestyle='None', ms=markersize, label=label)[0])
+                    ax.plot(float(AI[idx][1]), float(FLOPS[idx][1]), c=colors[1], marker='*', linestyle='None', ms=markersize, label=label)
+                    marker_handles.append(ax.plot([], [], c='gray', marker='*', linestyle='None', ms=markersize, label=label)[0])
 
-                ax.plot(float(AI[idx][2]), float(FLOPS[idx][2]), c=colors[1], marker='*', linestyle='None', ms=markersize, label=label)
-                marker_handles.append(ax.plot([], [], c='gray', marker='*', linestyle='None', ms=markersize, label=label)[0])
+                    ax.plot(float(AI[idx][2]), float(FLOPS[idx][2]), c=colors[2], marker='*', linestyle='None', ms=markersize, label=label)
+                    marker_handles.append(ax.plot([], [], c='gray', marker='*', linestyle='None', ms=markersize, label=label)[0])
+                else:
+                    ax.plot(float(AI[idx][0]), float(FLOPS[idx][0]), c=colors[0], marker='*', linestyle='None', ms=markersize, label=label)
+                    marker_handles.append(ax.plot([], [], c='gray', marker='*', linestyle='None', ms=markersize, label=label)[0])
 
-                ax.plot(float(AI[idx][3]), float(FLOPS[idx][3]), c=colors[2], marker='*', linestyle='None', ms=markersize, label=label)
-                marker_handles.append(ax.plot([], [], c='gray', marker='*', linestyle='None', ms=markersize, label=label)[0])
+                    ax.plot(float(AI[idx][1]), float(FLOPS[idx][1]), c=colors[1], marker='*', linestyle='None', ms=markersize, label=label)
+                    marker_handles.append(ax.plot([], [], c='gray', marker='*', linestyle='None', ms=markersize, label=label)[0])
 
-                ax.plot(float(AI[idx][4]), float(FLOPS[idx][4]), c=colors[2], marker='*', linestyle='None', ms=markersize, label=label)
-                marker_handles.append(ax.plot([], [], c='gray', marker='*', linestyle='None', ms=markersize, label=label)[0])
+                    ax.plot(float(AI[idx][2]), float(FLOPS[idx][2]), c=colors[1], marker='*', linestyle='None', ms=markersize, label=label)
+                    marker_handles.append(ax.plot([], [], c='gray', marker='*', linestyle='None', ms=markersize, label=label)[0])
 
+                    ax.plot(float(AI[idx][3]), float(FLOPS[idx][3]), c=colors[2], marker='*', linestyle='None', ms=markersize, label=label)
+                    marker_handles.append(ax.plot([], [], c='gray', marker='*', linestyle='None', ms=markersize, label=label)[0])
+
+                    ax.plot(float(AI[idx][4]), float(FLOPS[idx][4]), c=colors[2], marker='*', linestyle='None', ms=markersize, label=label)
+                    marker_handles.append(ax.plot([], [], c='gray', marker='*', linestyle='None', ms=markersize, label=label)[0])
+
+                
                 # # Mark the roofline shift from unfused to fused
                 # for i in range(0, len(AI['dram']['fused'])):
                 #     x0 = float(AI['dram'][library_name[device]][i])
@@ -283,11 +317,18 @@ for device in devices:
                 #     ax.text(x0 * (0.98 if dx > 0 else 1.02), y0 * 0.98, labels[i], fontsize=8)
 
                 if has_L2:
-                    ax.plot(float(AI[idx][5]),float(FLOPS[idx][0]),c=colors[3],marker='+',linestyle='None',ms=markersize,label=label)
-                    ax.plot(float(AI[idx][6]),float(FLOPS[idx][1]),c=colors[4],marker='+',linestyle='None',ms=markersize,label=label)
-                    ax.plot(float(AI[idx][7]),float(FLOPS[idx][2]),c=colors[4],marker='+',linestyle='None',ms=markersize,label=label)
-                    ax.plot(float(AI[idx][8]),float(FLOPS[idx][3]),c=colors[5],marker='+',linestyle='None',ms=markersize,label=label)
-                    ax.plot(float(AI[idx][9]),float(FLOPS[idx][4]),c=colors[5],marker='+',linestyle='None',ms=markersize,label=label)
+                    if merge:
+                        # Merged
+                        ax.plot(float(AI[idx][3]),float(FLOPS[idx][0]),c=colors[3],marker='^',linestyle='None',ms=markersize,label=label)
+                        ax.plot(float(AI[idx][4]),float(FLOPS[idx][1]),c=colors[4],marker='^',linestyle='None',ms=markersize,label=label)
+                        ax.plot(float(AI[idx][5]),float(FLOPS[idx][2]),c=colors[5],marker='^',linestyle='None',ms=markersize,label=label)
+                    else:
+                        # Separate
+                        ax.plot(float(AI[idx][5]),float(FLOPS[idx][0]),c=colors[3],marker='^',linestyle='None',ms=markersize,label=label)
+                        ax.plot(float(AI[idx][6]),float(FLOPS[idx][1]),c=colors[4],marker='^',linestyle='None',ms=markersize,label=label)
+                        ax.plot(float(AI[idx][7]),float(FLOPS[idx][2]),c=colors[4],marker='^',linestyle='None',ms=markersize,label=label)
+                        ax.plot(float(AI[idx][8]),float(FLOPS[idx][3]),c=colors[5],marker='^',linestyle='None',ms=markersize,label=label)
+                        ax.plot(float(AI[idx][9]),float(FLOPS[idx][4]),c=colors[5],marker='^',linestyle='None',ms=markersize,label=label)
 
                     # # Mark the roofline shift from unfused to fused
                     # for i in range(0, len(AI['cache']['fused'])):
@@ -347,12 +388,18 @@ for device in devices:
             fig.text(0.1, 0.5, 'Performance [GFLOP/sec]', va='center', rotation='vertical')
 
             handles = list()
-            src_name = ['fused (DRAM)', 'TVM layer_0 (DRAM)', 'TVM layer_1 (DRAM)', 'Library layer_0 (DRAM)', 'Library layer_1 (DRAM)', 'fused (Cache)', 'TVM layer_0 (Cache)', 'TVM layer_1 (Cache)', 'Library layer_0 (Cache)', 'Library layer_1 (Cache)']
+            if merge:
+                src_name = ['fused (DRAM)', 'TVM (DRAM)', 'MKLDNN (DRAM)', 'fused (Cache)', 'TVM (Cache)', 'MKLDNN (Cache)']
+            else:
+                src_name = ['fused (DRAM)', 'TVM layer_0 (DRAM)', 'TVM layer_1 (DRAM)', 'Library layer_0 (DRAM)', 'Library layer_1 (DRAM)', 'fused (Cache)', 'TVM layer_0 (Cache)', 'TVM layer_1 (Cache)', 'Library layer_0 (Cache)', 'Library layer_1 (Cache)']
             j = 0
             for i in range(0, len(src_name)):
-                handles.append(Line2D([], [], color=colors[j], marker='*' if i < len(src_name) // 2 else '+', linestyle='None', markersize=markersize))
-                if not ((i % 5 == 1) or (i % 5 == 3)):
+                handles.append(Line2D([], [], color=colors[j], marker='*' if i < len(src_name) // 2 else '^', linestyle='None', markersize=markersize))
+                if merge:
                     j += 1
+                else:
+                    if not ((i % 5 == 1) or (i % 5 == 3)):
+                        j += 1
             leg2 = fig.legend(handles, src_name, loc='lower right', bbox_to_anchor=(0.80, 0.05))
             plt.savefig(filename + '.png', bbox_inches='tight')
             plt.savefig(filename + '.eps')

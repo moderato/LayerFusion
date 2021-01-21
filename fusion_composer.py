@@ -166,10 +166,49 @@ class FusionComposer:
                 flop += 2 * (ocfg.N * ocfg.H * ocfg.W * ocfg.C) * (fcfg.H * fcfg.W)
             else:
                 flop += 2 * (ocfg.N * ocfg.H * ocfg.W * ocfg.C) * (fcfg.H * fcfg.W * fcfg.I)
-
             if fcfg.post_op:
                 flop += 2 * (ocfg.N * ocfg.H * ocfg.W * ocfg.C)
         return flop
+
+    def get_theoretical_mem_bytes(self, dtype="float32"):
+        mem = 0
+        icfg = self.get_input_cfg(0)
+        mem += 4 * (icfg.N * icfg.H * icfg.W * icfg.C)
+        for l in range(0, self.layer_num):
+            fcfg = self.get_filter_cfg(l)
+            mem += 4 * (fcfg.H * fcfg.W * fcfg.I * fcfg.O)
+
+            if fcfg.post_op:
+                mem += 4 * (fcfg.I)
+        ocfg = self.get_output_cfg(self.layer_num - 1)
+        mem += 4 * (ocfg.N * ocfg.H * ocfg.W * ocfg.C)
+        return mem
+
+    def get_FLOP_per_layer(self):
+        flop_list = []
+        for l in range(0, self.layer_num):
+            flop = 0
+            fcfg = self.get_filter_cfg(l)
+            ocfg = self.get_output_cfg(l)
+
+            if fcfg.depthwise:
+                flop += 2 * (ocfg.N * ocfg.H * ocfg.W * ocfg.C) * (fcfg.H * fcfg.W)
+            else:
+                flop += 2 * (ocfg.N * ocfg.H * ocfg.W * ocfg.C) * (fcfg.H * fcfg.W * fcfg.I)
+            if fcfg.post_op:
+                flop += 2 * (ocfg.N * ocfg.H * ocfg.W * ocfg.C)
+            flop_list.append(flop)
+        return flop_list
+
+    def get_theoretical_mem_bytes_per_layer(self, dtype="float32"):
+        mem = []
+        for l in range(0, self.layer_num):
+            icfg = self.get_input_cfg(l)
+            fcfg = self.get_filter_cfg(l)
+            ocfg = self.get_output_cfg(l)
+
+            mem.append(4 * (icfg.N * icfg.H * icfg.W * icfg.C + fcfg.H * fcfg.W * fcfg.I * fcfg.O + ocfg.N * ocfg.H * ocfg.W * ocfg.C))
+        return mem
 
     def get_pattern(self):
         assert self.layers is not None
@@ -190,13 +229,15 @@ class FusionComposer:
         self.parameters = p
         self.use_autotvm = use_autotvm
         self.use_auto_scheduler = use_auto_scheduler
+        self.target = target
+        if isinstance(self.target, str):
+            self.target = tvm.target.Target(self.target)
         if use_auto_scheduler:
             self.pack = False
         else:
-            self.pack = (target.kind.name != 'cuda' and target.device_name != 'tracing') if pack is None else pack
-        self.target = target
+            self.pack = (self.target.kind.name != 'cuda' and self.target.device_name != 'tracing') if pack is None else pack
         self.output_dtype=dtype
-        self.task_name = 'fused_conv2d.{}'.format('cuda' if target.kind.name == 'cuda' else 'x86')
+        self.task_name = 'fused_conv2d.{}'.format('cuda' if self.target.kind.name == 'cuda' else 'x86')
         self.is_block = False
         self.layers = []
         self.placeholders = []
@@ -213,7 +254,7 @@ class FusionComposer:
 
         # Temporary variables for returning the best_config
         self.cfg = None
-        device = 'cpu' if 'llvm' in target.kind.name else 'gpu'
+        device = 'cpu' if 'llvm' in self.target.kind.name else 'gpu'
         self.dir_name = 'logs/{}/layer/{}'.format('auto_scheduler' if use_auto_scheduler else 'autotvm', device)
         self.log_name = '{}_fused_{}.log'.format(self.get_pattern(), self.workload_name)
 
@@ -407,10 +448,10 @@ class FusionComposer:
 
         def autotvm_wrapper(input_tensors):
             task_env = TaskExtractEnv.current
-            args = autotvm.task.topi_integration.serialize_args([self.parameters])
+            args = autotvm.task.topi_integration.serialize_args([self.parameters, 'w']) # Currently only support binding to W (the fastest) for model test. This is because attrs["workload"] only allows one workload. TODO: Fix it.
             if task_env is not None and task_env.tracing:
                 task_env.add_task(self.task_name, args)
-            workload = ((self.task_name),) + autotvm.task.topi_integration.serialize_args([self.parameters])
+            workload = ((self.task_name),) + args
 
             # attach workload to return op
             node = compute(input_tensors)
@@ -459,13 +500,15 @@ class FusionComposer:
                 cfg = self.cfg
                 best_axis = bind_axis
             else: # inference
-                log_name = '{}/fused/{}'.format(self.dir_name, self.log_name)
-                dispatch_ctx = autotvm.apply_history_best(log_name)
+                dispatch_ctx = autotvm.task.DispatchContext.current
+                if not dispatch_ctx or isinstance(dispatch_ctx, autotvm.task.FallbackContext):
+                    log_name = '{}/fused/{}'.format(self.dir_name, self.log_name)
+                    dispatch_ctx = autotvm.apply_history_best(log_name)
                 if self.reorder_axes:
                     lowest_cost = 1e10
                     best_cfg = None
                     best_axis = None
-                    for axis in self.reorder_axes:
+                    for axis in ['w']:
                         workload = ((self.task_name),) + autotvm.task.topi_integration.serialize_args([self.parameters, axis])
                         cfg = dispatch_ctx.query(target, workload)
                         if cfg.cost is None:
@@ -476,13 +519,11 @@ class FusionComposer:
                             best_axis = axis
                             print(best_axis, lowest_cost)
                     cfg = best_cfg
-                    print(cfg)
                 else:
                     workload = ((self.task_name),) + autotvm.task.topi_integration.serialize_args([self.parameters])
                     cfg = dispatch_ctx.query(target, workload)
 
-                assert cfg is not None
-                if cfg.is_fallback and task_env and not task_env.tracing:
+                if task_env and not task_env.tracing and cfg.is_fallback:
                     print("---[[[ AutoTVM cfg not found! ]]]---")
 
                 # Update the tensor shapes with the best config

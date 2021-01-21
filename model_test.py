@@ -153,7 +153,7 @@ def tune_and_evaluate(tuning_opt, dtype='float32'):
             folder_name = 'logs/auto_scheduler/model/cpu/{}'.format(network)
             if not os.path.exists(folder_name):
                 os.mkdir(folder_name)
-            log_filename = '{}/nchw_{}.json'.format(folder_name, 'unfused' if tuning_opt.no_fusion else 'fused')
+            log_filename = '{}/nchwc_{}.json'.format(folder_name, 'unfused' if tuning_opt.no_fusion else 'fused')
         else:
             folder_name = 'logs/auto_scheduler/model/gpu/{}'.format(network)
             if not os.path.exists(folder_name):
@@ -185,7 +185,7 @@ def tune_and_evaluate(tuning_opt, dtype='float32'):
             folder_name = 'logs/autotvm/model/cpu/{}'.format(network)
             if not os.path.exists(folder_name):
                 os.mkdir(folder_name)
-            log_filename = '{}/nchw_{}.log'.format(folder_name, 'unfused' if tuning_opt.no_fusion else 'fused')
+            log_filename = '{}/nchwc_{}.log'.format(folder_name, 'unfused' if tuning_opt.no_fusion else 'fused')
             graph_opt_sch_file = '{}/graph_opt_{}.log'.format(folder_name, 'unfused' if tuning_opt.no_fusion else 'fused')
         else:
             folder_name = 'logs/autotvm/model/gpu/{}'.format(network)
