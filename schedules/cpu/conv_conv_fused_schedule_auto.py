@@ -79,12 +79,11 @@ def schedule_conv_conv_fused_nchwc_auto_search(cfg, outs, *args, **kwargs):
 
     ######## Intermediate output
     n, oc_chunk, h, w, oc = s[layer_output_dict['Layer_0']].op.axis
-    ho, h = cfg['split_layer_0_h'].apply(s, layer_output_dict['Layer_0'], h)
-    wo, w = cfg['split_layer_0_w'].apply(s, layer_output_dict['Layer_0'], w)
+    ho, h = s[stage_dict['Output_0']].split(h, factor=cfg['split_layer_1_h'].size[-1])
+    wo, w = s[stage_dict['Output_0']].split(w, factor=cfg['split_layer_1_w'].size[-1])
     ic_chunk, ry, rx, ic = s[layer_output_dict['Layer_0']].op.reduce_axis
     ic_chunk_o, ic_chunk_i = cfg['split_layer_0_rc'].apply(s, layer_output_dict['Layer_0'], ic_chunk)
     s[layer_output_dict['Layer_0']].reorder(oc_chunk, ic_chunk_o, ho, wo, h, ic_chunk_i, ry, rx, w, oc, ic)
-    # s[layer_output_dict['Layer_0']].reorder(oc_chunk, ic_chunk_o, h, ic_chunk_i, ry, rx, w, oc, ic)
 
     cfg.define_reorder('reorder_layer_0_outer', [oc_chunk, ic_chunk_o, ho, wo], policy='candidate',
                         candidate=[[oc_chunk, ic_chunk_o, ho, wo], [oc_chunk, ho, ic_chunk_o, wo], [oc_chunk, ho, wo, ic_chunk_o],
@@ -92,16 +91,14 @@ def schedule_conv_conv_fused_nchwc_auto_search(cfg, outs, *args, **kwargs):
                                     [ic_chunk_o, oc_chunk, ho, wo], [ic_chunk_o, ho, oc_chunk, wo], [ic_chunk_o, ho, wo, oc_chunk],
                                     [ho, ic_chunk_o, oc_chunk, wo], [ho, ic_chunk_o, wo, oc_chunk], [ho, wo, ic_chunk_o, oc_chunk]])
     cfg['reorder_layer_0_outer'].apply(s, layer_output_dict['Layer_0'], [oc_chunk, ic_chunk_o, ho, wo])
-    # cfg.define_reorder('reorder_layer_0_outer', [oc_chunk, ic_chunk_o], policy='all')
-    # cfg['reorder_layer_0_outer'].apply(s, layer_output_dict['Layer_0'], [oc_chunk, ic_chunk_o])
 
     # Temporary skip the case of 1x1 stride > 1
     if (((filters_cfg['Layer_0'].H == 1 and filters_cfg['Layer_0'].W == 1 and \
             filters_cfg['Layer_0'].stride_h == 1 and filters_cfg['Layer_0'].stride_w == 1)) and \
-        (cfg['split_layer_0_h'].size[-2] > 1 and cfg['split_layer_0_w'].size[-1] == outputs_cfg['Layer_0'].W)): # HM > 1 & WI = OW (small W)
+        (cfg['split_layer_1_h'].size[-2] > 1 and cfg['split_layer_1_w'].size[-1] == outputs_cfg['Layer_0'].W)): # HM > 1 & WI = OW (small W)
         # print('small: bind to h')
         tensorize_axis = h
-        block_output_height = cfg['split_layer_0_h'].size[-1]
+        block_output_height = cfg['split_layer_1_h'].size[-1]
     else:
         # print('big: bind to ic_chunk_i')
         tensorize_axis = ic_chunk_i
@@ -110,7 +107,7 @@ def schedule_conv_conv_fused_nchwc_auto_search(cfg, outs, *args, **kwargs):
     libxsmm_tensorize = intrin_libxsmm_brgemm(
                                                 ic.dom.extent,                      # k of brgemm   -> ic
                                                 oc.dom.extent,                      # n of brgemm   -> oc
-                                                cfg['split_layer_0_w'].size[-1],    # m of brgemm   -> wi
+                                                cfg['split_layer_1_w'].size[-1],    # m of brgemm   -> wi
                                                 filters_cfg['Layer_0'].W,           #               -> rx
                                                 filters_cfg['Layer_0'].H,           #               -> ry
                                                 cfg['split_layer_0_rc'].size[-1],   #              -> rco_i
@@ -169,7 +166,7 @@ def schedule_conv_conv_fused_nchwc_auto_inference(cfg, outs, *args, **kwargs):
             axes.append(wo_1)
         if label == 'oc':
             axes.append(oc_chunk_i_1)
-    relu_compute_axis = wt if len(axes) == 0 else axes[-1] # compute relu at the axis right before the reduce axis
+    relu_compute_axis = h # wt if len(axes) == 0 else axes[-1] # compute relu at the axis right before the reduce axis
     if ic_idx < axis_labels.index('oc'):
         axes.append(oc_chunk_i_1)
     s[layer_output_dict['Layer_1']].reorder(n, oc_chunk_o, ht, wt, *axes, h, w, oc)
@@ -177,6 +174,7 @@ def schedule_conv_conv_fused_nchwc_auto_inference(cfg, outs, *args, **kwargs):
     # If has post ops
     if post_ops[1]:
         s[stage_dict['Output_1']].compute_at(s[layer_output_dict['Layer_1']], relu_compute_axis)
+        s[layer_output_dict['Layer_1']].unroll(w)
         _, oc_chunk_i_1, h, w, oc = s[stage_dict['Output_1']].op.axis
         if post_ops[1] != 'bias':
             s[stage_dict['Output_1_BiasAdd']].compute_inline()
@@ -245,14 +243,16 @@ def schedule_conv_conv_fused_nchwc_auto_inference(cfg, outs, *args, **kwargs):
     if hasPaddedInput[0]:
         s[stage_dict['PaddedInput_0']].compute_at(s[prev_consumer], bind_axis)
     n, oc_chunk, h, w, oc = s[layer_output_dict['Layer_0']].op.axis
+    s[layer_output_dict['Layer_0']].vectorize(oc)
     if post_ops[0]:
-        s[layer_output_dict['Layer_0']].vectorize(oc)
+        s[layer_output_dict['Layer_0']].unroll(w)
         s[stage_dict['Output_0']].compute_at(s[prev_consumer], bind_axis)
         _, oc_chunk, h, w, oc = s[stage_dict['Output_0']].op.axis
         if post_ops[0] != 'bias':
             s[stage_dict['Output_0_BiasAdd']].compute_inline()
-    ho, h = cfg['split_layer_0_h'].apply(s, stage_dict['Output_0'], h)
-    wo, w = cfg['split_layer_0_w'].apply(s, stage_dict['Output_0'], w)
+
+    ho, h = s[stage_dict['Output_0']].split(h, factor=cfg['split_layer_1_h'].size[-1])
+    wo, w = s[stage_dict['Output_0']].split(w, factor=cfg['split_layer_1_w'].size[-1])
     ic_chunk, ry, rx, ic = s[stage_dict['Output_0']].op.reduce_axis
     ic_chunk_o, ic_chunk_i = cfg['split_layer_0_rc'].apply(s, stage_dict['Output_0'], ic_chunk)
     s[stage_dict['Output_0']].reorder(oc_chunk, ic_chunk_o, ho, wo, h, ic_chunk_i, ry, rx, w, oc, ic)
@@ -261,10 +261,10 @@ def schedule_conv_conv_fused_nchwc_auto_inference(cfg, outs, *args, **kwargs):
     # Temporary skip the case of 1x1 stride > 1
     if (((filters_cfg['Layer_0'].H == 1 and filters_cfg['Layer_0'].W == 1 and \
             filters_cfg['Layer_0'].stride_h == 1 and filters_cfg['Layer_0'].stride_w == 1)) and \
-        (cfg['split_layer_0_h'].size[-2] > 1 and cfg['split_layer_0_w'].size[-1] == outputs_cfg['Layer_0'].W)): # HM > 1 & WI = OW (small W)
+        (cfg['split_layer_1_h'].size[-2] > 1 and cfg['split_layer_1_w'].size[-1] == outputs_cfg['Layer_0'].W)): # HM > 1 & WI = OW (small W)
         # print('small: bind to h')
         tensorize_axis = h
-        block_output_height = cfg['split_layer_0_h'].size[-1]
+        block_output_height = cfg['split_layer_1_h'].size[-1]
     else:
         # print('big: bind to ic_chunk_i')
         tensorize_axis = ic_chunk_i
@@ -273,7 +273,7 @@ def schedule_conv_conv_fused_nchwc_auto_inference(cfg, outs, *args, **kwargs):
     libxsmm_tensorize = intrin_libxsmm_brgemm(
                                                 ic.dom.extent,                      # k of brgemm   -> ic
                                                 oc.dom.extent,                      # n of brgemm   -> oc
-                                                cfg['split_layer_0_w'].size[-1],    # m of brgemm   -> wi
+                                                cfg['split_layer_1_w'].size[-1],    # m of brgemm   -> wi
                                                 filters_cfg['Layer_0'].W,           #               -> rx
                                                 filters_cfg['Layer_0'].H,           #               -> ry
                                                 cfg['split_layer_0_rc'].size[-1],   #               -> rco_i

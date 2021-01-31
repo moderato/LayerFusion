@@ -112,6 +112,13 @@ class FusionComposer:
                         if is_final_stage:
                             H_num_outputs = 3
                             W_num_outputs = 3
+
+                            self.cfg.define_split('split_layer_{}_h'.format(idx), self.cfg.axis(int(OH)),
+                                            num_outputs=H_num_outputs,
+                                            policy='factors')
+                            self.cfg.define_split('split_layer_{}_w'.format(idx), self.cfg.axis(int(OW)),
+                                                num_outputs=W_num_outputs,
+                                                policy='factors')
                         else:
                             H_num_outputs = 2
                             W_num_outputs = 2
@@ -123,13 +130,6 @@ class FusionComposer:
                         if is_first_stage:
                             self.cfg.define_split('split_layer_0_rc', self.cfg.axis(int(OC_chunk)),
                                             num_outputs=2,
-                                            policy='factors')
-
-                        self.cfg.define_split('split_layer_{}_h'.format(idx), self.cfg.axis(int(OH)),
-                                            num_outputs=H_num_outputs,
-                                            policy='factors')
-                        self.cfg.define_split('split_layer_{}_w'.format(idx), self.cfg.axis(int(OW)),
-                                            num_outputs=W_num_outputs,
                                             policy='factors')
 
         # Add flop

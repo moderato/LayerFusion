@@ -95,7 +95,8 @@ def verify_tuning(workload_name,
                                 number=TARGETS[target_str]["config_params"]["number"],
                                 repeat=TARGETS[target_str]["config_params"]["repeat"],
                                 timeout=TARGETS[target_str]["config_params"]["timeout"][name],
-                                min_repeat_ms=TARGETS[target_str]["config_params"]["min_repeat_ms"])
+                                min_repeat_ms=TARGETS[target_str]["config_params"]["min_repeat_ms"], enable_cpu_cache_flush=True
+                            )
                         )
                         tuner = autotvm.tuner.XGBTuner(task, feature_type="curve")
 
@@ -263,7 +264,7 @@ def verify_tuning(workload_name,
                 print('FLOP: {}, GFLOPS: {:.2f}.'.format(FLOP, FLOP / tcost_d / 1e9))
         else: # Fused
             if use_autotvm:
-                bind_axes = fc.get_reorder_axes()
+                # bind_axes = fc.get_reorder_axes()
                 for axis in ['w']:
                     if not skip_training:
                         log_name = 'logs/autotvm/layer/{}/fused/{}_fused_{}.log'.format(device, name, workload_name)
@@ -288,7 +289,7 @@ def verify_tuning(workload_name,
                                 number=TARGETS[target_str]["config_params"]["number"],
                                 repeat=TARGETS[target_str]["config_params"]["repeat"],
                                 timeout=TARGETS[target_str]["config_params"]["timeout"][name],
-                                min_repeat_ms=TARGETS[target_str]["config_params"]["min_repeat_ms"]
+                                min_repeat_ms=TARGETS[target_str]["config_params"]["min_repeat_ms"], enable_cpu_cache_flush=True
                             )
                         )
                         tuner = autotvm.tuner.XGBTuner(task, feature_type="curve")
@@ -308,8 +309,8 @@ def verify_tuning(workload_name,
                 # # autotvm.record.pick_best(log_name, "logs/autotvm/model/{}/test.log".format(device))
                 # dispatch_context = autotvm.apply_history_best(log_name)
                 # best_config = dispatch_context.query(task.target, task.workload)
-                # print('\nBest config:')
-                # print(best_config)
+                print('\nBest config:')
+                print(best_config)
 
                 # # apply history best from log file
                 # with dispatch_context:
@@ -340,7 +341,7 @@ def verify_tuning(workload_name,
                             number=TARGETS[target_str]["config_params"]["number"],
                             repeat=TARGETS[target_str]["config_params"]["repeat"],
                             timeout=TARGETS[target_str]["config_params"]["timeout"][name],
-                            min_repeat_ms=TARGETS[target_str]["config_params"]["min_repeat_ms"]
+                            min_repeat_ms=TARGETS[target_str]["config_params"]["min_repeat_ms"], enable_cpu_cache_flush=True
                         )
                     )
                     task.tune(tune_option)
