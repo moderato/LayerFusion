@@ -90,7 +90,7 @@ device_theoretical = {
     },
     'i7_7700K': {
         'FP32 GFLOPS': 537.6,
-        'DRAM': 62.22,
+        'DRAM': 34.7,
         'Cache': 500
     }
 }
@@ -98,8 +98,7 @@ arrowprops = dict(arrowstyle="-|>,head_width=0.15,head_length=0.55", linewidth="
 
 HOME = os.getenv('LF_HOME')
 
-merge = False
-
+merge = True
 for device in devices:
     for iter in iterations:
         filename = '{}_{}_plot'.format(device_name[device], iter)
@@ -343,6 +342,7 @@ for device in devices:
                     #     ax.annotate('', xy=(x0 + dx, y0 + dy), xytext=(x0, y0), arrowprops=arrowprops)
                     #     # ax.text(x0 * (0.98 if dx > 0 else 1.02), y0 * 0.98, labels[i], fontsize=8)
 
+                # Peak DRAM AI
                 ax.axvline(x=peaks_ai[idx], ymin=0, ymax=ymax, linestyle='--')
 
                 #### Plot roofline
@@ -402,6 +402,7 @@ for device in devices:
                         j += 1
             leg2 = fig.legend(handles, src_name, loc='lower right', bbox_to_anchor=(0.80, 0.05))
             plt.savefig(filename + '.png', bbox_inches='tight')
-            plt.savefig(filename + '.eps')
+            plt.savefig(filename + '.eps', bbox_inches='tight')
+            plt.savefig(filename + '.pdf', bbox_inches='tight')
 
             #plt.show()
