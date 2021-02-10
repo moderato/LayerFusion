@@ -377,11 +377,11 @@ class FusionComposer:
     def process_post_ops(self, Input, Bias):
         if self.pack:
             _, _, _, _, OC_vec = Input.shape
-            BiasAdd =  te.compute(Input.shape, lambda n, c_chunk, h, w, c_vec: Input[n, c_chunk, h, w, c_vec] + Bias[c_chunk * OC_vec + c_vec],
+            BiasAdd = te.compute(Input.shape, lambda n, c_chunk, h, w, c_vec: Input[n, c_chunk, h, w, c_vec] + Bias[c_chunk * OC_vec + c_vec],
                                 name='BiasAdd_{}'.format(self.layer_idx),
                                 tag='biasadd')
         else:
-            BiasAdd =  te.compute(Input.shape, lambda n, h, w, c: Input[n, h, w, c] + Bias[c],
+            BiasAdd = te.compute(Input.shape, lambda n, h, w, c: Input[n, h, w, c] + Bias[c],
                                 name='BiasAdd_{}'.format(self.layer_idx),
                                 tag='biasadd')
 

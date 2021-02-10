@@ -42,15 +42,18 @@ def gpu_schedules(name, is_autotvm=True, tuning=None):
             from .gpu.block_fused_schedule import schedule_block_fused_nhwc as f
     return f
 
-def get_stages_and_cfgs(outs):
+def get_stages_and_cfgs(s, outs):
     stage_dict = {}
     layer_output_dict = {}
     param_dict = {}
     def get_tensors(outs):
-        def traverse(prev_op_name, tensors):
+        def traverse(prev_tensor, tensors):
             for t in tensors:
                 op = t.op
                 name = op.name
+                prev_op_name = prev_tensor.op.name if prev_tensor is not None else None
+                if op not in s.outputs and (prev_op_name == 'T_add' or prev_op_name == 'T_relu') and isinstance(op, te.ComputeOp):
+                    s[op].compute_inline()
                 if 'PaddedInput' in name:
                     stage_dict[name] = t
                 elif 'BiasAdd' in name or 'ReLU' in name or 'ReLU6' in name or 'Sigmoid' in name:
@@ -72,12 +75,12 @@ def get_stages_and_cfgs(outs):
                         param_dict['{}_{}'.format('Bias', i)] = t
                     else:
                         continue
-                elif 'T_add' in name or 'T_relu': # Handing grouping of nn.fused_conv2d and add and/or relu during compilation
+                elif 'T_add' in name or 'T_relu' in name: # Handle it later in the outside function
                     pass
                 else:
-                    print(name)
-                    raise Exception("Unknown tensor type!")
-                traverse(name, op.input_tensors)
+                    raise Exception("Unknown tensor type: {}!".format(name))
+                traverse(t, op.input_tensors)
+
         outs = [outs] if isinstance(outs, te.tensor.Tensor) else outs
         traverse(None, outs)
 
@@ -110,5 +113,9 @@ def get_stages_and_cfgs(outs):
             padded.append(True)
         else:
             padded.append(False)
+
+    # The final output is some extra add or relu
+    if 'T_add' in outs[0].op.name or 'T_relu' in outs[0].op.name:
+        layer_output_dict['Layer_{}'.format(layer_num-1)] = outs[0]
 
     return stage_dict, layer_output_dict, param_dict, layer_num, post_ops, padded

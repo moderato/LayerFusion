@@ -16,7 +16,8 @@ import numpy as np
 import tvm
 from tvm import topi as topi
 import time
-from tvm.topi.util import get_const_tuple
+from tvm.topi.utils import get_const_tuple
+from tvm.topi import testing
 import math
 import xlwt
 import argparse
@@ -125,7 +126,7 @@ def get_ref_data(batch, out_channel, in_channel, input_height, input_width, kern
     a_np = np.random.uniform(size=(batch, in_channel, input_height, input_width)).astype(float)
     w_np = np.random.uniform(size=(out_channel, in_channel, kernel_height, kernel_width)).astype(float)
     if batch == 1:
-        b_np = topi.testing.conv2d_nchw_python(a_np, w_np, stride_height, padding)
+        b_np = testing.conv2d_nchw_python(a_np, w_np, stride_height, padding)
     if batch == 1:
         return a_np, w_np, b_np
 
@@ -427,8 +428,9 @@ def driver():
 
         tuner = autotvm.tuner.RandomTuner(task)
         # Please limit n_trial to reduce tuning time
-        n_trial= 32
-        log_file = 'logs/' + layer + '.log'
+        n_trial= 1500
+        log_file = '{}.log'.format(layer)
+        print(len(task.config_space))
 
         # comment out the following call to tuner to just run the best case from log file history
         tuner.tune(n_trial=n_trial,
@@ -472,7 +474,7 @@ def driver():
                 sheet1.write(row1, 1, gflops_tvm1)
 
         row1 = row1 + 1
-        book.save('logs/AutoTVM_tensorize_' + layer + '.xls')
+        book.save('AutoTVM_tensorize_' + layer + '.xls')
 
 if __name__ == '__main__':
     driver()

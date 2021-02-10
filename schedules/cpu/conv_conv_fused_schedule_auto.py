@@ -11,7 +11,7 @@ from .libxsmm_intrin import intrin_libxsmm_brgemm
 def schedule_conv_conv_fused_nchwc_auto_search(cfg, outs, *args, **kwargs):
     outs = [outs] if isinstance(outs, te.tensor.Tensor) else outs
     s = te.create_schedule([x.op for x in outs])
-    stage_dict, layer_output_dict, _, _, _, _ = get_stages_and_cfgs(outs)
+    stage_dict, layer_output_dict, _, _, _, hasPaddedInput = get_stages_and_cfgs(s, outs)
     inputs_cfg = kwargs['inputs_cfg']
     filters_cfg = kwargs['filters_cfg']
     outputs_cfg = kwargs['outputs_cfg']
@@ -75,7 +75,6 @@ def schedule_conv_conv_fused_nchwc_auto_search(cfg, outs, *args, **kwargs):
     else: # ic
         bind_axis = ic_chunk_o_1
     s[layer_output_dict['Layer_0']].compute_at(s[layer_output_dict['Layer_1']], bind_axis)
-    s[stage_dict['PaddedInput_0']].compute_at(s[layer_output_dict['Layer_1']], bind_axis)
 
     ######## Intermediate output
     n, oc_chunk, h, w, oc = s[layer_output_dict['Layer_0']].op.axis
@@ -119,6 +118,8 @@ def schedule_conv_conv_fused_nchwc_auto_search(cfg, outs, *args, **kwargs):
 
                                                 inputs_cfg['Layer_0'].C)
     s[layer_output_dict['Layer_0']].tensorize(tensorize_axis, libxsmm_tensorize)
+    if hasPaddedInput[0]:
+        s[stage_dict['PaddedInput_0']].compute_at(s[layer_output_dict['Layer_1']], bind_axis)
 
     s = s.normalize()
 
@@ -127,7 +128,7 @@ def schedule_conv_conv_fused_nchwc_auto_search(cfg, outs, *args, **kwargs):
 def schedule_conv_conv_fused_nchwc_auto_inference(cfg, outs, *args, **kwargs):
     outs = [outs] if isinstance(outs, te.tensor.Tensor) else outs
     s = te.create_schedule([x.op for x in outs])
-    stage_dict, layer_output_dict, _, _, post_ops, hasPaddedInput = get_stages_and_cfgs(outs)
+    stage_dict, layer_output_dict, _, _, post_ops, hasPaddedInput = get_stages_and_cfgs(s, outs)
     inputs_cfg = kwargs['inputs_cfg']
     filters_cfg = kwargs['filters_cfg']
     outputs_cfg = kwargs['outputs_cfg']
@@ -166,7 +167,7 @@ def schedule_conv_conv_fused_nchwc_auto_inference(cfg, outs, *args, **kwargs):
             axes.append(wo_1)
         if label == 'oc':
             axes.append(oc_chunk_i_1)
-    relu_compute_axis = h # wt if len(axes) == 0 else axes[-1] # compute relu at the axis right before the reduce axis
+    relu_compute_axis = wt if len(axes) == 0 else axes[-1] # compute relu at the axis right before the reduce axis
     if ic_idx < axis_labels.index('oc'):
         axes.append(oc_chunk_i_1)
     s[layer_output_dict['Layer_1']].reorder(n, oc_chunk_o, ht, wt, *axes, h, w, oc)
@@ -174,7 +175,6 @@ def schedule_conv_conv_fused_nchwc_auto_inference(cfg, outs, *args, **kwargs):
     # If has post ops
     if post_ops[1]:
         s[stage_dict['Output_1']].compute_at(s[layer_output_dict['Layer_1']], relu_compute_axis)
-        s[layer_output_dict['Layer_1']].unroll(w)
         _, oc_chunk_i_1, h, w, oc = s[stage_dict['Output_1']].op.axis
         if post_ops[1] != 'bias':
             s[stage_dict['Output_1_BiasAdd']].compute_inline()
@@ -240,12 +240,9 @@ def schedule_conv_conv_fused_nchwc_auto_inference(cfg, outs, *args, **kwargs):
     else: # ic
         bind_axis = ic_chunk_o_1
     s[layer_output_dict['Layer_0']].compute_at(s[prev_consumer], bind_axis)
-    if hasPaddedInput[0]:
-        s[stage_dict['PaddedInput_0']].compute_at(s[prev_consumer], bind_axis)
     n, oc_chunk, h, w, oc = s[layer_output_dict['Layer_0']].op.axis
     s[layer_output_dict['Layer_0']].vectorize(oc)
     if post_ops[0]:
-        s[layer_output_dict['Layer_0']].unroll(w)
         s[stage_dict['Output_0']].compute_at(s[prev_consumer], bind_axis)
         _, oc_chunk, h, w, oc = s[stage_dict['Output_0']].op.axis
         if post_ops[0] != 'bias':
@@ -285,6 +282,8 @@ def schedule_conv_conv_fused_nchwc_auto_inference(cfg, outs, *args, **kwargs):
 
                                                 inputs_cfg['Layer_0'].C)
     s[stage_dict['Output_0']].tensorize(tensorize_axis, libxsmm_tensorize)
+    if hasPaddedInput[0]:
+        s[stage_dict['PaddedInput_0']].compute_at(s[prev_consumer], bind_axis)
 
     s = s.normalize()
 

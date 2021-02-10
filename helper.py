@@ -626,7 +626,6 @@ class FusedConv2DCallback(DFPatternCallback):
         weight2 = node_map[self.weight2][0]
         bias2 = node_map[self.bias2][0]
 
-
         # print("============")
         # print(pre)
         # print("-------")
