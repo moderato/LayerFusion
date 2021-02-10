@@ -264,51 +264,49 @@ def verify_tuning(workload_name,
                 print('FLOP: {}, GFLOPS: {:.2f}.'.format(FLOP, FLOP / tcost_d / 1e9))
         else: # Fused
             if use_autotvm:
-                # bind_axes = fc.get_reorder_axes()
-                for axis in ['w']:
-                    if not skip_training:
-                        log_name = 'logs/autotvm/layer/{}/fused/{}_fused_{}.log'.format(device, name, workload_name)
-                        print(log_name)
+                log_name = 'logs/autotvm/layer/{}/fused/{}_fused_{}.log'.format(device, name, workload_name)
+                print(log_name)
 
-                        # # logging
-                        # logging.getLogger('autotvm').setLevel(logging.DEBUG)
-                        # logging.getLogger('autotvm').addHandler(logging.StreamHandler(sys.stdout))
+                # # logging
+                # logging.getLogger('autotvm').setLevel(logging.DEBUG)
+                # logging.getLogger('autotvm').addHandler(logging.StreamHandler(sys.stdout))
 
-                        # fused schedule auto
-                        sargs = autotvm.task.topi_integration.serialize_args([parameters, axis])
-                        task = autotvm.task.create('fused_conv2d.{}'.format('cuda' if target_str == 'cuda' else 'x86'), args=sargs, target=target)
-                        print(task.config_space)
-                        print(task.target)
-                        print(task.workload)
+                # fused schedule auto
+                sargs = autotvm.task.topi_integration.serialize_args([parameters])
+                task = autotvm.task.create('fused_conv2d.{}'.format('cuda' if target_str == 'cuda' else 'x86'), args=sargs, target=target)
+                print(task.config_space)
+                print(task.target)
+                print(task.workload)
 
-                        # autotvm setting
-                        measure_option = autotvm.measure_option(
-                            builder=autotvm.LocalBuilder(),
-                            runner=autotvm.RPCRunner(
-                                TARGETS[target_str]["key"], '0.0.0.0', 9190,
-                                number=TARGETS[target_str]["config_params"]["number"],
-                                repeat=TARGETS[target_str]["config_params"]["repeat"],
-                                timeout=TARGETS[target_str]["config_params"]["timeout"][name],
-                                min_repeat_ms=TARGETS[target_str]["config_params"]["min_repeat_ms"], enable_cpu_cache_flush=True
-                            )
+                if not skip_training:
+                    # autotvm setting
+                    measure_option = autotvm.measure_option(
+                        builder=autotvm.LocalBuilder(),
+                        runner=autotvm.RPCRunner(
+                            TARGETS[target_str]["key"], '0.0.0.0', 9190,
+                            number=TARGETS[target_str]["config_params"]["number"],
+                            repeat=TARGETS[target_str]["config_params"]["repeat"],
+                            timeout=TARGETS[target_str]["config_params"]["timeout"][name],
+                            min_repeat_ms=TARGETS[target_str]["config_params"]["min_repeat_ms"], enable_cpu_cache_flush=True
                         )
-                        tuner = autotvm.tuner.XGBTuner(task, feature_type="curve")
+                    )
+                    tuner = autotvm.tuner.XGBTuner(task, feature_type="curve")
 
-                        # Transfer learning if the training log exists
-                        if use_autotvm_transfer_learning and os.path.isfile(log_name):
-                            tuner.load_history(autotvm.record.load_from_file(log_name))
+                    # Transfer learning if the training log exists
+                    if use_autotvm_transfer_learning and os.path.isfile(log_name):
+                        tuner.load_history(autotvm.record.load_from_file(log_name))
 
-                        tuner.tune(n_trial=tuning_trials,
-                                    measure_option=measure_option,
-                                    callbacks=[autotvm.callback.progress_bar(min(tuning_trials, len(task.config_space))),
-                                                autotvm.callback.log_to_file(log_name)])
+                    tuner.tune(n_trial=tuning_trials,
+                                measure_option=measure_option,
+                                callbacks=[autotvm.callback.progress_bar(min(tuning_trials, len(task.config_space))),
+                                            autotvm.callback.log_to_file(log_name)])
 
-                s, flatten_params, best_config = fc.get_schedule_inference(target)
+                s, flatten_params = fc.get_schedule_inference(target)
 
-                # # inspect the best config
-                # # autotvm.record.pick_best(log_name, "logs/autotvm/model/{}/test.log".format(device))
-                # dispatch_context = autotvm.apply_history_best(log_name)
-                # best_config = dispatch_context.query(task.target, task.workload)
+                # inspect the best config
+                # autotvm.record.pick_best(log_name, "logs/autotvm/model/{}/test.log".format(device))
+                dispatch_context = autotvm.apply_history_best(log_name)
+                best_config = dispatch_context.query(task.target, task.workload)
                 print('\nBest config:')
                 print(best_config)
 

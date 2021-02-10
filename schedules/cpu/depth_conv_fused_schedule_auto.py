@@ -12,9 +12,7 @@ def schedule_depth_conv_fused_nchwc_auto_search(cfg, outs, *args, **kwargs):
     inputs_cfg = kwargs['inputs_cfg']
     filters_cfg = kwargs['filters_cfg']
     outputs_cfg = kwargs['outputs_cfg']
-    axis = 'w'
-    if 'bind_axis' in kwargs.keys():
-        axis = kwargs['bind_axis']
+    axis = ['oc', 'ic', 'h', 'w'][cfg['bind_axis'].val]
 
     n, oc_chunk, h, w, oc = s[layer_output_dict['Layer_1']].op.axis
     oc_chunk_o, oc_chunk_i = cfg['split_layer_1_c'].apply(s, layer_output_dict['Layer_1'], oc_chunk)
@@ -96,10 +94,7 @@ def schedule_depth_conv_fused_nchwc_auto_inference(cfg, outs, *args, **kwargs):
     inputs_cfg = kwargs['inputs_cfg']
     filters_cfg = kwargs['filters_cfg']
     outputs_cfg = kwargs['outputs_cfg']
-    axis = 'w'
-    if 'bind_axis' in kwargs.keys():
-        axis = kwargs['bind_axis']
-    print(axis)
+    axis = ['oc', 'ic', 'h', 'w'][cfg['bind_axis'].val]
 
     ######## Final output
     n, oc_chunk, h, w, oc = s[layer_output_dict['Layer_1']].op.axis

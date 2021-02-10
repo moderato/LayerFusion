@@ -73,6 +73,8 @@ class FusionComposer:
                     FILTER.update_shape(vlen_i, vlen_o)
                     OUTPUT.update_shape(vlen_o) # Actually overlapped with the input of next layer
 
+                    self.cfg.define_knob('bind_axis', [3])
+
                 if self.target.kind.name == 'cuda' or self.target.device_name == 'tracing':
                     _, OH, OW, OC = OUTPUT.get_shape()
                     c_filter = lambda x: x.size[-1] in get_vlen(OC, self.target.kind.name)
@@ -221,9 +223,6 @@ class FusionComposer:
 
         return None
 
-    def get_reorder_axes(self):
-        return self.reorder_axes
-
     def __init__(self, p, pack=None, use_autotvm=True, use_auto_scheduler=False, target=None, dtype='float32', workload_name=None):
         self.cfg = None
         self.parameters = p
@@ -245,7 +244,6 @@ class FusionComposer:
         self.layers = get_4D_shapes_from_params(p)
         self.layer_num = len(self.layers) - 1 # Excluding input
         self.workload_name = workload_name # mv1_1, res_2x, etc
-        self.reorder_axes = ['oc', 'ic', 'h', 'w'] # For CPU
 
         # Temporary variables for composing compute
         self.filter_cfg = None
@@ -448,7 +446,7 @@ class FusionComposer:
 
         def autotvm_wrapper(input_tensors):
             task_env = TaskExtractEnv.current
-            args = autotvm.task.topi_integration.serialize_args([self.parameters, 'w']) # Currently only support binding to W (the fastest) for model test. This is because attrs["workload"] only allows one workload. TODO: Fix it.
+            args = autotvm.task.topi_integration.serialize_args([self.parameters])
             if task_env is not None and task_env.tracing:
                 task_env.add_task(self.task_name, args)
             workload = ((self.task_name),) + args
@@ -484,53 +482,32 @@ class FusionComposer:
 
         return compute if raw_compute else autotvm_wrapper
 
-    def get_schedule(self, target=None, tuning=False, bind_axis='w'):
+    def get_schedule(self, target=None, tuning=False):
         assert not (not tuning and target is None)
         task_env = TaskExtractEnv.current
 
         if not self.use_autotvm:
             cfg = None
             self.update_all_shapes_from_best_cfg(cfg)
-            best_axis = bind_axis
         else:
             if tuning:
                 # Define search space
                 self.cfg = autotvm.get_config()
                 self.define_search_space()
                 cfg = self.cfg
-                best_axis = bind_axis
             else: # inference
                 dispatch_ctx = autotvm.task.DispatchContext.current
                 if not dispatch_ctx or isinstance(dispatch_ctx, autotvm.task.FallbackContext):
                     log_name = '{}/fused/{}'.format(self.dir_name, self.log_name)
                     dispatch_ctx = autotvm.apply_history_best(log_name)
-                if self.reorder_axes:
-                    lowest_cost = 1e10
-                    best_cfg = None
-                    best_axis = None
-                    for axis in ['w']:
-                        workload = ((self.task_name),) + autotvm.task.topi_integration.serialize_args([self.parameters, axis])
-                        cfg = dispatch_ctx.query(target, workload)
-                        if cfg.cost is None:
-                            continue
-                        if cfg.cost < lowest_cost:
-                            best_cfg = cfg
-                            lowest_cost = cfg.cost
-                            best_axis = axis
-                            print(best_axis, lowest_cost)
-                    cfg = best_cfg
-                else:
-                    workload = ((self.task_name),) + autotvm.task.topi_integration.serialize_args([self.parameters])
-                    cfg = dispatch_ctx.query(target, workload)
+                workload = ((self.task_name),) + autotvm.task.topi_integration.serialize_args([self.parameters])
+                cfg = dispatch_ctx.query(target, workload)
 
                 if task_env and not task_env.tracing and cfg.is_fallback:
                     print("---[[[ AutoTVM cfg not found! ]]]---")
 
                 # Update the tensor shapes with the best config
                 self.update_all_shapes_from_best_cfg(cfg)
-        
-        # Pass this to the get_schedule_inference function. TODO: Figure out a better way.
-        self.cfg = cfg
 
         def wrapper(outs):
             def raw_schedule():
@@ -549,9 +526,9 @@ class FusionComposer:
                     filters_cfg['Layer_{}'.format(l)] = self.get_filter_cfg(l)
                     outputs_cfg['Layer_{}'.format(l)] = self.get_output_cfg(l)
                 if cfg is not None:
-                    s = f(cfg, outs, inputs_cfg=inputs_cfg, filters_cfg=filters_cfg, outputs_cfg=outputs_cfg, bind_axis=best_axis)
+                    s = f(cfg, outs, inputs_cfg=inputs_cfg, filters_cfg=filters_cfg, outputs_cfg=outputs_cfg)
                 else:
-                    s = f(outs, inputs_cfg=inputs_cfg, filters_cfg=filters_cfg, outputs_cfg=outputs_cfg, bind_axis=best_axis)
+                    s = f(outs, inputs_cfg=inputs_cfg, filters_cfg=filters_cfg, outputs_cfg=outputs_cfg)
             elif self.target.kind.name == 'cuda': # CUDA
                 if cfg is not None:
                     s = f(cfg, outs)
@@ -578,7 +555,7 @@ class FusionComposer:
         all_tensors = input_tensors + [output_tensor]
 
         s = schedule(output_tensor)
-        return s, all_tensors, self.cfg
+        return s, all_tensors
 
     def print_info(self):
         for i in range(self.layer_num):
@@ -716,7 +693,7 @@ def get_schedule_tuning_cuda(parameters):
     return s, all_tensors
 
 @autotvm.template('fused_conv2d.x86')
-def get_schedule_tuning_x86(parameters, bind_axis):
+def get_schedule_tuning_x86(parameters):
     target = tvm.target.Target('llvm')
 
     # A workaround for CPU autotuning
@@ -730,7 +707,7 @@ def get_schedule_tuning_x86(parameters, bind_axis):
     fc = FusionComposer(parameters, target=target)
 
     # Get schedule
-    schedule = fc.get_schedule(tuning=True, bind_axis=bind_axis)
+    schedule = fc.get_schedule(tuning=True)
 
     # Get compute
     compute = fc.get_compute()
