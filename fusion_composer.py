@@ -73,7 +73,7 @@ class FusionComposer:
                     FILTER.update_shape(vlen_i, vlen_o)
                     OUTPUT.update_shape(vlen_o) # Actually overlapped with the input of next layer
 
-                    self.cfg.define_knob('bind_axis', [3])
+                    self.cfg.define_knob('bind_axis', [0, 1, 2, 3, 4]) # 'oc', 'ic', 'h', 'w', 'root'
 
                 if self.target.kind.name == 'cuda' or self.target.device_name == 'tracing':
                     _, OH, OW, OC = OUTPUT.get_shape()

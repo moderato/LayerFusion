@@ -3,7 +3,7 @@ import tvm.relay as relay
 from tvm.topi.utils import simplify, get_const_tuple
 from tvm.topi.nn.utils import get_pad_tuple
 from tvm import autotvm, te
-from tvm.autotvm.task.space import FallbackConfigEntity
+from tvm.autotvm.task.space import FallbackConfigEntity, OtherOptionEntity
 from tvm.relay.dataflow_pattern import wildcard, is_op, is_constant, is_expr, is_var, rewrite, TupleGetItemPattern, DFPatternCallback
 from tvm.relay.build_module import bind_params_by_name
 from tvm.relay.testing import run_opt_pass
@@ -586,6 +586,44 @@ def update_fusion_logs_with_axis(log_dir, log_name, axis):
 
         if new_mi not in d2.keys():
             d3[new_mi] = v
+
+    print(len(d1.keys()))
+    print(len(d2.keys()))
+    print(len(d3.keys()))
+
+    with open(new_logfile, "a") as f:
+        for k, v in d3.items():
+            f.write(autotvm.record.encode(k, v) + "\n")
+
+def remove_axis_from_logs(log_dir, log_name, axis):
+    logfile = '{}/fused_{}/{}'.format(log_dir, axis, log_name)
+    if not os.path.isfile(logfile):
+        return
+    print(logfile)
+    new_logfile = '{}/fused/{}'.format(log_dir, log_name)
+
+    d1 = {}
+    records = autotvm.record.load_from_file(logfile)
+    for k, v in records:
+        d1[k] = v
+
+    d2 = {}
+    if os.path.isfile(new_logfile):
+        records = autotvm.record.load_from_file(new_logfile)
+        for k, v in records:
+            d2[k] = v
+
+    d3 = {}
+    for k, v in d1.items():
+        tgt, tsk, config = k.target, k.task, k.config
+        name, args = tsk.name, tsk.args
+        if 'fused' not in name:
+            continue
+        config._entity_map['bind_axis'] = OtherOptionEntity(['oc', 'ic', 'h', 'w'].index(axis))
+        new_args = tuple([args[0]])
+        new_tsk = autotvm.task.Task(name, new_args)
+        new_mi = autotvm.MeasureInput(tgt, new_tsk, config)
+        d3[new_mi] = v
 
     print(len(d1.keys()))
     print(len(d2.keys()))

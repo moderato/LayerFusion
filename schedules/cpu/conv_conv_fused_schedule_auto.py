@@ -15,7 +15,7 @@ def schedule_conv_conv_fused_nchwc_auto_search(cfg, outs, *args, **kwargs):
     inputs_cfg = kwargs['inputs_cfg']
     filters_cfg = kwargs['filters_cfg']
     outputs_cfg = kwargs['outputs_cfg']
-    axis = ['oc', 'ic', 'h', 'w'][cfg['bind_axis'].val]
+    axis = ['oc', 'ic', 'h', 'w', 'root'][cfg['bind_axis'].val]
 
     ######## Final output
     n, oc_chunk, h, w, oc = s[layer_output_dict['Layer_1']].op.axis
@@ -70,8 +70,10 @@ def schedule_conv_conv_fused_nchwc_auto_search(cfg, outs, *args, **kwargs):
         bind_axis = ho_1
     elif axis == 'oc':
         bind_axis = oc_chunk_i_1
-    else: # ic
+    elif axis == 'ic':
         bind_axis = ic_chunk_o_1
+    else:
+        bind_axis = fused_blx
     s[layer_output_dict['Layer_0']].compute_at(s[layer_output_dict['Layer_1']], bind_axis)
 
     ######## Intermediate output
@@ -130,7 +132,7 @@ def schedule_conv_conv_fused_nchwc_auto_inference(cfg, outs, *args, **kwargs):
     inputs_cfg = kwargs['inputs_cfg']
     filters_cfg = kwargs['filters_cfg']
     outputs_cfg = kwargs['outputs_cfg']
-    axis = ['oc', 'ic', 'h', 'w'][cfg['bind_axis'].val]
+    axis = ['oc', 'ic', 'h', 'w', 'root'][cfg['bind_axis'].val]
 
     ######## Final output
     n, oc_chunk, h, w, oc = s[layer_output_dict['Layer_1']].op.axis
@@ -225,15 +227,18 @@ def schedule_conv_conv_fused_nchwc_auto_inference(cfg, outs, *args, **kwargs):
                                                 inputs_cfg['Layer_1'].C)
     s[stage_dict['Output_1']].tensorize(tensorize_axis, libxsmm_tensorize)
 
-    ######## Intermediate output
     if axis == 'w':
         bind_axis = wo_1
     elif axis == 'h':
         bind_axis = ho_1
     elif axis == 'oc':
         bind_axis = oc_chunk_i_1
-    else: # ic
+    elif axis == 'ic':
         bind_axis = ic_chunk_o_1
+    else:
+        bind_axis = fused_blx
+
+    ######## Intermediate output
     s[layer_output_dict['Layer_0']].compute_at(s[prev_consumer], bind_axis)
     n, oc_chunk, h, w, oc = s[layer_output_dict['Layer_0']].op.axis
     s[layer_output_dict['Layer_0']].vectorize(oc)

@@ -23,8 +23,7 @@ def verify_tuning(workload_name,
     use_auto_scheduler = tuning_opt.use_auto_scheduler
     skip_training = tuning_opt.skip_training
     use_autotvm_transfer_learning = tuning_opt.use_autotvm_transfer_learning
-    tuning_trials = tuning_opt.tuning_trials
-    tuning_trials = tuning_opt.tuning_trials
+    tuning_trials = tuning_opt.tuning_trials if name == 'depth_conv' else 2 * tuning_opt.tuning_trials
     unfused = tuning_opt.unfused
 
     def check_target(target_str):
