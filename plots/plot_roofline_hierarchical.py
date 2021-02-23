@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from itertools import chain
 import sys, os, json, math
-font = {'size' : 15}
+font = {'size': 20}
 plt.rc('font', **font)
 
 def flatten_list(lst):
@@ -91,7 +91,7 @@ device_theoretical = {
     'i7_7700K': {
         'FP32 GFLOPS': 537.6,
         'DRAM': 34.7,
-        'Cache': 500
+        'Cache': 200
     }
 }
 arrowprops = dict(arrowstyle="-|>,head_width=0.15,head_length=0.55", linewidth="0.001", shrinkA=0, shrinkB=0, fc="k", ec="k")
@@ -175,7 +175,6 @@ for device in devices:
                     flop = get_FLOP(parameters)
                     mem = get_theoretical_mem_bytes(parameters)
                     peaks_ai.append(flop * 1.0 / mem)
-            print(peaks_ai)
 
             if read_empirical:
                 device_info_file_dir = device_empirical[device]
@@ -204,10 +203,10 @@ for device in devices:
                     gflops_roof_name.append('FP32')
                     gflops_roof.append(device_info['FP32 GFLOPS'])
 
-            print(AI, FLOPS, \
-                    labels, \
-                    gflops_roof, gflops_roof_name, \
-                    BW_roof, BW_roof_name)
+            # print(AI, FLOPS, \
+            #         labels, \
+            #         gflops_roof, gflops_roof_name, \
+            #         BW_roof, BW_roof_name)
 
             nx = 10000
             if device == "gpu":
@@ -225,7 +224,7 @@ for device in devices:
                 print(ymin, ymax, xmin, xmax)
 
             label_count = len(labels)
-            cols = 5
+            cols = 6
             rows = (label_count + cols - 1) // cols
             fig, axes = plt.subplots(nrows=rows, ncols=cols, figsize=(cols * 5, rows * 4))
 
@@ -380,18 +379,18 @@ for device in devices:
             for i in range(len(labels), cols * rows):
                 fig.delaxes(axes.flat[i])
 
-            # Device name
-            fig.text(0.5, 0.9, device_name[device], ha='center')
+            # # Device name
+            # fig.text(0.5, 0.9, device_name[device], ha='center')
             
             # Common axis labels
-            fig.text(0.5, 0.1, 'Arithmetic Intensity [FLOPs/Byte]', ha='center')
-            fig.text(0.1, 0.5, 'Performance [GFLOP/sec]', va='center', rotation='vertical')
+            fig.text(0.5, 0.01, 'Arithmetic Intensity [FLOPs/Byte]', ha='center', fontsize=24)
+            fig.text(0.001, 0.5, 'Performance [GFLOP/sec]', va='center', rotation='vertical', fontsize=24)
 
             handles = list()
             if merge:
-                src_name = ['fused (DRAM)', 'TVM (DRAM)', 'MKLDNN (DRAM)', 'fused (Cache)', 'TVM (Cache)', 'MKLDNN (Cache)']
+                src_name = ['TVM fused (DRAM)', 'TVM separate (DRAM)', 'MKLDNN (DRAM)', 'TVM fused (L2)', 'TVM separate (L2)', 'MKLDNN (L2)']
             else:
-                src_name = ['fused (DRAM)', 'TVM layer_0 (DRAM)', 'TVM layer_1 (DRAM)', 'Library layer_0 (DRAM)', 'Library layer_1 (DRAM)', 'fused (Cache)', 'TVM layer_0 (Cache)', 'TVM layer_1 (Cache)', 'Library layer_0 (Cache)', 'Library layer_1 (Cache)']
+                src_name = ['TVM fused (DRAM)', 'TVM layer_0 (DRAM)', 'TVM layer_1 (DRAM)', 'Library layer_0 (DRAM)', 'Library layer_1 (DRAM)', 'TVM fused (L2)', 'TVM layer_0 (L2)', 'TVM layer_1 (L2)', 'Library layer_0 (L2)', 'Library layer_1 (L2)']
             j = 0
             for i in range(0, len(src_name)):
                 handles.append(Line2D([], [], color=colors[j], marker='*' if i < len(src_name) // 2 else '^', linestyle='None', markersize=markersize))
@@ -400,9 +399,8 @@ for device in devices:
                 else:
                     if not ((i % 5 == 1) or (i % 5 == 3)):
                         j += 1
-            leg2 = fig.legend(handles, src_name, loc='lower right', bbox_to_anchor=(0.80, 0.05))
+            leg2 = fig.legend(handles, src_name, loc='lower right', bbox_to_anchor=(0.98, 0.01))
+            plt.tight_layout()
             plt.savefig(filename + '.png', bbox_inches='tight')
             plt.savefig(filename + '.eps', bbox_inches='tight')
             plt.savefig(filename + '.pdf', bbox_inches='tight')
-
-            #plt.show()

@@ -27,8 +27,6 @@ if __name__ == '__main__':
             flop_1_th, flop_2_th = fc.get_FLOP_per_layer()
             
             flop_file = 'logs/flop/cpu/20/{}.csv'.format(w)
-            # if not os.path.isfile(flop_file):
-            #     continue
             with open(flop_file, 'r') as f:
                 lines = f.readlines()
             fused_flop_em = float(lines[1].split(',')[0])
@@ -99,30 +97,35 @@ if __name__ == '__main__':
             mkldnn_flops.append((flop_1_em_mkldnn + flop_2_em_mkldnn) / (layer_1_time_mkldnn + layer_2_time_mkldnn) / 1000)
 
     cpus = {
-        'names': ['i7_7700K', 'GCP'],
-        'L3': [8, 24.75],
-        'L2': [1, 4],
-        'L1': [0.25, 0.25],
-        'peaks': [511, 0]
+        'names': ['i7_7700K', 'GCP Intel', 'GCP AMD'],
+        'L3': [8, 24.75, 16],
+        'L2': [1, 4, 2],
+        'L1': [0.25, 0.25, 0.25],
+        'peaks': [511, 710, 413]
     }
     fig, ax = plt.subplots()
     ax.bar(keys, footprints, color='lightskyblue')
     ax.set_ylabel('Footprint Size (MB)')
     ax.set_yscale('log')
-    line_styles = ['--', ':']
-    colors = ['red', 'black']
+    line_styles = ['--', ':', '-.']
+    colors = ['red', 'black', 'green']
 
     lines = []
-    for i in range(2):
+    for i in range(len(cpus['names'])):
         L1 = cpus['L1'][i]
         L2 = cpus['L2'][i]
         L3 = cpus['L3'][i]
         h0 = ax.axhline(L3, 0, 1, linestyle=line_styles[i], color=colors[i])
+        ax.text(-1.5, L3*1.1, 'L3')
         _ = ax.axhline(L2, 0, 1, linestyle=line_styles[i], color=colors[i])
+        ax.text(-1.5, L2*1.1, 'L2')
         _ = ax.axhline(L1, 0, 1, linestyle=line_styles[i], color=colors[i])
+        if i == 0:
+            ax.text(-1.5, L1*1.1, 'L1')
         lines.append(h0)
         ax.set_xticklabels(keys, rotation=45, fontsize=8)
-    ax.legend(lines, cpus['names'])
+    ax.legend(lines, cpus['names'], loc='upper right')
+    fig.set_size_inches(12, 5)
 
     y_ticks = [min(cpus['L1'])]
     tmp = y_ticks[0]
@@ -170,12 +173,26 @@ if __name__ == '__main__':
     a = ax.bar([x-width for x in x_axis], [x / y for x, y in zip(fused_flops, mkldnn_flops)], width=0.2)
     b = ax.bar(x_axis, [x / y for x, y in zip(tvm_flops, mkldnn_flops)], width=0.2)
     c = ax.bar([x+width for x in x_axis], [1 for x in mkldnn_flops], width=0.2)
-    ax.set_ylim([0.2, 1.5])
-    ax.legend([a, b, c], ['TVM fused', 'TVM separate', 'MKLDNN'], fontsize=11)
+    ax.set_ylim([0.15, 1.5])
+    ax.legend([a, b, c], ['TVM fused', 'TVM separate', 'MKLDNN'], fontsize=11, bbox_to_anchor=(0.84, 0.65))
     ax.set_xticks(x_axis)
     ax.set_xticklabels(keys, rotation=45, fontsize=12)
+    yticks = ax.get_yticks()
+    for y in yticks:
+        ax.axhline(y, 0, 1, linestyle='--', linewidth=0.3, color='black')
     fig.set_size_inches(12, 3.5)
     plt.tight_layout()
     plt.savefig('flops_normalized.png', bbox_inches='tight')
     plt.savefig('flops_normalized.eps', bbox_inches='tight')
     plt.savefig('flops_normalized.pdf', bbox_inches='tight')
+
+    speedup_1 = 1
+    for a in [x / y for x, y in zip(fused_flops, mkldnn_flops)]:
+        speedup_1 *= a
+    speedup_2 = 1
+    for a in [x / y for x, y in zip(fused_flops, tvm_flops)]:
+        speedup_2 *= a
+    print(speedup_1, speedup_2, \
+            max([x / y for x, y in zip(fused_flops, mkldnn_flops)]), \
+                max([x / y for x, y in zip(fused_flops, tvm_flops)]), \
+                    len([x / y for x, y in zip(fused_flops, mkldnn_flops)]))
