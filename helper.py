@@ -340,17 +340,31 @@ def get_workloads():
     # conv_conv_workloads['alex_3_4'] = (1, 27, 27, 256, 3, 384, 2, False, None, 3, 384, 2, False, None, False)
     # conv_conv_workloads['alex_4_5'] = (1, 13, 13, 384, 3, 384, 1, False, None, 3, 256, 1, False, None, False)
 
-    # # VGG
-    # conv_conv_workloads['vgg_3_4'] = (1, 112, 112, 128, 3, 128, 1, False, None, 3, 128, 1, False, None, False)
-    # conv_conv_workloads['vgg_5_6'] = (1, 56, 56, 256, 3, 256, 1, False, None, 3, 256, 1, False, None, False)
-    # conv_conv_workloads['vgg_8_9'] = (1, 28, 28, 512, 3, 512, 1, False, None, 3, 512, 1, False, None, False)
-    # conv_conv_workloads['vgg_11_12'] = (1, 14, 14, 512, 3, 512, 1, False, None, 3, 512, 1, False, None, False)
+    # VGG
+    conv_conv_workloads['vgg_3_4'] = (1, 112, 112, 128, 3, 128, 1, False, None, 3, 128, 1, False, None, False)
+    conv_conv_workloads['vgg_5_6'] = (1, 56, 56, 256, 3, 256, 1, False, None, 3, 256, 1, False, None, False)
+    conv_conv_workloads['vgg_8_9'] = (1, 28, 28, 512, 3, 512, 1, False, None, 3, 512, 1, False, None, False)
+    conv_conv_workloads['vgg_11_12'] = (1, 14, 14, 512, 3, 512, 1, False, None, 3, 512, 1, False, None, False)
 
-    # # ResNet-50
-    # conv_conv_workloads['res_2x'] = (1, 56, 56, 64, 3, 64, 1, False, 'relu', 1, 256, 1, False, 'bias', False)
-    # conv_conv_workloads['res_3x'] = (1, 28, 28, 128, 3, 128, 1, False, 'relu', 1, 512, 1, False, 'bias', False)
-    # conv_conv_workloads['res_4x'] = (1, 14, 14, 256, 3, 256, 1, False, 'relu', 1, 1024, 1, False, 'bias', False)
-    # conv_conv_workloads['res_5x'] = (1, 7, 7, 512, 3, 512, 1, False, 'relu', 1, 2048, 1, False, 'bias', False)
+    # ResNet-18
+    conv_conv_workloads['res_2x'] = (1, 56, 56, 64, 3, 64, 1, False, 'relu', 3, 64, 1, False, 'bias', False)
+    conv_conv_workloads['res_3x'] = (1, 28, 28, 128, 3, 128, 1, False, 'relu', 3, 128, 1, False, 'bias', False)
+    conv_conv_workloads['res_4x'] = (1, 14, 14, 256, 3, 256, 1, False, 'relu', 3, 256, 1, False, 'bias', False)
+    conv_conv_workloads['res_5x'] = (1, 7, 7, 512, 3, 512, 1, False, 'relu', 3, 512, 1, False, 'bias', False)
+    conv_conv_workloads['res_2x_s2'] = (1, 56, 56, 64, 3, 64, 2, False, 'relu', 3, 64, 1, False, 'bias', False)
+    conv_conv_workloads['res_3x_s2'] = (1, 28, 28, 128, 3, 128, 2, False, 'relu', 3, 128, 1, False, 'bias', False)
+    conv_conv_workloads['res_4x_s2'] = (1, 14, 14, 256, 3, 256, 2, False, 'relu', 3, 256, 1, False, 'bias', False)
+    conv_conv_workloads['res_5x_s2'] = (1, 7, 7, 512, 3, 512, 2, False, 'relu', 3, 512, 1, False, 'bias', False)
+
+    # ResNet-50
+    # conv_conv_workloads['res_2x_b_1'] = (1, 56, 56, 64, 1, 64, 1, False, 'relu', 3, 64, 1, False, 'relu', False)
+    # conv_conv_workloads['res_3x_b_1'] = (1, 28, 28, 128, 1, 128, 1, False, 'relu', 3, 128, 1, False, 'relu', False)
+    # conv_conv_workloads['res_4x_b_1'] = (1, 14, 14, 256, 1, 256, 1, False, 'relu', 3, 256, 1, False, 'relu', False)
+    # conv_conv_workloads['res_5x_b_1'] = (1, 7, 7, 512, 1, 512, 1, False, 'relu', 3, 512, 1, False, 'relu', False)
+    conv_conv_workloads['res_2x_b_2'] = (1, 56, 56, 64, 3, 64, 1, False, 'relu', 1, 256, 1, False, 'bias', False)
+    conv_conv_workloads['res_3x_b_2'] = (1, 28, 28, 128, 3, 128, 1, False, 'relu', 1, 512, 1, False, 'bias', False)
+    conv_conv_workloads['res_4x_b_2'] = (1, 14, 14, 256, 3, 256, 1, False, 'relu', 1, 1024, 1, False, 'bias', False)
+    conv_conv_workloads['res_5x_b_2'] = (1, 7, 7, 512, 3, 512, 1, False, 'relu', 1, 2048, 1, False, 'bias', False)
 
     # # Test
     # conv_conv_workloads['conv_conv_test_tiny'] = (1, 8, 8, 1, 3, 1, 1, False, None, 1, 1, 1, False, None, False)

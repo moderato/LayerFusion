@@ -74,6 +74,8 @@ def schedule_conv_conv_fused_nchwc_auto_search(cfg, outs, *args, **kwargs):
         bind_axis = ic_chunk_o_1
     else:
         bind_axis = fused_blx
+    if hasPaddedInput[1]:
+        s[stage_dict['PaddedInput_1']].compute_at(s[layer_output_dict['Layer_1']], bind_axis)
     s[layer_output_dict['Layer_0']].compute_at(s[layer_output_dict['Layer_1']], bind_axis)
 
     ######## Intermediate output
@@ -237,6 +239,8 @@ def schedule_conv_conv_fused_nchwc_auto_inference(cfg, outs, *args, **kwargs):
         bind_axis = ic_chunk_o_1
     else:
         bind_axis = fused_blx
+    if hasPaddedInput[1]:
+        s[stage_dict['PaddedInput_1']].compute_at(s[prev_consumer], bind_axis)
 
     ######## Intermediate output
     s[layer_output_dict['Layer_0']].compute_at(s[prev_consumer], bind_axis)
