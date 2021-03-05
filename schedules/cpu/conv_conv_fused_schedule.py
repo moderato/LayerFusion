@@ -6,13 +6,13 @@ from .libxsmm_intrin import intrin_libxsmm_brgemm
 def schedule_conv_conv_fused_nchwc(outs, *args, **kwargs):
     outs = [outs] if isinstance(outs, te.tensor.Tensor) else outs
     s = te.create_schedule([x.op for x in outs])
-    stage_dict, layer_output_dict, _, _, post_ops, hasPaddedInput = get_stages_and_cfgs(outs)
+    stage_dict, layer_output_dict, _, _, post_ops, hasPaddedInput = get_stages_and_cfgs(s, outs)
     inputs_cfg = kwargs['inputs_cfg']
     filters_cfg = kwargs['filters_cfg']
     outputs_cfg = kwargs['outputs_cfg']
 
     ######## Searchable parameters
-    # --------------------
+    # -------------------- res_3x
     output_step_tile_size_h = 1
     output_step_tile_size_w = 28
     step_num_h = 28
@@ -22,6 +22,16 @@ def schedule_conv_conv_fused_nchwc(outs, *args, **kwargs):
     c_split2 = 4
     reduce_split1 = 2
     reduce_split2 = 2
+    # -------------------- conv3_conv3_test_tiny
+    # output_step_tile_size_h = 1
+    # output_step_tile_size_w = 8
+    # step_num_h = 2
+    # step_num_w = 2
+    # output_tile_0_h = 2
+    # output_tile_0_w = 1
+    # c_split2 = 4
+    # reduce_split1 = 2
+    # reduce_split2 = 2
     # --------------------
     output_tile_size_h = output_step_tile_size_h * step_num_h
     output_tile_size_w = output_step_tile_size_w * step_num_w
@@ -73,9 +83,11 @@ def schedule_conv_conv_fused_nchwc(outs, *args, **kwargs):
     s[stage_dict['Output_1']].tensorize(tensorize_axis, libxsmm_tensorize)
 
     ######## Intermediate output
-    s[layer_output_dict['Layer_0']].compute_at(s[stage_dict['Output_1']], wo_1)
+    if hasPaddedInput[1]:
+        s[stage_dict['PaddedInput_1']].compute_at(s[stage_dict['Output_1']], fused_blx)
+    s[layer_output_dict['Layer_0']].compute_at(s[stage_dict['Output_1']], fused_blx)
     if hasPaddedInput[0]:
-        s[stage_dict['PaddedInput_0']].compute_at(s[stage_dict['Output_1']], wo_1)
+        s[stage_dict['PaddedInput_0']].compute_at(s[stage_dict['Output_1']], fused_blx)
     n, oc_chunk, h, w, oc = s[layer_output_dict['Layer_0']].op.axis
     if post_ops[0]:
         s[layer_output_dict['Layer_0']].vectorize(oc)
