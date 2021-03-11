@@ -212,7 +212,7 @@ def verify_tuning(workload_name,
                 kernel_np = np.random.uniform(0.0, 0.1, size=get_const_tuple(params[l][1].shape)).astype(dtype)
                 o, i, h, w = kernel_np.shape
                 kernel_np_6D = np.array(kernel_np.reshape((o//vlen_oc, vlen_oc, 1, 1, h, w) if depthwises[l] else (o//vlen_oc, vlen_oc, i//vlen_ic, vlen_ic, h, w)).transpose(0, 2, 4, 5, 3, 1), order='C')
-                if l == 0:
+                if h == 3:
                     ref_data = [kernel_np_6D] + ref_data
                     nd_arrays = [tvm.nd.array(kernel_np_6D, ctx)] + nd_arrays
                 else:
@@ -266,9 +266,9 @@ def verify_tuning(workload_name,
                 log_name = 'logs/autotvm/layer/{}/fused/{}_fused_{}.log'.format(device, name, workload_name)
                 print(log_name)
 
-                # logging
-                logging.getLogger('autotvm').setLevel(logging.DEBUG)
-                logging.getLogger('autotvm').addHandler(logging.StreamHandler(sys.stdout))
+                # # logging
+                # logging.getLogger('autotvm').setLevel(logging.DEBUG)
+                # logging.getLogger('autotvm').addHandler(logging.StreamHandler(sys.stdout))
 
                 # fused schedule auto
                 sargs = autotvm.task.topi_integration.serialize_args([parameters])
