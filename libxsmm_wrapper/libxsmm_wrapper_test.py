@@ -1,38 +1,24 @@
 #!/usr/bin/env python3
 ###############################################################################
-# Copyright (c) Intel Corporation - All rights reserved.                      #
-# This file is part of the LIBXSMM library.                                   #
-#                                                                             #
-# For information on the license, see the LICENSE file.                       #
-# Further information: https://github.com/hfp/libxsmm/                        #
-# SPDX-License-Identifier: BSD-3-Clause                                       #
-###############################################################################
-# Anand Venkat (Intel Corp.)
+# Modified from https://github.com/hfp/libxsmm/blob/master/samples/deeplearning/tvm_cnnlayer/mb1_tuned_latest.py
 ###############################################################################
 
-import logging
-import sys
-import numpy as np
 import tvm
+from tvm import te, autotvm
 from tvm import topi as topi
-import time
 from tvm.topi.utils import get_const_tuple
 from tvm.topi import testing
-import math
-import xlwt
-import argparse
-
-import os
-import ctypes
-from tvm import te, autotvm
-from tvm.autotvm.tuner import XGBTuner, GATuner, RandomTuner, GridSearchTuner
+import numpy as np
+import math, xlwt, argparse, sys, logging
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-d', nargs=1, type=str, default=['resnet2', 'resnet3', 'resnet4', 'resnet5', \
     'resnet6', 'resnet7', 'resnet8', 'resnet9', 'resnet10', 'resnet11', 'resnet12', 'resnet13', \
     'resnet14', 'resnet15', 'resnet16', 'resnet17', 'resnet18', 'resnet19', 'resnet20'])
+parser.add_argument("-k", action="store_true")
 args = parser.parse_args()
 layers = args.d
+skip_training = args.k
 
 # Resnet-50 layers (excluding first layer)
 _resnet_layers ={
@@ -158,6 +144,8 @@ def intrin_libxsmm_brgemm(
     #         'stride_width: ',                 stride_width,
     #         'in_channel: ',                 in_channel)
 
+    alignment = 64
+
     block_input_height = (ofh - 1) * stride_width + r
     block_input_width = (ofw - 1) * stride_width + s
 
@@ -190,17 +178,17 @@ def intrin_libxsmm_brgemm(
 
     xx_ptr = tvm.tir.decl_buffer(A.shape, A.dtype,
                         name='W', offset_factor=1,
-                        data_alignment=64)
+                        data_alignment=alignment, buffer_type='auto_broadcast')
 
     yy_ptr = tvm.tir.decl_buffer(B.shape, B.dtype,
-                        name='X', offset_factor=1,
+                        name='B', offset_factor=1,
                         strides=[te.var('s1'), te.var('s0'), ifmblock, 1],
-                        data_alignment=64)
+                        data_alignment=alignment, buffer_type='auto_broadcast')
 
     zz_ptr = tvm.tir.decl_buffer(C.shape, C.dtype,
                         name='OUT', offset_factor=1,
                         strides=[te.var('s2'), ofmblock, 1],
-                        data_alignment=64)
+                        data_alignment=alignment, buffer_type='auto_broadcast')
 
     def intrin_func(ins, outs):
         # tvm call extern is used to interface to libxsmm batch reduce kernel gemm implementation
@@ -212,7 +200,7 @@ def intrin_libxsmm_brgemm(
                                 stride_width,
                                 r, s,
                                 True,
-                                yy_ptr.strides[0])
+                                yy_ptr.strides[0], yy_ptr.strides[1])
         reset = tvm.tir.call_extern('int32', 'batch_reduce_kernel_init',
                                 outs[0].access_ptr('w'),
                                 ofmblock,
@@ -225,8 +213,8 @@ def intrin_libxsmm_brgemm(
                                 stride_width,
                                 r, s,
                                 False,
-                                yy_ptr.strides[0])
-        if math.ceil(in_channel / ifmblock) == rco: # rco = rco_i: if all the reduce axes are included
+                                yy_ptr.strides[0], yy_ptr.strides[1])
+        if tvm.tir.indexdiv(in_channel, ifmblock).value == rco: # rco = rco_i: if all the reduce axes are included
             return init_update, None, init_update
         else:
             return init_update, reset, update
@@ -376,9 +364,8 @@ def driver():
     vlen = 64
 
     for layer in layers:
-
+        print("******* {} *******".format(layer))
         print(_resnet_layers[layer])
-
         batch = _resnet_layers[layer][0]
         out_channel = _resnet_layers[layer][1]
         in_channel = _resnet_layers[layer][2]
@@ -429,17 +416,18 @@ def driver():
         tuner = autotvm.tuner.RandomTuner(task)
         # Please limit n_trial to reduce tuning time
         n_trial= 1500
-        log_file = '{}.log'.format(layer)
+        log_file = 'logs/{}.log'.format(layer)
         print(len(task.config_space))
 
         # comment out the following call to tuner to just run the best case from log file history
-        tuner.tune(n_trial=n_trial,
-            measure_option=measure_option,
-            callbacks=[autotvm.callback.progress_bar(n_trial, prefix=layer),
-                        autotvm.callback.log_to_file(log_file)])
-        with autotvm.apply_history_best(layer + '.log') as d:
+        if not skip_training:
+            tuner.tune(n_trial=n_trial,
+                measure_option=measure_option,
+                callbacks=[autotvm.callback.progress_bar(n_trial, prefix=layer),
+                            autotvm.callback.log_to_file(log_file)])
+        with autotvm.apply_history_best(log_file) as d:
             print(d.query(task.target, task.workload))
-            with tvm.target.create(target):
+            with tvm.target.Target(target):
                 # all 4D
                 a_np, w_np, b_np  = get_ref_data(batch,out_channel,in_channel,input_height,input_width,kernel_height, kernel_width,stride_height,pad_height)
                 
@@ -469,7 +457,7 @@ def driver():
                 gflops_tvm1 = np.prod(get_const_tuple(arg_bufs[2].shape))*in_channel*kernel_height*kernel_width*2
                 gflops_tvm1 = gflops_tvm1 / 1e9 / t1
 
-                print('Time for conv(tuned) is: {0:.6f}'.format(t1))
+                print('Time for conv(tuned) is: {0:.2f} us'.format(t1 * 1e6))
                 print('GFLOPS: {0:.3f} '.format(gflops_tvm1))
                 sheet1.write(row1, 1, gflops_tvm1)
 
