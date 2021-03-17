@@ -26,10 +26,11 @@ def schedule_conv_conv_fused_nhwc(outs):
     ######## Input data, weights, BN, etc
     # End
     if bn_relu[1]:
-        s[stage_dict['Output_1_BiasAdd']].compute_inline()
         s[stage_dict['Output_1']].set_scope('local')
         BiasL_2 = s.cache_read(param_dict['Bias_1'], 'local', [stage_dict['Output_1_BiasAdd']])
         OL = stage_dict['Output_1']
+        if bn_relu[1] != 'bias':
+            s[stage_dict['Output_1_BiasAdd']].compute_inline()
     else:
         OL = s.cache_write(layer_output_dict['Layer_1'], 'local')
 
@@ -42,16 +43,14 @@ def schedule_conv_conv_fused_nhwc(outs):
     if hasPaddedInput[1]:
         if bn_relu[0]:
             s[layer_output_dict['Layer_0']].compute_inline()
-        # layer_output_dict['Layer_0'] = stage_dict['PaddedInput_1']
-
         s[stage_dict['PaddedInput_1']].set_scope('shared')
         stage_dict['SharedInput_1'] = stage_dict['PaddedInput_1'] # For disambiguity: 'PaddedInput_1' won't be used in scheduling
-        # IL = s.cache_read(stage_dict['Output_0'], 'shared', stage_dict['PaddedInput_1'])
     else:
         if bn_relu[0]:
-            pass
+            s[layer_output_dict['Layer_0']].set_scope('shared') # Results of ReLU go to shared
+            stage_dict['SharedInput_1'] = layer_output_dict['Layer_0']
         else:
-            stage_dict['SharedInput_1'] = s.cache_read(stage_dict['Output_0'], 'shared', [OL])
+            stage_dict['SharedInput_1'] = s.cache_read(stage_dict['Output_0'], 'shared', [OL]) # Move conv result from local to shared
     FS_2 = s.cache_read(param_dict['Filter_1'], 'shared', [OL])
 
     # Beginning
@@ -94,6 +93,8 @@ def schedule_conv_conv_fused_nhwc(outs):
     h, w, vthz, vthy = s[layer_output_dict['Layer_1']].tile(h, w, x_factor=num_vthread_y_2, y_factor=num_vthread_z_2)
     # reorder and bind
     s[layer_output_dict['Layer_1']].reorder(n, ho, wo, oc,   ic, h, w,   vthz, vthy, thz, thy, thx)
+    if bn_relu[1]:
+        s[BiasL_2].compute_at(s[layer_output_dict['Layer_1']], thx)
     fused_blx = s[layer_output_dict['Layer_1']].fuse(n, ho, wo, oc)
     s[layer_output_dict['Layer_1']].bind(fused_blx, block_x)
     s[layer_output_dict['Layer_1']].bind(vthz, vthread_z_2)
@@ -110,9 +111,6 @@ def schedule_conv_conv_fused_nhwc(outs):
     oirc, iirc = s[OL].split(irc, factor=reduce_split2)
     s[OL].reorder(n, orc, oirc, h, w, iirc, ry, rx, c)
 
-    if bn_relu[1]:
-        s[BiasL_2].compute_at(s[layer_output_dict['Layer_1']], thx)
-
     ######## Filter 2
     s[FS_2].compute_at(s[OL], orc)
     h, w, i, o = s[FS_2].op.axis
@@ -124,12 +122,14 @@ def schedule_conv_conv_fused_nhwc(outs):
     s[FS_2].bind(ii, thread_y)
     s[FS_2].bind(oi, thread_z)
 
-    # # ######## Intermediate output in shared memory
+    # ######## Intermediate output in shared memory
     s[stage_dict['SharedInput_1']].compute_at(s[layer_output_dict['Layer_1']], thx)
     n, h, w, c = s[stage_dict['SharedInput_1']].op.axis
     vthx, thx = s[stage_dict['SharedInput_1']].split(c, factor=num_thread_x)
     vthz, vthy, thz, thy = s[stage_dict['SharedInput_1']].tile(h, w, x_factor=num_thread_y, y_factor=num_thread_z)
     s[stage_dict['SharedInput_1']].reorder(n, vthz, vthy, vthx, thz, thy, thx)
+    if bn_relu[0]:
+        s[BiasL_1].compute_at(s[stage_dict['SharedInput_1']], thx)
     s[stage_dict['SharedInput_1']].bind(vthz, vthread_z_1)
     s[stage_dict['SharedInput_1']].bind(vthy, vthread_y_1)
     s[stage_dict['SharedInput_1']].bind(vthx, vthread_x_1)
@@ -137,7 +137,7 @@ def schedule_conv_conv_fused_nhwc(outs):
     s[stage_dict['SharedInput_1']].bind(thy, thread_y)
     s[stage_dict['SharedInput_1']].bind(thx, thread_x)
 
-    # ####### Intermediate output local accumulator
+    ####### Intermediate output local accumulator
     s[stage_dict['Output_0']].compute_at(s[stage_dict['SharedInput_1']], thx)
     rc, ry, rx = s[stage_dict['Output_0']].op.reduce_axis
     orc, irc = s[stage_dict['Output_0']].split(rc, factor=num_thread_x)
@@ -147,10 +147,7 @@ def schedule_conv_conv_fused_nhwc(outs):
     s[stage_dict['Output_0']].reorder(n, orc, oirc, h, w, iirc, ry, rx, thx)
     s[stage_dict['Output_0']].bind(thx, thread_x)
 
-    if bn_relu[0]:
-        s[BiasL_1].compute_at(s[stage_dict['SharedInput_1']], thx)
-
-    # ######## Filter 1
+    ######## Filter 1
     s[FS_1].compute_at(s[stage_dict['Output_0']], oirc)
     h, w, i, o = s[FS_1].op.axis
     oo, io = s[FS_1].split(o, nparts=num_thread_x)
