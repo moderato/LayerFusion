@@ -6,7 +6,7 @@ from tvm import te, autotvm
 def schedule_depth_conv_fused_nhwc_auto(cfg, outs):
     outs = [outs] if isinstance(outs, te.tensor.Tensor) else outs
     s = te.create_schedule([x.op for x in outs])
-    stage_dict, layer_output_dict, param_dict, _, bn_relu, _ = get_stages_and_cfgs(outs)
+    stage_dict, layer_output_dict, param_dict, _, bn_relu, _ = get_stages_and_cfgs(s, outs)
 
     # from pprint import pprint
     # print("******")
