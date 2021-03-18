@@ -951,36 +951,3 @@ def test_schedule():
 if __name__ == '__main__':
     test_compute()
     test_schedule()
-
-#     def get_constraints(self, device='cuda'):
-#         import itertools
-#         c_factors = None
-#         w_factors = None
-#         h_factors = None
-#         for idx in range(self.layer_num):
-#             output = self.get_output(idx)
-#             c = get_vlen(output.C, device=device)
-#             w = get_factors(output.W)
-#             h = get_factors(output.H)
-#             if idx == 0:
-#                 c_factors = set(c)
-#                 w_factors = set(w)
-#                 h_factors = set(h)
-#             else:
-#                 c_factors = c_factors.intersection(c)
-#                 w_factors = w_factors.intersection(w)
-#                 h_factors = h_factors.intersection(h)
-
-#             # print(c, w, h)
-#             # print(c_factors, w_factors, h_factors)
-#             # print('***')
-
-#         factors = [list(c_factors), list(w_factors), list(h_factors)]
-#         return list(itertools.product(*factors))
-
-# def get_all_possible_schedules(parameters, use_autotvm=False, device='cuda', name='depth_conv'):
-#     fusion_cfg = FusionComposer(parameters)
-#     schs = []
-#     for idx in len(fusion_cfg.get_constraints()):
-#         schs.append(get_schedule(parameters, use_autotvm=use_autotvm, device=device, name=name, constraints_idx=idx))
-#     return schs

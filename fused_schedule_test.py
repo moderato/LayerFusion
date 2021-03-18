@@ -26,11 +26,12 @@ def verify_tuning(workload_name,
     tuning_trials = tuning_opt.tuning_trials if name == 'depth_conv' or name == 'conv_depth' else 2 * tuning_opt.tuning_trials
     unfused = tuning_opt.unfused
 
-    def check_target(target_str):
+    def check_device(device_name):
+        target_str = DEVICES[device_name]['target']
         if not tvm.runtime.enabled(target_str):
-            print('Skip because %s is not enabled' % target_str)
+            print('Skip because {} is not enabled'.format(target_str))
             return
-        print('Running on target: %s' % target_str)
+        print('Running on target: {}'.format(target_str))
         if 'llvm' in target_str:
             ctx = tvm.cpu()
             target = tvm.target.Target(target_str)
@@ -90,11 +91,12 @@ def verify_tuning(workload_name,
                         measure_option = autotvm.measure_option(
                             builder=autotvm.LocalBuilder(),
                             runner=autotvm.RPCRunner(
-                                TARGETS[target_str]["key"], '0.0.0.0', 9190,
-                                number=TARGETS[target_str]["config_params"]["number"],
-                                repeat=TARGETS[target_str]["config_params"]["repeat"],
-                                timeout=TARGETS[target_str]["config_params"]["timeout"][name],
-                                min_repeat_ms=TARGETS[target_str]["config_params"]["min_repeat_ms"], enable_cpu_cache_flush=True
+                                device_name, '0.0.0.0', 9190,
+                                number=DEVICES[device_name]["config_params"]["number"],
+                                repeat=DEVICES[device_name]["config_params"]["repeat"],
+                                timeout=DEVICES[device_name]["config_params"]["timeout"][name],
+                                min_repeat_ms=DEVICES[device_name]["config_params"]["min_repeat_ms"],
+                                enable_cpu_cache_flush=(True if device == 'cpu' else False)
                             )
                         )
                         tuner = autotvm.tuner.XGBTuner(task, feature_type="curve")
@@ -282,11 +284,12 @@ def verify_tuning(workload_name,
                     measure_option = autotvm.measure_option(
                         builder=autotvm.LocalBuilder(),
                         runner=autotvm.RPCRunner(
-                            TARGETS[target_str]["key"], '0.0.0.0', 9190,
-                            number=TARGETS[target_str]["config_params"]["number"],
-                            repeat=TARGETS[target_str]["config_params"]["repeat"],
-                            timeout=TARGETS[target_str]["config_params"]["timeout"][name],
-                            min_repeat_ms=TARGETS[target_str]["config_params"]["min_repeat_ms"], enable_cpu_cache_flush=True
+                            device_name, '0.0.0.0', 9190,
+                            number=DEVICES[device_name]["config_params"]["number"],
+                            repeat=DEVICES[device_name]["config_params"]["repeat"],
+                            timeout=DEVICES[device_name]["config_params"]["timeout"][name],
+                            min_repeat_ms=DEVICES[device_name]["config_params"]["min_repeat_ms"],
+                            enable_cpu_cache_flush=(True if device == 'cpu' else False)
                         )
                     )
                     tuner = autotvm.tuner.XGBTuner(task, feature_type="curve")
@@ -308,11 +311,6 @@ def verify_tuning(workload_name,
                 best_config = dispatch_context.query(task.target, task.workload)
                 print('\nBest config:')
                 print(best_config)
-
-                # # apply history best from log file
-                # with dispatch_context:
-                #     with target:
-                #         s, flatten_params = fc.get_schedule_inference(target)
             elif use_auto_scheduler:
                 log_name = 'logs/auto_scheduler/layer/{}/{}_fused_{}.json'.format(device, name, workload_name)
                 print(log_name)
@@ -334,11 +332,12 @@ def verify_tuning(workload_name,
                         verbose=2,
                         builder=auto_scheduler.LocalBuilder(),
                         runner=auto_scheduler.RPCRunner(
-                            TARGETS[target_str]["key"], '0.0.0.0', 9190,
-                            number=TARGETS[target_str]["config_params"]["number"],
-                            repeat=TARGETS[target_str]["config_params"]["repeat"],
-                            timeout=TARGETS[target_str]["config_params"]["timeout"][name],
-                            min_repeat_ms=TARGETS[target_str]["config_params"]["min_repeat_ms"], enable_cpu_cache_flush=True
+                            device_name, '0.0.0.0', 9190,
+                            number=DEVICES[device_name]["config_params"]["number"],
+                            repeat=DEVICES[device_name]["config_params"]["repeat"],
+                            timeout=DEVICES[device_name]["config_params"]["timeout"][name],
+                            min_repeat_ms=DEVICES[device_name]["config_params"]["min_repeat_ms"],
+                            enable_cpu_cache_flush=(True if device == 'cpu' else False)
                         )
                     )
                     task.tune(tune_option)
@@ -408,8 +407,8 @@ def verify_tuning(workload_name,
             FLOP = fc.get_FLOP()
             print('FLOP: {}, GFLOPS: {:.2f}.'.format(FLOP, FLOP / tcost_d / 1e9))
 
-    for target_str in ['llvm -mcpu=core-avx2']: # 'cuda', 'llvm -mcpu=core-avx2', 'llvm -mcpu=skylake-avx512'
-        check_target(target_str)
+    for device_name in ['TITAN_xp']: # 'TITAN_xp', '1050Ti', '1080', 'Xeon_GCP', 'i7_7700K', 'Xeon_E5'
+        check_device(device_name)
     print("############################################")
 
 if __name__ == '__main__':

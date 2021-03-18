@@ -11,56 +11,82 @@ import os, math, re
 import numpy as np
 
 np.random.seed(42)
-TARGETS = {
-    "cuda": {
-        "key": "1050ti",
+DEVICES = {
+    "TITAN_xp": {
+        "target": "cuda",
         "config_params": {
-            "number": 100, # Number of runs for runtime averaging
+            "number": 50, # Number of runs for runtime averaging
             "repeat": 3, # (number of runs) = 1 repeats
             # Suggested min_repeat_ms = 150 on GPUs
             "min_repeat_ms": 300, # Dynamically adjust number of runs, i.e. time of one repeat = min(min_repeat_ms, number * kernel_runtime)
-            "timeout": { # Timeout of a compilation
-                "general": 10,
-                "depth_conv": 10,
-                "conv_conv": 500
+            "timeout": { # Timeout of a COMPILATION
+                "general": 1000,
+                "depth_conv": 1500,
+                "conv_conv": 2000
             }
         }
     },
-    "llvm -mcpu=skylake-avx512": {
-        "key": "Xeon",
+    "1050Ti": {
+        "target": "cuda",
+        "config_params": {
+            "number": 50,
+            "repeat": 3, 
+            "min_repeat_ms": 300,
+            "timeout": {
+                "general": 1000,
+                "depth_conv": 1500,
+                "conv_conv": 2000
+            }
+        }
+    },
+    "1080": {
+        "target": "cuda",
+        "config_params": {
+            "number": 50,
+            "repeat": 3, 
+            "min_repeat_ms": 300,
+            "timeout": {
+                "general": 1000,
+                "depth_conv": 1500,
+                "conv_conv": 2000
+            }
+        }
+    },
+    "Xeon_GCP": {
+        "target": "llvm -mcpu=skylake-avx512",
         "config_params": {
             "number": 20,
             "repeat": 3,
             "min_repeat_ms": 0,
             "timeout": {
-                "general": 300,
-                "depth_conv": 300,
+                "general": 2000,
+                "depth_conv": 3000,
                 "conv_conv": 5000
             }
         }
     },
-    "llvm -mcpu=core-avx2": {
-        "key": "i7_7700K",
+    "i7_7700K": {
+        "target": "llvm -mcpu=core-avx2",
         "config_params": {
             "number": 20,
             "repeat": 3,
             "min_repeat_ms": 0,
             "timeout": {
-                "general": 500,
-                "depth_conv": 500,
-                "conv_conv": 10000
+                "general": 2500,
+                "depth_conv": 4000,
+                "conv_conv": 8000
             }
         }
     },
-    "llvm -mcpu=corei7-avx": {
-        "key": "xeon_E5",
+    "Xeon_E5": {
+        "target": "llvm -mcpu=corei7-avx",
         "config_params": {
             "number": 20,
             "repeat": 3,
             "min_repeat_ms": 0,
             "timeout": {
-                "general": 1000,
-                "depth_conv": 500,
+                "general": 3000,
+                "depth_conv": 5000,
                 "conv_conv": 10000
             }
         }
