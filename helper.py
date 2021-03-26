@@ -1,10 +1,10 @@
 import tvm
 import tvm.relay as relay
-from tvm.topi.utils import simplify, get_const_tuple
+from tvm.topi.utils import simplify
 from tvm.topi.nn.utils import get_pad_tuple
 from tvm import autotvm, te
 from tvm.autotvm.task.space import FallbackConfigEntity, OtherOptionEntity
-from tvm.relay.dataflow_pattern import wildcard, is_op, is_constant, is_expr, is_var, rewrite, TupleGetItemPattern, DFPatternCallback
+from tvm.relay.dataflow_pattern import wildcard, is_op, is_var, rewrite, TupleGetItemPattern, DFPatternCallback
 from tvm.relay.build_module import bind_params_by_name
 from tvm.relay.testing import run_opt_pass
 import os, math, re
@@ -22,7 +22,8 @@ DEVICES = {
             "timeout": { # Timeout of a COMPILATION
                 "general": 1000,
                 "depth_conv": 1500,
-                "conv_conv": 2000
+                "conv_conv": 2000,
+                "conv_depth": 1500
             }
         }
     },
@@ -35,7 +36,8 @@ DEVICES = {
             "timeout": {
                 "general": 1000,
                 "depth_conv": 1500,
-                "conv_conv": 2000
+                "conv_conv": 2000,
+                "conv_depth": 1500
             }
         }
     },
@@ -48,7 +50,8 @@ DEVICES = {
             "timeout": {
                 "general": 1000,
                 "depth_conv": 1500,
-                "conv_conv": 2000
+                "conv_conv": 2000,
+                'conv_depth': 1500
             }
         }
     },
@@ -61,7 +64,8 @@ DEVICES = {
             "timeout": {
                 "general": 2000,
                 "depth_conv": 3000,
-                "conv_conv": 5000
+                "conv_conv": 5000,
+                'conv_depth': 3000
             }
         }
     },
@@ -74,7 +78,8 @@ DEVICES = {
             "timeout": {
                 "general": 2500,
                 "depth_conv": 4000,
-                "conv_conv": 8000
+                "conv_conv": 8000,
+                'conv_depth': 4000
             }
         }
     },
@@ -87,7 +92,8 @@ DEVICES = {
             "timeout": {
                 "general": 3000,
                 "depth_conv": 5000,
-                "conv_conv": 10000
+                "conv_conv": 10000,
+                'conv_depth': 5000
             }
         }
     }
@@ -135,8 +141,8 @@ class FilterConfig:
     def update_shape(self, vlen_i, vlen_o):
         self.vlen_i = vlen_i
         self.vlen_o = vlen_o
-        OC_chunk = tvm.tir.indexdiv(self.O, vlen_o).value
         IC_chunk = tvm.tir.indexdiv(self.I, vlen_i).value
+        OC_chunk = tvm.tir.indexdiv(self.O, vlen_o).value
         self.shape = (OC_chunk, IC_chunk, self.H, self.W, vlen_i, vlen_o) if not self.depthwise else (OC_chunk, 1, self.H, self.W, 1, vlen_o)
     def get_shape(self):
         return self.shape
@@ -286,20 +292,16 @@ def get_4D_shapes_from_params(p):
 
         if not OUTPUT:
             DATA = FeatureConfig(*p[idx:(idx+4)])
-            is_depthwise = p[idx+7]
-            # Depthwise: I: 1 (channel_multiplier), O: same as data's C
-            # Normal: I: same as data's C, O: same as output's C
-            FILTER = FilterConfig(p[idx+4], p[idx+4], 1 if is_depthwise else DATA.C, DATA.C if is_depthwise else p[idx+5],\
-                                            p[idx+6], *p[(idx+6):(idx+9)])
-            idx += 9
+            idx += 4
         else:
             DATA = OUTPUT
-            is_depthwise = p[idx+3]
-            # Depthwise: I: 1 (channel_multiplier), O: same as data's C
-            # Normal: I: same as data's C, O: same as output's C
-            FILTER = FilterConfig(p[idx], p[idx], DATA.C, p[idx+1],\
-                                        p[idx+2], *p[(idx+2):(idx+5)])
-            idx += 5
+
+        is_depthwise = p[idx+3]
+        # Depthwise: I: 1 (channel_multiplier), O: same as data's C
+        # Normal: I: same as data's C, O: same as output's C
+        FILTER = FilterConfig(p[idx], p[idx], 1 if is_depthwise else DATA.C, DATA.C if is_depthwise else p[idx+1],\
+                                    p[idx+2], *p[(idx+2):(idx+5)])
+        idx += 5
         layers.append((DATA, FILTER))
 
         # Compute the output shape with the original input size, i.e. WITHOUT INPUT PACKING
@@ -356,8 +358,9 @@ def get_theoretical_mem_bytes(p):
 
 def get_workloads():
     workloads = {}
-    conv_conv_workloads = {}
     depth_conv_workloads = {}
+    conv_conv_workloads = {}
+    conv_depth_workloads = {}
     block_workloads = {}
 
     ##################### Conv conv workloads ######################
@@ -449,6 +452,7 @@ def get_workloads():
 
     workloads['depth_conv'] = depth_conv_workloads
     workloads['conv_conv'] = conv_conv_workloads
+    workloads['conv_depth'] = conv_depth_workloads
     workloads['block'] = block_workloads
 
     return workloads

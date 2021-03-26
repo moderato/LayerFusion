@@ -68,8 +68,8 @@ def schedule_conv_conv_fused_nhwc_auto(cfg, outs):
 
     ######## Global output
     n, h, w, c = s[layer_output_dict['Layer_1']].op.axis
-    ho, h, vthz, thz = cfg['split_layer_1_h'].apply(s, layer_output_dict['Layer_1'], h)
-    wo, w, vthy, thy = cfg['split_layer_1_w'].apply(s, layer_output_dict['Layer_1'], w)
+    ho, h, vthz, thz = cfg['split_h'].apply(s, layer_output_dict['Layer_1'], h)
+    wo, w, vthy, thy = cfg['split_w'].apply(s, layer_output_dict['Layer_1'], w)
     oc, ic, thx = cfg['split_layer_1_c'].apply(s, layer_output_dict['Layer_1'], c)
     # reorder and bind
     s[layer_output_dict['Layer_1']].reorder(n, ho, wo, oc,   ic, h, w,   vthz, vthy, thz, thy, thx)
@@ -83,8 +83,8 @@ def schedule_conv_conv_fused_nhwc_auto(cfg, outs):
     s[layer_output_dict['Layer_1']].bind(thy, thread_y)
     s[layer_output_dict['Layer_1']].bind(thx, thread_x)
     num_thread_x = cfg['split_layer_1_c'].size[-1]
-    num_thread_y = cfg['split_layer_1_w'].size[-1]
-    num_thread_z = cfg['split_layer_1_h'].size[-1]
+    num_thread_y = cfg['split_w'].size[-1]
+    num_thread_z = cfg['split_h'].size[-1]
 
     ######## Local output
     s[OL].compute_at(s[layer_output_dict['Layer_1']], thx) # thx <----- Must be so! Same below.

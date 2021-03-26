@@ -18,8 +18,8 @@ def schedule_depth_conv_fused_nchwc_auto_search(cfg, outs, *args, **kwargs):
     oc_chunk_o, oc_chunk_i = cfg['split_layer_1_c'].apply(s, layer_output_dict['Layer_1'], oc_chunk)
     ic_chunk, ry, rx, ic = s[layer_output_dict['Layer_1']].op.reduce_axis
     ic_chunk_o, ic_chunk_i = cfg['split_layer_0_c'].apply(s, layer_output_dict['Layer_1'], ic_chunk)
-    ht, ho, h = cfg['split_layer_1_h'].apply(s, layer_output_dict['Layer_1'], h)
-    wt, wo, w = cfg['split_layer_1_w'].apply(s, layer_output_dict['Layer_1'], w)
+    ht, ho, h = cfg['split_h'].apply(s, layer_output_dict['Layer_1'], h)
+    wt, wo, w = cfg['split_w'].apply(s, layer_output_dict['Layer_1'], w)
     s[layer_output_dict['Layer_1']].reorder(n, oc_chunk_o, ht, wt, oc_chunk_i, ic_chunk_o, ho, wo, h, ic_chunk_i, ry, rx, w, oc, ic)
     fused_blx = s[layer_output_dict['Layer_1']].fuse(n, oc_chunk_o, ht, wt)
     s[layer_output_dict['Layer_1']].parallel(fused_blx)
@@ -34,10 +34,10 @@ def schedule_depth_conv_fused_nchwc_auto_search(cfg, outs, *args, **kwargs):
     # Temporary skip the case of 1x1 stride > 1
     if (((filters_cfg['Layer_1'].H == 1 and filters_cfg['Layer_1'].W == 1 and \
             filters_cfg['Layer_1'].stride_h == 1 and filters_cfg['Layer_1'].stride_w == 1)) and \
-        (cfg['split_layer_1_h'].size[-2] > 1 and cfg['split_layer_1_w'].size[-1] == outputs_cfg['Layer_1'].W)): # HM > 1 & WI = OW (small W)
+        (cfg['split_h'].size[-2] > 1 and cfg['split_w'].size[-1] == outputs_cfg['Layer_1'].W)): # HM > 1 & WI = OW (small W)
         # print('small: bind to h')
         tensorize_axis = h
-        block_output_height = cfg['split_layer_1_h'].size[-1]
+        block_output_height = cfg['split_h'].size[-1]
     else:
         # print('big: bind to ic_chunk_i')
         tensorize_axis = ic_chunk_i
@@ -46,7 +46,7 @@ def schedule_depth_conv_fused_nchwc_auto_search(cfg, outs, *args, **kwargs):
     libxsmm_tensorize = intrin_libxsmm_brgemm(
                                                 ic.dom.extent,                      # k of brgemm   -> rci
                                                 oc.dom.extent,                      # n of brgemm   -> ki
-                                                cfg['split_layer_1_w'].size[-1],    # m of brgemm   -> wi
+                                                cfg['split_w'].size[-1],    # m of brgemm   -> wi
                                                 filters_cfg['Layer_1'].W,           #               -> rx
                                                 filters_cfg['Layer_1'].H,           #               -> ry
                                                 cfg['split_layer_0_c'].size[-1],    #               -> rco_i
@@ -102,7 +102,7 @@ def schedule_depth_conv_fused_nchwc_auto_inference(cfg, outs, *args, **kwargs):
     ######## Final output
     n, oc_chunk, h, w, oc = s[layer_output_dict['Layer_1']].op.axis
     oc_chunk_o, oc_chunk_i = cfg['split_layer_1_c'].apply(s, layer_output_dict['Layer_1'], oc_chunk)
-    ht, wt, h, w = s[layer_output_dict['Layer_1']].tile(h, w, x_factor=cfg['split_layer_1_h'].size[-2] * cfg['split_layer_1_h'].size[-1], y_factor=cfg['split_layer_1_w'].size[-2] * cfg['split_layer_1_w'].size[-1])
+    ht, wt, h, w = s[layer_output_dict['Layer_1']].tile(h, w, x_factor=cfg['split_h'].size[-2] * cfg['split_h'].size[-1], y_factor=cfg['split_w'].size[-2] * cfg['split_w'].size[-1])
     s[layer_output_dict['Layer_1']].reorder(n, oc_chunk_o, ht, wt, oc_chunk_i, h, w, oc) # Temporary
     s[layer_output_dict['Layer_1']].vectorize(oc)
 
@@ -122,10 +122,10 @@ def schedule_depth_conv_fused_nchwc_auto_inference(cfg, outs, *args, **kwargs):
     axes = []
     for label in axis_labels[0:ic_idx]:
         if label == 'h':
-            ho, h = s[layer_output_dict['Layer_1']].split(h, cfg['split_layer_1_h'].size[-1])
+            ho, h = s[layer_output_dict['Layer_1']].split(h, cfg['split_h'].size[-1])
             axes.append(ho)
         if label == 'w':
-            wo, w = s[layer_output_dict['Layer_1']].split(w, cfg['split_layer_1_w'].size[-1])
+            wo, w = s[layer_output_dict['Layer_1']].split(w, cfg['split_w'].size[-1])
             axes.append(wo)
         if label == 'oc':
             axes.append(oc_chunk_i)
@@ -149,10 +149,10 @@ def schedule_depth_conv_fused_nchwc_auto_inference(cfg, outs, *args, **kwargs):
         if label == axis:
             prev_consumer = stage_dict['Output_1']
         if label == 'h':
-            ho, h = s[stage_dict['Output_1']].split(h, cfg['split_layer_1_h'].size[-1])
+            ho, h = s[stage_dict['Output_1']].split(h, cfg['split_h'].size[-1])
             axes.append(ho)
         if label == 'w':
-            wo, w = s[stage_dict['Output_1']].split(w, cfg['split_layer_1_w'].size[-1])
+            wo, w = s[stage_dict['Output_1']].split(w, cfg['split_w'].size[-1])
             axes.append(wo)
         if label == 'oc':
             axes.append(oc_chunk_i)
@@ -166,10 +166,10 @@ def schedule_depth_conv_fused_nchwc_auto_inference(cfg, outs, *args, **kwargs):
     # Temporary skip the case of 1x1 stride > 1
     if (((filters_cfg['Layer_1'].H == 1 and filters_cfg['Layer_1'].W == 1 and \
             filters_cfg['Layer_1'].stride_h == 1 and filters_cfg['Layer_1'].stride_w == 1)) and \
-        (cfg['split_layer_1_h'].size[-2] > 1 and cfg['split_layer_1_w'].size[-1] == outputs_cfg['Layer_1'].W)): # HM > 1 & WI = OW (small W)
+        (cfg['split_h'].size[-2] > 1 and cfg['split_w'].size[-1] == outputs_cfg['Layer_1'].W)): # HM > 1 & WI = OW (small W)
         # print('small: bind to h')
         tensorize_axis = h
-        block_output_height = cfg['split_layer_1_h'].size[-1]
+        block_output_height = cfg['split_h'].size[-1]
     else:
         # print('big: bind to ic_chunk_i')
         tensorize_axis = ic_chunk_i
@@ -178,7 +178,7 @@ def schedule_depth_conv_fused_nchwc_auto_inference(cfg, outs, *args, **kwargs):
     libxsmm_tensorize = intrin_libxsmm_brgemm(
                                                 ic.dom.extent,                      # k of brgemm   -> rci
                                                 oc.dom.extent,                      # n of brgemm   -> ki
-                                                cfg['split_layer_1_w'].size[-1],    # m of brgemm   -> wi
+                                                cfg['split_w'].size[-1],    # m of brgemm   -> wi
                                                 filters_cfg['Layer_1'].W,           #               -> rx
                                                 filters_cfg['Layer_1'].H,           #               -> ry
                                                 cfg['split_layer_0_c'].size[-1],    #               -> rco_i

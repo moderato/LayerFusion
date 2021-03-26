@@ -3,12 +3,9 @@ import tvm.te._ffi_api
 import tvm.relay as relay
 import tvm.relay.op as reg
 from tvm.topi import testing
-from tvm.topi.nn.dilate import dilate
 from tvm.topi.nn.pad import pad
-from tvm.topi.nn.utils import get_pad_tuple
-from tvm.topi.utils import get_const_tuple
 from tvm import te, autotvm, auto_scheduler
-from tvm.autotvm.task import TaskExtractEnv, args_to_workload
+from tvm.autotvm.task import TaskExtractEnv
 from scipy.special import expit
 from helper import get_vlen, get_CPU_vlen_from_config, get_4D_shapes_from_params
 import numpy as np
@@ -44,6 +41,7 @@ class FusionComposer:
         return placeholders
 
     def define_search_space(self):
+        conv_count = 0
         for idx in range(self.layer_num):
             is_first_stage = (idx == 0)
             is_final_stage = (idx == self.layer_num - 1)
@@ -56,24 +54,31 @@ class FusionComposer:
             if self.cfg is not None:
                 # Vector length
                 if self.pack:
-                    if idx == 0 and not FILTER.depthwise: # First layer is not depthwise: define input vlen
-                        self.cfg.define_knob('vlen_input', get_vlen(FILTER.I, self.target.kind.name))
-                    self.cfg.define_knob('vlen_layer_{}'.format(idx), get_vlen(OUTPUT.C, self.target.kind.name)) # define output vlen
+                    if idx == 0: # Define input vlen for the first layer, no matter what it is
+                        self.cfg.define_knob('vlen_input', get_vlen(DATA.C, self.target.kind.name))
+                    if not FILTER.depthwise: # Only define vlen for conv, because dw-conv uses the vlen of the previous layer
+                        self.cfg.define_knob('vlen_layer_{}'.format(conv_count), get_vlen(OUTPUT.C, self.target.kind.name))
+                        conv_count += 1
 
-                    # TODO: What if depthwise in the middle?
-                    if idx == 0 and not FILTER.depthwise:
-                        vlen_i = self.cfg['vlen_input'].val # input vlen = newly defined vlen
-                    elif idx == 0:
-                        vlen_i = self.cfg['vlen_layer_{}'.format(idx)].val # input vlen = output vlen
-                    else:
-                        vlen_i = self.cfg['vlen_layer_{}'.format(idx-1)].val # input vlen = previous output vlen
-                    vlen_o = self.cfg['vlen_layer_{}'.format(idx)].val
+                    # Assuming no two dw-convs come together
+                    if idx == 0 or conv_count < 2: #
+                        vlen_i = self.cfg['vlen_input'].val
+                    else: #
+                        vlen_i = self.cfg['vlen_layer_{}'.format(conv_count-2)].val
+                    if FILTER.depthwise: # dw-convs have same vlen_o and vlen_i
+                        vlen_o = vlen_i
+                    else: # Convs have their own vlen_o
+                        vlen_o = self.cfg['vlen_layer_{}'.format(conv_count-1)].val
 
                     DATA.update_shape(vlen_i)
                     FILTER.update_shape(vlen_i, vlen_o)
                     OUTPUT.update_shape(vlen_o) # Actually overlapped with the input of next layer
 
-                    self.cfg.define_knob('bind_axis', [0, 1, 2, 3, 4]) # 'oc', 'ic', 'h', 'w', 'root'
+                    if is_final_stage:
+                        if FILTER.depthwise:
+                            self.cfg.define_knob('bind_axis', [0, 1, 2, 3]) # 'oc', 'h', 'w', 'root'
+                        else:
+                            self.cfg.define_knob('bind_axis', [0, 1, 2, 3, 4]) # 'oc', 'ic', 'h', 'w', 'root'
 
                 if self.target.kind.name == 'cuda' or self.target.device_name == 'tracing':
                     _, OH, OW, OC = OUTPUT.get_shape()
@@ -86,10 +91,10 @@ class FusionComposer:
                             H_num_outputs = 4
                             W_num_outputs = 3 # 3 for depthwise + 1x1, 4 for 3x3 + 1x1
 
-                            self.cfg.define_split('split_layer_{}_h'.format(idx), self.cfg.axis(int(OH)),
+                            self.cfg.define_split('split_h', self.cfg.axis(int(OH)),
                                             num_outputs=H_num_outputs,
                                             policy='factors')
-                            self.cfg.define_split('split_layer_{}_w'.format(idx), self.cfg.axis(int(OW)),
+                            self.cfg.define_split('split_w', self.cfg.axis(int(OW)),
                                                 num_outputs=W_num_outputs,
                                                 policy='factors')
 
@@ -99,7 +104,7 @@ class FusionComposer:
 
                         if is_first_stage:
                             self.cfg.define_split('split_layer_0_rc', self.cfg.axis(int(OC)),
-                                            num_outputs=2,
+                                            num_outputs=3,
                                             policy='factors')
                 else:
                     _, OC_chunk, OH, OW, _ = OUTPUT.get_shape()
@@ -112,10 +117,10 @@ class FusionComposer:
                             H_num_outputs = 3
                             W_num_outputs = 3
 
-                            self.cfg.define_split('split_layer_{}_h'.format(idx), self.cfg.axis(int(OH)),
+                            self.cfg.define_split('split_h', self.cfg.axis(int(OH)),
                                             num_outputs=H_num_outputs,
                                             policy='factors')
-                            self.cfg.define_split('split_layer_{}_w'.format(idx), self.cfg.axis(int(OW)),
+                            self.cfg.define_split('split_w', self.cfg.axis(int(OW)),
                                                 num_outputs=W_num_outputs,
                                                 policy='factors')
 
@@ -134,19 +139,18 @@ class FusionComposer:
 
     def update_all_shapes_from_best_cfg(self, best_config):
         if self.pack:
+            conv_count = 0
             for idx in range(self.layer_num):
                 DATA = self.get_input_cfg(idx)
                 FILTER = self.get_filter_cfg(idx)
                 OUTPUT = self.get_output_cfg(idx)
 
-                # if first layer and not depthwise -> vlen_input
-                # if first layer and depthwise -> vlen_layer_0
-                # otherwise -> vlen_layer_{idx-1}
-                cfg_key = 'vlen_input' if (idx == 0 and not FILTER.depthwise) else\
-                            ('vlen_layer_0' if idx == 0 else\
-                            'vlen_layer_{}'.format(idx-1))
+                if not FILTER.depthwise:
+                    conv_count += 1
+                cfg_key = 'vlen_input' if (idx == 0 or conv_count < 2) else\
+                            'vlen_layer_{}'.format(conv_count-2)
                 vlen_i = get_CPU_vlen_from_config(best_config, cfg_key)
-                vlen_o = get_CPU_vlen_from_config(best_config, 'vlen_layer_{}'.format(idx))
+                vlen_o = get_CPU_vlen_from_config(best_config, cfg_key if FILTER.depthwise else 'vlen_layer_{}'.format(conv_count-1))
 
                 DATA.update_shape(vlen_i)
                 FILTER.update_shape(vlen_i, vlen_o)
@@ -214,8 +218,10 @@ class FusionComposer:
             return 'depth_conv'
         if not is_depthwise_array[0] and not is_depthwise_array[1]:
             return 'conv_conv'
+        if not is_depthwise_array[0] and is_depthwise_array[1]:
+            return 'conv_depth'
 
-        return None
+        return 'block'
 
     def __init__(self, p, pack=None, use_autotvm=True, use_auto_scheduler=False, target=None, dtype='float32', workload_name=None):
         self.cfg = None

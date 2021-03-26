@@ -1,17 +1,15 @@
 import tvm, os, logging, sys, argparse
 from tvm.topi import testing
-import tvm.topi.tag as tag
 from tvm import autotvm
 from tvm.topi.utils import get_const_tuple
-from tvm.contrib.pickle_memoize import memoize
 
 from helper import *
 from fusion_composer import *
 
 def verify_tuning(workload_name,
+                    workload_type,
                     parameters,
                     tuning_opt,
-                    name='depth_conv',
                     dtype='float32'):
 
     no_print_ir = tuning_opt.no_print_ir
@@ -23,7 +21,7 @@ def verify_tuning(workload_name,
     use_auto_scheduler = tuning_opt.use_auto_scheduler
     skip_training = tuning_opt.skip_training
     use_autotvm_transfer_learning = tuning_opt.use_autotvm_transfer_learning
-    tuning_trials = tuning_opt.tuning_trials if name == 'depth_conv' or name == 'conv_depth' else 2 * tuning_opt.tuning_trials
+    tuning_trials = tuning_opt.tuning_trials if workload_type == 'depth_conv' or workload_type == 'conv_depth' else 2 * tuning_opt.tuning_trials
     unfused = tuning_opt.unfused
 
     def check_device(device_name):
@@ -265,7 +263,7 @@ def verify_tuning(workload_name,
                 print('FLOP: {}, GFLOPS: {:.2f}.'.format(FLOP, FLOP / tcost_d / 1e9))
         else: # Fused
             if use_autotvm:
-                log_name = 'logs/autotvm/layer/{}/fused/{}_fused_{}.log'.format(device, name, workload_name)
+                log_name = 'logs/autotvm/layer/{}/fused/{}_fused_{}.log'.format(device, workload_type, workload_name)
                 print(log_name)
 
                 # # logging
@@ -287,7 +285,7 @@ def verify_tuning(workload_name,
                             device_name, '0.0.0.0', 9190,
                             number=DEVICES[device_name]["config_params"]["number"],
                             repeat=DEVICES[device_name]["config_params"]["repeat"],
-                            timeout=DEVICES[device_name]["config_params"]["timeout"][name],
+                            timeout=DEVICES[device_name]["config_params"]["timeout"][workload_type],
                             min_repeat_ms=DEVICES[device_name]["config_params"]["min_repeat_ms"],
                             enable_cpu_cache_flush=(True if device == 'cpu' else False)
                         )
@@ -312,7 +310,7 @@ def verify_tuning(workload_name,
                 print('\nBest config:')
                 print(best_config)
             elif use_auto_scheduler:
-                log_name = 'logs/auto_scheduler/layer/{}/{}_fused_{}.json'.format(device, name, workload_name)
+                log_name = 'logs/auto_scheduler/layer/{}/{}_fused_{}.json'.format(device, workload_type, workload_name)
                 print(log_name)
 
                 # logging
@@ -335,7 +333,7 @@ def verify_tuning(workload_name,
                             device_name, '0.0.0.0', 9190,
                             number=DEVICES[device_name]["config_params"]["number"],
                             repeat=DEVICES[device_name]["config_params"]["repeat"],
-                            timeout=DEVICES[device_name]["config_params"]["timeout"][name],
+                            timeout=DEVICES[device_name]["config_params"]["timeout"][workload_type],
                             min_repeat_ms=DEVICES[device_name]["config_params"]["min_repeat_ms"],
                             enable_cpu_cache_flush=(True if device == 'cpu' else False)
                         )
@@ -403,7 +401,7 @@ def verify_tuning(workload_name,
                 print(ref_data[-1][d])
                 print(np.where(d))
             # print("Error rate: {:.2f}%".format((len(d) / len(ref_data[-1]) * 100)))
-            print('{}_fused of {} ({}): average running time is {:.2f} us.'.format(name, workload_name, 'NHWC' if target_str == 'cuda' else 'NCHWc', tcost_d * 1e6))
+            print('{}_fused of {} ({}): average running time is {:.2f} us.'.format(workload_type, workload_name, 'NHWC' if target_str == 'cuda' else 'NCHWc', tcost_d * 1e6))
             FLOP = fc.get_FLOP()
             print('FLOP: {}, GFLOPS: {:.2f}.'.format(FLOP, FLOP / tcost_d / 1e9))
 
@@ -437,10 +435,10 @@ if __name__ == '__main__':
     workloads = get_workloads()
     # workloads = get_workloads_from_file()
 
-    for t, workload in workloads.items():
+    for workload_type, workload in workloads.items():
         for workload_name, parameters in workload.items():
             print(workload_name, parameters)
             verify_tuning(workload_name,
+                            workload_type,
                             parameters,
-                            options,
-                            name=t)
+                            options)
