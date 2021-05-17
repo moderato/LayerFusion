@@ -319,8 +319,8 @@ void benchmark_generated_cpu_unfused(std::string workload_name,
 #if DEBUG == 1
     std::cout << "npy_input_1_shape: (" << input_1_shape_tuple[0] << ", " << input_1_shape_tuple[1] << ", " << input_1_shape_tuple[2] << ", " << input_1_shape_tuple[3] << ", " << input_1_shape_tuple[4] << ")" << std::endl;
     std::cout << "npy_kernel_1_shape: (" << filter_1_shape_tuple[0] << ", " << filter_1_shape_tuple[1] << ", " << filter_1_shape_tuple[2] << ", " << filter_1_shape_tuple[3] << ", " << filter_1_shape_tuple[4] << ", " << filter_1_shape_tuple[5] << ")" << std::endl;
-    std::cout << "npy_output_2_shape: (" << output_1_shape_tuple[0] << ", " << output_1_shape_tuple[1] << ", " << output_1_shape_tuple[2] << ", " << output_1_shape_tuple[3] << ", " << output_1_shape_tuple[4] << ")" << std::endl;
-    std::cout << "npy_input_1_shape: (" << input_2_shape_tuple[0] << ", " << input_2_shape_tuple[1] << ", " << input_2_shape_tuple[2] << ", " << input_2_shape_tuple[3] << ", " << input_2_shape_tuple[4] << ")" << std::endl;
+    std::cout << "npy_output_1_shape: (" << output_1_shape_tuple[0] << ", " << output_1_shape_tuple[1] << ", " << output_1_shape_tuple[2] << ", " << output_1_shape_tuple[3] << ", " << output_1_shape_tuple[4] << ")" << std::endl;
+    std::cout << "npy_input_2_shape: (" << input_2_shape_tuple[0] << ", " << input_2_shape_tuple[1] << ", " << input_2_shape_tuple[2] << ", " << input_2_shape_tuple[3] << ", " << input_2_shape_tuple[4] << ")" << std::endl;
     std::cout << "npy_kernel_2_shape: (" << filter_2_shape_tuple[0] << ", " << filter_2_shape_tuple[1] << ", " << filter_2_shape_tuple[2] << ", " << filter_2_shape_tuple[3] << ", " << filter_2_shape_tuple[4] << ", " << filter_2_shape_tuple[5] << ")" << std::endl;
     std::cout << "npy_output_2_shape: (" << output_2_shape_tuple[0] << ", " << output_2_shape_tuple[1] << ", " << output_2_shape_tuple[2] << ", " << output_2_shape_tuple[3] << ", " << output_2_shape_tuple[4] << ")" << std::endl;
 #endif
@@ -355,7 +355,9 @@ void benchmark_generated_cpu_unfused(std::string workload_name,
         auto elapsed_1 = std::chrono::high_resolution_clock::now() - std::chrono::high_resolution_clock::now();
         auto elapsed_2 = std::chrono::high_resolution_clock::now() - std::chrono::high_resolution_clock::now();
 
+// HW = 3: output, filter, input; HW != 3: output, input, filter
 // ################### Layer 1 ###################
+    if (kernel_1_height == 3) {
 #if ENABLE_PCM == 1
 #if LAYER_1 == 1
         __SSC_MARK(0x111);
@@ -374,12 +376,52 @@ void benchmark_generated_cpu_unfused(std::string workload_name,
 #endif
         dram_bytes_1 += getBytesReadFromMC(before_sstate, after_sstate) + getBytesWrittenToMC(before_sstate, after_sstate);
 #endif
+    } else {
+#if ENABLE_PCM == 1
+#if LAYER_1 == 1
+        __SSC_MARK(0x111);
+#endif
+        before_sstate = getSystemCounterState();
+#endif
+        start = std::chrono::high_resolution_clock::now();
+
+        layer_1(output_1, input_1, filter_1);
+
+        elapsed_1 = std::chrono::high_resolution_clock::now() - start;
+#if ENABLE_PCM == 1
+        after_sstate = getSystemCounterState();
+#if LAYER_1 == 1
+        __SSC_MARK(0x222);
+#endif
+        dram_bytes_1 += getBytesReadFromMC(before_sstate, after_sstate) + getBytesWrittenToMC(before_sstate, after_sstate);
+#endif
+    }
 
 #if DEBUG == 1
         std::cout << "Layer 1 completed!" << std::endl;
 #endif
 
 // ################### Layer 2 ###################
+    if (kernel_2_height == 3) {
+#if ENABLE_PCM == 1
+#if LAYER_2 == 1
+        __SSC_MARK(0x111);
+#endif
+        before_sstate = getSystemCounterState();
+#endif
+        start = std::chrono::high_resolution_clock::now();
+        
+        layer_2(output_2, filter_2, output_1);
+
+        elapsed_2 = std::chrono::high_resolution_clock::now() - start;
+#if ENABLE_PCM == 1
+        after_sstate = getSystemCounterState();
+#if LAYER_2 == 1
+        __SSC_MARK(0x222);
+#endif
+        dram_bytes_2 += getBytesReadFromMC(before_sstate, after_sstate) + getBytesWrittenToMC(before_sstate, after_sstate);
+#endif
+    } else {
 #if ENABLE_PCM == 1
 #if LAYER_2 == 1
         __SSC_MARK(0x111);
@@ -398,6 +440,7 @@ void benchmark_generated_cpu_unfused(std::string workload_name,
 #endif
         dram_bytes_2 += getBytesReadFromMC(before_sstate, after_sstate) + getBytesWrittenToMC(before_sstate, after_sstate);
 #endif
+    }
 
         ns = std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed_1).count();
         runtime_1_us += ns / 1000.0f / REPEATITION;

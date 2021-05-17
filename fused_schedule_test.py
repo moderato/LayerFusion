@@ -92,7 +92,7 @@ def verify_tuning(workload_name,
                                 device_name, '0.0.0.0', 9190,
                                 number=DEVICES[device_name]["config_params"]["number"],
                                 repeat=DEVICES[device_name]["config_params"]["repeat"],
-                                timeout=DEVICES[device_name]["config_params"]["timeout"][name],
+                                timeout=DEVICES[device_name]["config_params"]["timeout"][workload_type],
                                 min_repeat_ms=DEVICES[device_name]["config_params"]["min_repeat_ms"],
                                 enable_cpu_cache_flush=(True if device == 'cpu' else False)
                             )
@@ -173,7 +173,6 @@ def verify_tuning(workload_name,
                         o, i, h, w = params[l][1].shape
                         kernel_6D = te.placeholder((o//vlen_oc, 1, h, w, 1, vlen_oc) if depthwises[l] else (o//vlen_oc, i//vlen_ic, h, w, vlen_ic, vlen_oc))
                         s, flatten_params = tasks[l].func(data_5D, kernel_6D, *params[l][2:])
-                        print(flatten_params)
 
                 if not no_print_ir:
                     print(tvm.lower(s, flatten_params, simple_mode=True))
@@ -200,7 +199,7 @@ def verify_tuning(workload_name,
                 ref_data = []
                 nd_arrays = []
 
-                # Ridiculous return orders: depthwise_conv2d (2, 1, 0), conv2d (2, 0, 1)
+                # Ridiculous return orders: h = 3 (2, 1, 0), h = 1 (2, 0, 1)
                 if prev_out is None:
                     data_np = np.random.uniform(0.0, 0.1, size=get_const_tuple(params[l][0].shape)).astype(dtype)
                 else:
@@ -210,9 +209,9 @@ def verify_tuning(workload_name,
                 ref_data.append(data_np_5D)
                 nd_arrays.append(tvm.nd.array(data_np_5D, ctx))
                 kernel_np = np.random.uniform(0.0, 0.1, size=get_const_tuple(params[l][1].shape)).astype(dtype)
-                o, i, h, w = kernel_np.shape
-                kernel_np_6D = np.array(kernel_np.reshape((o//vlen_oc, vlen_oc, 1, 1, h, w) if depthwises[l] else (o//vlen_oc, vlen_oc, i//vlen_ic, vlen_ic, h, w)).transpose(0, 2, 4, 5, 3, 1), order='C')
-                if h == 3:
+                o, i, fh, fw = kernel_np.shape
+                kernel_np_6D = np.array(kernel_np.reshape((o//vlen_oc, vlen_oc, 1, 1, fh, fw) if depthwises[l] else (o//vlen_oc, vlen_oc, i//vlen_ic, vlen_ic, fh, fw)).transpose(0, 2, 4, 5, 3, 1), order='C')
+                if fh == 3:
                     ref_data = [kernel_np_6D] + ref_data
                     nd_arrays = [tvm.nd.array(kernel_np_6D, ctx)] + nd_arrays
                 else:
@@ -238,8 +237,8 @@ def verify_tuning(workload_name,
                     folder_name = 'npy/unfused/{}_{}/'.format(workload_name, l+1)
                     if not os.path.exists(folder_name):
                         os.mkdir(folder_name)
-                    np.save('{}/input.npy'.format(folder_name), ref_data[2] if l == 0 else ref_data[1])
-                    np.save('{}/filter.npy'.format(folder_name), ref_data[1] if l == 0 else ref_data[2])
+                    np.save('{}/input.npy'.format(folder_name), ref_data[2] if fh == 3 else ref_data[1])
+                    np.save('{}/filter.npy'.format(folder_name), ref_data[1] if fh == 3 else ref_data[2])
                     np.save('{}/output.npy'.format(folder_name), ref_data[0])
 
                 # Measure a 'delta' time
