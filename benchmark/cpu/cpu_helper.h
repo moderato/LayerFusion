@@ -18,8 +18,8 @@ void benchmark_generated_cpu_fused(std::string workload_name,
     int kernel_1_in_channel = input_channel;
     // To be calculated
     int inter_batch = input_batch;
-    int inter_height = kernel_1_stride == 1 ? input_height : input_height / 2; // TODO: formula to calculate input and output
-    int inter_width = kernel_1_stride == 1 ? input_width : input_width / 2;
+    int inter_height = kernel_1_stride == 1 ? input_height : (input_height + 1) / 2; // TODO: formula to calculate input and output
+    int inter_width = kernel_1_stride == 1 ? input_width : (input_width + 1) / 2;
     int inter_channel = is_f1_depthwise ? input_channel * kernel_1_out_channel_or_multiplier : kernel_1_out_channel_or_multiplier;
 
     // Some aliases
@@ -27,8 +27,8 @@ void benchmark_generated_cpu_fused(std::string workload_name,
     int kernel_2_in_channel = inter_channel;
     // To be calculated
     int output_batch = inter_batch;
-    int output_height = kernel_2_stride == 1 ? inter_height : inter_height / 2; // TODO: formula to calculate input and output
-    int output_width = kernel_2_stride == 1 ? inter_width : inter_width / 2;
+    int output_height = kernel_2_stride == 1 ? inter_height : (inter_height + 1) / 2; // TODO: formula to calculate input and output
+    int output_width = kernel_2_stride == 1 ? inter_width : (inter_width + 1) / 2;
     int output_channel = kernel_2_out_channel;
 
     // filenames
@@ -224,8 +224,8 @@ void benchmark_generated_cpu_unfused(std::string workload_name,
     int kernel_1_in_channel = input_channel;
     // To be calculated
     int inter_batch = input_batch;
-    int inter_height = kernel_1_stride == 1 ? input_height : input_height / 2; // TODO: formula to calculate input and output
-    int inter_width = kernel_1_stride == 1 ? input_width : input_width / 2;
+    int inter_height = kernel_1_stride == 1 ? input_height : (input_height + 1) / 2; // TODO: formula to calculate input and output
+    int inter_width = kernel_1_stride == 1 ? input_width : (input_width + 1) / 2;
     int inter_channel = is_f1_depthwise ? input_channel * kernel_1_out_channel_or_multiplier : kernel_1_out_channel_or_multiplier;
 
     // Some aliases
@@ -233,8 +233,8 @@ void benchmark_generated_cpu_unfused(std::string workload_name,
     int kernel_2_in_channel = inter_channel;
     // To be calculated
     int output_batch = inter_batch;
-    int output_height = kernel_2_stride == 1 ? inter_height : inter_height / 2; // TODO: formula to calculate input and output
-    int output_width = kernel_2_stride == 1 ? inter_width : inter_width / 2;
+    int output_height = kernel_2_stride == 1 ? inter_height : (inter_height + 1) / 2; // TODO: formula to calculate input and output
+    int output_width = kernel_2_stride == 1 ? inter_width : (inter_width + 1) / 2;
     int output_channel = kernel_2_out_channel;
 
     // filenames

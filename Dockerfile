@@ -62,7 +62,7 @@ RUN cd ${HOME}/Documents && \
     wget -q https://software.intel.com/content/dam/develop/external/us/en/documents/sde-external-8.56.0-2020-07-05-lin.tar.bz2 && \
     tar -xf sde-external-8.56.0-2020-07-05-lin.tar.bz2 && \
     mv sde-external-8.56.0-2020-07-05-lin sde && \
-    export PATH=${PATH}:"${HOME}/sde" >> ${HOME}/.bashrc && \
+    export PATH=${PATH}:"${HOME}/Documents/sde" >> ${HOME}/.bashrc && \
     rm sde-external-8.56.0-2020-07-05-lin.tar.bz2
 
 # PCM

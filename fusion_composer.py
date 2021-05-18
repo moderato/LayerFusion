@@ -216,6 +216,8 @@ class FusionComposer:
         is_depthwise_array = [l[1].depthwise for l in self.layers[:-1]]
         if is_depthwise_array[0] and not is_depthwise_array[1]:
             return 'depth_conv'
+        if not is_depthwise_array[0] and is_depthwise_array[1]:
+            return 'conv_depth'
         if not is_depthwise_array[0] and not is_depthwise_array[1]:
             return 'conv_conv'
         if not is_depthwise_array[0] and is_depthwise_array[1]:

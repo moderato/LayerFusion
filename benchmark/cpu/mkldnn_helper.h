@@ -42,8 +42,8 @@ void benchmark_mkldnn(std::string workload_name,
     int padding_1_h = kernel_1_height == 5 ? 2 : (kernel_1_height == 3 ? 1 : 0);
     int padding_1_w = kernel_1_width == 5 ? 2 : (kernel_1_width == 3 ? 1 : 0);
     int inter_batch = input_batch;
-    int inter_height = kernel_1_stride == 1 ? input_height : input_height / 2; // TODO: formula to calculate input and output
-    int inter_width = kernel_1_stride == 1 ? input_width : input_width / 2;
+    int inter_height = kernel_1_stride == 1 ? input_height : (input_height + 1) / 2; // TODO: formula to calculate input and output
+    int inter_width = kernel_1_stride == 1 ? input_width : (input_width + 1) / 2;
     int inter_channel = is_f1_depthwise ? input_channel * kernel_1_out_channel_or_multiplier : kernel_1_out_channel_or_multiplier;
 
     // Some aliases
@@ -53,8 +53,8 @@ void benchmark_mkldnn(std::string workload_name,
     int padding_2_h = kernel_2_height == 5 ? 2 : (kernel_2_height == 3 ? 1 : 0);
     int padding_2_w = kernel_2_width == 5 ? 2 : (kernel_2_width == 3 ? 1 : 0);
     int output_batch = inter_batch;
-    int output_height = kernel_2_stride == 1 ? inter_height : inter_height / 2; // TODO: formula to calculate input and output
-    int output_width = kernel_2_stride == 1 ? inter_width : inter_width / 2;
+    int output_height = kernel_2_stride == 1 ? inter_height : (inter_height + 1) / 2; // TODO: formula to calculate input and output
+    int output_width = kernel_2_stride == 1 ? inter_width : (inter_width + 1) / 2;
     int output_channel = kernel_2_out_channel;
 
     // filenames

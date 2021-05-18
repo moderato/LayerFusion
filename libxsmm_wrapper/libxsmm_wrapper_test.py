@@ -462,7 +462,7 @@ def driver():
                 sheet1.write(row1, 1, gflops_tvm1)
 
         row1 = row1 + 1
-        book.save('AutoTVM_tensorize_' + layer + '.xls')
+        book.save('logs/AutoTVM_tensorize_' + layer + '.xls')
 
 if __name__ == '__main__':
     driver()
