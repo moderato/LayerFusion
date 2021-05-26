@@ -1,14 +1,14 @@
 from fusion_composer import *
 from helper import get_workloads
-import os
 from matplotlib import pyplot as plt
+import argparse
 
 if __name__ == '__main__':
-    workloads = get_workloads()
-    print("L3: 8MB")
-    print("L2: 256KB per core")
-    print("L1: 32KB per core")
+    parser = argparse.ArgumentParser(description="Parses command.")
+    parser.add_argument("-i", "--iterations", type=int, default=20, help="Number of iterations for roofline collection")
+    args = parser.parse_args()
 
+    workloads = get_workloads()
     footprints = []
     fused_times = []
     tvm_times = []
@@ -26,7 +26,7 @@ if __name__ == '__main__':
             mem_bytes_1_th, mem_bytes_2_th = fc.get_theoretical_mem_bytes_per_layer()
             flop_1_th, flop_2_th = fc.get_FLOP_per_layer()
             
-            flop_file = 'logs/flop/cpu/20/{}.csv'.format(w)
+            flop_file = 'logs/flop/cpu/{}/{}.csv'.format(args.iterations, w)
             with open(flop_file, 'r') as f:
                 lines = f.readlines()
             fused_flop_em = float(lines[1].split(',')[0])
@@ -35,7 +35,7 @@ if __name__ == '__main__':
             flop_1_em_mkldnn = float(lines[1].split(',')[3])
             flop_2_em_mkldnn = float(lines[1].split(',')[4])
 
-            ai_file = 'logs/arithmetic_intensity/cpu/20/{}.csv'.format(w)
+            ai_file = 'logs/arithmetic_intensity/cpu/{}/{}.csv'.format(args.iterations, w)
             with open(ai_file, 'r') as f:
                 lines = f.readlines()
             fused_ai_dram_em = float(lines[1].split(',')[0])
@@ -60,7 +60,7 @@ if __name__ == '__main__':
             mem_bytes_1_cache_em_mkldnn = int(flop_1_em_mkldnn / ai_1_cache_em_mkldnn)
             mem_bytes_2_cache_em_mkldnn = int(flop_2_em_mkldnn / ai_2_cache_em_mkldnn)
 
-            time_file = 'logs/runtime/cpu/20/{}.csv'.format(w)
+            time_file = 'logs/runtime/cpu/{}/{}.csv'.format(args.iterations, w)
             with open(time_file, 'r') as f:
                 lines = f.readlines()
             fused_time = float(lines[1].split(',')[0])
@@ -69,23 +69,23 @@ if __name__ == '__main__':
             layer_1_time_mkldnn = float(lines[1].split(',')[3])
             layer_2_time_mkldnn = float(lines[1].split(',')[4])
 
-            print("--------", w)
-            print("Time:              {:.2f},           {:.2f}, {:.2f},    {:.2f}, {:.2f}".format(fused_time, layer_1_time_tvm, layer_2_time_tvm, layer_1_time_mkldnn, layer_2_time_mkldnn))
-            print("Footprint:         {:.2f} MB,         {:.2f} MB, {:.2f} MB".format((mem_bytes_1_th + mem_bytes_2_th) / 1024 / 1024, (mem_bytes_1_th) / 1024 / 1024, (mem_bytes_2_th) / 1024 / 1024))
-            print("Theoretical AI:    {:.2f},            {:.2f}, {:.2f}".format((flop_1_th + flop_2_th) / (mem_bytes_1_th + mem_bytes_2_th), flop_1_th / mem_bytes_1_th, flop_2_th / mem_bytes_2_th))
-            print("Empirical DRAM AI: {:.2f}".format(fused_ai_dram_em))
-            print("Bandwidth:         {:.2f}".format(mem_bytes_1_th / layer_1_time_tvm / 1e3))
-            print("fused em/th dram mem bytes", fused_mem_bytes_dram_em / fused_mem_bytes_th)
-            print("tvm 1 em/th dram mem bytes", mem_bytes_1_dram_em_tvm / mem_bytes_1_th)
-            print("tvm 2 em/th dram mem bytes", mem_bytes_2_dram_em_tvm / mem_bytes_2_th)
-            print("mkldnn 1 em/th dram mem bytes", mem_bytes_1_dram_em_mkldnn / mem_bytes_1_th)
-            print("mkldnn 2 em/th dram mem bytes", mem_bytes_2_dram_em_mkldnn / mem_bytes_2_th)
-            print("fused em cache mem bytes", fused_mem_bytes_cache_em)
-            print("tvm 1 em cache mem bytes", mem_bytes_1_cache_em_tvm)
-            print("tvm 2 em cache mem bytes", mem_bytes_2_cache_em_tvm)
-            print("mkldnn 1 em cache mem bytes", mem_bytes_1_cache_em_mkldnn)
-            print("mkldnn 2 em cache mem bytes", mem_bytes_2_cache_em_mkldnn)
-            print(flop_1_th, flop_2_th)
+            # print("--------", w)
+            # print("Time:              {:.2f},           {:.2f}, {:.2f},    {:.2f}, {:.2f}".format(fused_time, layer_1_time_tvm, layer_2_time_tvm, layer_1_time_mkldnn, layer_2_time_mkldnn))
+            # print("Footprint:         {:.2f} MB,         {:.2f} MB, {:.2f} MB".format((mem_bytes_1_th + mem_bytes_2_th) / 1024 / 1024, (mem_bytes_1_th) / 1024 / 1024, (mem_bytes_2_th) / 1024 / 1024))
+            # print("Theoretical AI:    {:.2f},            {:.2f}, {:.2f}".format((flop_1_th + flop_2_th) / (mem_bytes_1_th + mem_bytes_2_th), flop_1_th / mem_bytes_1_th, flop_2_th / mem_bytes_2_th))
+            # print("Empirical DRAM AI: {:.2f}".format(fused_ai_dram_em))
+            # print("Bandwidth:         {:.2f}".format(mem_bytes_1_th / layer_1_time_tvm / 1e3))
+            # print("fused em/th dram mem bytes", fused_mem_bytes_dram_em / fused_mem_bytes_th)
+            # print("tvm 1 em/th dram mem bytes", mem_bytes_1_dram_em_tvm / mem_bytes_1_th)
+            # print("tvm 2 em/th dram mem bytes", mem_bytes_2_dram_em_tvm / mem_bytes_2_th)
+            # print("mkldnn 1 em/th dram mem bytes", mem_bytes_1_dram_em_mkldnn / mem_bytes_1_th)
+            # print("mkldnn 2 em/th dram mem bytes", mem_bytes_2_dram_em_mkldnn / mem_bytes_2_th)
+            # print("fused em cache mem bytes", fused_mem_bytes_cache_em)
+            # print("tvm 1 em cache mem bytes", mem_bytes_1_cache_em_tvm)
+            # print("tvm 2 em cache mem bytes", mem_bytes_2_cache_em_tvm)
+            # print("mkldnn 1 em cache mem bytes", mem_bytes_1_cache_em_mkldnn)
+            # print("mkldnn 2 em cache mem bytes", mem_bytes_2_cache_em_mkldnn)
+            # print(flop_1_th, flop_2_th)
 
             footprints.append((mem_bytes_1_th + mem_bytes_2_th) / 1024 / 1024)
             keys.append(w)
@@ -136,9 +136,7 @@ if __name__ == '__main__':
     ax.set_yticklabels([str(t) for t in y_ticks], fontsize=8)
     ax.set_ylim([y_ticks[0] * 0.9, y_ticks[-1] * 1.1])
     plt.tight_layout()
-    plt.savefig('footprints.png', bbox_inches='tight')
-    plt.savefig('footprints.eps', bbox_inches='tight')
-    plt.savefig('footprints.pdf', bbox_inches='tight')
+    plt.savefig('plots/footprints.pdf', bbox_inches='tight')
 
     x_axis = range(0, len(keys))
     width = 0.2
@@ -152,9 +150,7 @@ if __name__ == '__main__':
     ax.set_xticklabels(keys, rotation=45, fontsize=12)
     fig.set_size_inches(12, 3.5)
     plt.tight_layout()
-    plt.savefig('runtime.png', bbox_inches='tight')
-    plt.savefig('runtime.eps', bbox_inches='tight')
-    plt.savefig('runtime.pdf', bbox_inches='tight')
+    plt.savefig('plots/runtime.pdf', bbox_inches='tight')
 
     fig, ax = plt.subplots()
     a = ax.bar([x-width for x in x_axis], fused_flops, width=0.2)
@@ -165,9 +161,7 @@ if __name__ == '__main__':
     ax.set_xticklabels(keys, rotation=45, fontsize=12)
     fig.set_size_inches(12, 3.5)
     plt.tight_layout()
-    plt.savefig('flops.png', bbox_inches='tight')
-    plt.savefig('flops.eps', bbox_inches='tight')
-    plt.savefig('flops.pdf', bbox_inches='tight')
+    plt.savefig('plots/flops.pdf', bbox_inches='tight')
 
     fig, ax = plt.subplots()
     a = ax.bar([x-width for x in x_axis], [x / y for x, y in zip(fused_flops, mkldnn_flops)], width=0.2)
@@ -182,17 +176,16 @@ if __name__ == '__main__':
         ax.axhline(y, 0, 1, linestyle='--', linewidth=0.3, color='black')
     fig.set_size_inches(12, 3.5)
     plt.tight_layout()
-    plt.savefig('flops_normalized.png', bbox_inches='tight')
-    plt.savefig('flops_normalized.eps', bbox_inches='tight')
-    plt.savefig('flops_normalized.pdf', bbox_inches='tight')
+    plt.savefig('plots/flops_normalized.pdf', bbox_inches='tight')
 
-    speedup_1 = 1
-    for a in [x / y for x, y in zip(fused_flops, mkldnn_flops)]:
-        speedup_1 *= a
-    speedup_2 = 1
+    speedup_tvm = 1
     for a in [x / y for x, y in zip(fused_flops, tvm_flops)]:
-        speedup_2 *= a
-    print(speedup_1, speedup_2, \
-            max([x / y for x, y in zip(fused_flops, mkldnn_flops)]), \
-                max([x / y for x, y in zip(fused_flops, tvm_flops)]), \
-                    len([x / y for x, y in zip(fused_flops, mkldnn_flops)]))
+        speedup_tvm *= a
+    speedup_mkldnn = 1
+    for a in [x / y for x, y in zip(fused_flops, mkldnn_flops)]:
+        speedup_mkldnn *= a
+    num_workloads = len([x / y for x, y in zip(fused_flops, mkldnn_flops)])
+    print("Geo mean speedup over TVM: {:.3f}".format(speedup_tvm ** (1.0 / num_workloads)))
+    print("Max over TVM: {:.3f}".format(max([x / y for x, y in zip(fused_flops, tvm_flops)])))
+    print("Geo mean speedup over MKLDNN: {:.3f}".format(speedup_mkldnn ** (1.0 / num_workloads)))
+    print("Max over MKLDNN: {:.3f}".format(max([x / y for x, y in zip(fused_flops, mkldnn_flops)])))

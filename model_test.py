@@ -70,7 +70,6 @@ def fuse_tasks(tasks, tuning_opt, target_str="cuda"):
 
 def tune_autotvm_tasks(tasks,
                tuning_opt,
-               target_str="cuda",
                log_filename='tuning.log'):
     print("Tuning...")
 
@@ -80,14 +79,16 @@ def tune_autotvm_tasks(tasks,
         print(task.workload)
 
         # AutoTVM setting
+        device_name = tuning_opt.device
         measure_option = autotvm.measure_option(
             builder=autotvm.LocalBuilder(),
             runner=autotvm.RPCRunner(
-                TARGETS[target_str]["key"], '0.0.0.0', 9190,
-                number=TARGETS[target_str]["config_params"]["number"],
-                repeat=TARGETS[target_str]["config_params"]["repeat"],
-                timeout=TARGETS[target_str]["config_params"]["timeout"]['general'],
-                min_repeat_ms=TARGETS[target_str]["config_params"]["min_repeat_ms"])
+                device_name, '0.0.0.0', 9190,
+                number=DEVICES[device_name]["config_params"]["number"],
+                repeat=DEVICES[device_name]["config_params"]["repeat"],
+                timeout=DEVICES[device_name]["config_params"]["timeout"]["general"],
+                min_repeat_ms=DEVICES[device_name]["config_params"]["min_repeat_ms"]
+            )
         )
         tuner = autotvm.tuner.XGBTuner(task, feature_type="curve")
 
@@ -118,7 +119,7 @@ def tune_graph(graph, dshape, target_str, records, opt_sch_file, use_DP=True):
     executor.run()
     executor.write_opt_sch2record_file(opt_sch_file)
 
-def tune_auto_scheduler_tasks(tasks, task_weights, tuning_opt, target_str, log_filename):
+def tune_auto_scheduler_tasks(tasks, task_weights, tuning_opt, device_name, log_filename):
     tuner = auto_scheduler.TaskScheduler(tasks, task_weights)
     tune_option = auto_scheduler.TuningOptions(
         num_measure_trials=tuning_opt.tuning_trials,
@@ -126,24 +127,21 @@ def tune_auto_scheduler_tasks(tasks, task_weights, tuning_opt, target_str, log_f
         verbose=2,
         builder=auto_scheduler.LocalBuilder(),
         runner=auto_scheduler.RPCRunner(
-            TARGETS[target_str]["key"], '0.0.0.0', 9190,
-            number=TARGETS[target_str]["config_params"]["number"],
-            repeat=TARGETS[target_str]["config_params"]["repeat"],
-            timeout=TARGETS[target_str]["config_params"]["timeout"]['general'],
-            min_repeat_ms=TARGETS[target_str]["config_params"]["min_repeat_ms"]
+            device_name, '0.0.0.0', 9190,
+            number=DEVICES[device_name]["config_params"]["number"],
+            repeat=DEVICES[device_name]["config_params"]["repeat"],
+            timeout=DEVICES[device_name]["config_params"]["timeout"]["general"],
+            min_repeat_ms=DEVICES[device_name]["config_params"]["min_repeat_ms"]
         )
     )
     tuner.tune(tune_option)
 
 def tune_and_evaluate(tuning_opt, dtype='float32'):
-    target_str = tuning_opt.target
-    if 'avx512' in target_str:
-        target_str = 'llvm -mcpu=skylake-avx512'
-    elif 'avx2' in target_str:
-        target_str = 'llvm -mcpu=core-avx2'
+    device_name = tuning_opt.device
+    target_str = DEVICES[device_name]["target"]
     network = tuning_opt.network
     assert target_str in ['cuda', 'llvm -mcpu=core-avx2', 'llvm -mcpu=skylake-avx512']
-    assert network in ['mobilenet_v1', 'mobilenet_v2', 'mnasnet_a1', 'resnet_50', 'resnet_101']
+    assert network in ['mobilenet_v1', 'mobilenet_v2', 'mnasnet_a1', 'resnet_18', 'resnet_50', 'resnet_101']
 
     if tuning_opt.use_auto_scheduler:
         # Extract workloads from relay program
@@ -211,7 +209,7 @@ def tune_and_evaluate(tuning_opt, dtype='float32'):
                 print("\n### After replacement")
                 pprint(tasks)
                 print("\n")
-            tune_autotvm_tasks(tasks, tuning_opt, target_str=target_str, log_filename=log_filename)
+            tune_autotvm_tasks(tasks, tuning_opt, log_filename=log_filename)
 
         # Tune graph for CPU
         if not tuning_opt.autotvm_skip_graph_tuning and ('llvm' in target_str):
@@ -222,7 +220,7 @@ def tune_and_evaluate(tuning_opt, dtype='float32'):
 
         # Compile kernels with history best records
         print("############### Compile... ###############")
-        with (autotvm.apply_history_best(log_filename) if 'cuda' in target_str else autotvm.apply_graph_best(graph_opt_sch_file)):
+        with autotvm.apply_history_best(log_filename) if 'cuda' in target_str else autotvm.apply_graph_best(graph_opt_sch_file):
             if not tuning_opt.no_fusion:
                 mod = fuse_preprocess(mod['main'], params, target_str, layout)
             with tvm.transform.PassContext(opt_level=3, trace=print_ir):
@@ -277,7 +275,7 @@ if __name__ == '__main__':
         parser.add_argument("-n", "--no_fusion", action="store_true", help="No fusion.")
         parser.add_argument("-r", "--use_auto_scheduler", action="store_true", help="Use auto scheduler.")
         parser.add_argument("-t", "--tuning_trials", type=int, default=2000, help="Number of AutoTVM trials.")
-        parser.add_argument("-g", "--target", type=str, default="llvm -mcpu=core-avx2", help="Target type.")
+        parser.add_argument("-v", "--device", type=str, default="i7_7700K", help="Device name.")
         parser.add_argument("-w", "--network", type=str, default="mobilenet_v1", help="Network type.")
         options = parser.parse_args()
         return options

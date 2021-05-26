@@ -401,6 +401,4 @@ for device in devices:
                         j += 1
             leg2 = fig.legend(handles, src_name, loc='lower right', bbox_to_anchor=(0.98, 0.01))
             plt.tight_layout()
-            plt.savefig(filename + '.png', bbox_inches='tight')
-            plt.savefig(filename + '.eps', bbox_inches='tight')
-            plt.savefig(filename + '.pdf', bbox_inches='tight')
+            plt.savefig('plots/{}.pdf'.format(filename), bbox_inches='tight')
