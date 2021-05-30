@@ -92,9 +92,9 @@ if __name__ == '__main__':
             fused_times.append(fused_time)
             tvm_times.append(layer_1_time_tvm + layer_2_time_tvm)
             mkldnn_times.append(layer_1_time_mkldnn + layer_2_time_mkldnn)
-            fused_flops.append(fused_flop_em / fused_time / 1000)
-            tvm_flops.append((flop_1_em_tvm + flop_2_em_tvm) / (layer_1_time_tvm + layer_2_time_tvm) / 1000)
-            mkldnn_flops.append((flop_1_em_mkldnn + flop_2_em_mkldnn) / (layer_1_time_mkldnn + layer_2_time_mkldnn) / 1000)
+            fused_flops.append((flop_1_th + flop_2_th) / fused_time / 1000) # Use theoretical flop instead of measured one. Same below.
+            tvm_flops.append((flop_1_th + flop_2_th) / (layer_1_time_tvm + layer_2_time_tvm) / 1000)
+            mkldnn_flops.append((flop_1_th + flop_2_th) / (layer_1_time_mkldnn + layer_2_time_mkldnn) / 1000)
 
     cpus = {
         'names': ['i7_7700K', 'GCP Intel', 'GCP AMD'],
