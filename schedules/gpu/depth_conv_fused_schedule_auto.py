@@ -53,7 +53,7 @@ def schedule_depth_conv_fused_nhwc_auto(cfg, outs):
     n, h, w, c = s[layer_output_dict['Layer_1']].op.axis
     ho, thz, thy, h = cfg['split_h'].apply(s, layer_output_dict['Layer_1'], h)
     wo, vthy, w = cfg['split_w'].apply(s, layer_output_dict['Layer_1'], w)
-    recompute, reuse, thx = cfg['split_layer_1_c'].apply(s, layer_output_dict['Layer_1'], c) # reuse > 1 ??
+    recompute, reuse, thx = cfg['split_1_c'].apply(s, layer_output_dict['Layer_1'], c) # reuse > 1 ??
     s[layer_output_dict['Layer_1']].reorder(n, ho, wo, recompute, reuse, vthy, thz, thy, thx, h, w)
     fused_blx = s[layer_output_dict['Layer_1']].fuse(n, ho, wo, recompute)
     s[layer_output_dict['Layer_1']].bind(fused_blx, block_x)
@@ -64,7 +64,7 @@ def schedule_depth_conv_fused_nhwc_auto(cfg, outs):
     s[layer_output_dict['Layer_1']].bind(thx, thread_x)
     num_thread_z = output_step_tile_size_h = cfg['split_h'].size[1]
     num_thread_y = output_step_tile_size_w = cfg['split_h'].size[2]
-    num_thread_x = cfg['split_layer_1_c'].size[-1]
+    num_thread_x = cfg['split_1_c'].size[-1]
     output_tile_size_h = cfg['split_h'].size[1] * cfg['split_h'].size[2] * cfg['split_h'].size[3]
     output_tile_size_w = cfg['split_w'].size[1] * cfg['split_w'].size[2]
     
@@ -72,7 +72,7 @@ def schedule_depth_conv_fused_nhwc_auto(cfg, outs):
     s[OL].compute_at(s[layer_output_dict['Layer_1']], thx)
     n, h, w, c = s[OL].op.axis
     rc, _, _ = s[OL].op.reduce_axis
-    xocc, xoicc, xiicc = cfg['split_layer_0_c'].apply(s, OL, rc)
+    xocc, xoicc, xiicc = cfg['split_0_c'].apply(s, OL, rc)
     s[OL].reorder(n, xocc, xoicc, h, w, c, xiicc)
 
     if bn_relu[1]:

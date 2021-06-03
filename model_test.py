@@ -2,13 +2,11 @@ import tvm, tvm.relay.testing
 import tvm.contrib.graph_runtime as runtime
 import os, argparse
 import numpy as np
-from tvm import te, autotvm, relay, auto_scheduler
-from tvm.autotvm.tuner import XGBTuner
+from tvm import autotvm, relay, auto_scheduler
 from tvm.autotvm.graph_tuner import DPTuner, PBQPTuner
 from tvm.contrib.utils import tempdir
 from tvm.contrib.debugger import debug_runtime
 
-from fusion_composer import FusionComposer
 from helper import *
 from pprint import pprint
 
@@ -114,8 +112,8 @@ def tune_graph(graph, dshape, target_str, records, opt_sch_file, use_DP=True):
     target = tvm.target.Target(target_str)
     target_op = [relay.op.get("nn.conv2d"), relay.op.get("nn.fused_conv2d")] # Tune fused_conv2d too.
     Tuner = DPTuner if use_DP else PBQPTuner
-    executor = Tuner(graph, {'data': dshape}, records, target_op, target, max_sch_num=50)
-    executor.benchmark_layout_transform(min_exec_num=3000)
+    executor = Tuner(graph, {'data': dshape}, records, target_op, target, max_sch_num=100)
+    executor.benchmark_layout_transform(min_exec_num=5000)
     executor.run()
     executor.write_opt_sch2record_file(opt_sch_file)
 
@@ -216,6 +214,7 @@ def tune_and_evaluate(tuning_opt, dtype='float32'):
             tmp_f = mod['main']
             if not tuning_opt.no_fusion:
                 tmp_f = graph_tuning_preprocess(tmp_f, layout=layout)
+            # print(tmp_f)
             tune_graph(tmp_f, input_shape, target_str, log_filename, graph_opt_sch_file)
 
         # Compile kernels with history best records
@@ -261,7 +260,7 @@ def tune_and_evaluate(tuning_opt, dtype='float32'):
 if __name__ == '__main__':
     # For AutoTVM:
     # terminal 1: python -m tvm.exec.rpc_tracker --host=0.0.0.0 --port=9190
-    # terminal 2: python -m tvm.exec.rpc_server --tracker=0.0.0.0:9190 --key=1050ti
+    # terminal 2: python -m tvm.exec.rpc_server --tracker=0.0.0.0:9190 --key=<device_name>
     # terminal 3: run this code
 
     def get_options():

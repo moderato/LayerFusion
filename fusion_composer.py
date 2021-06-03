@@ -56,19 +56,19 @@ class FusionComposer:
                 if self.pack:
                     if idx == 0: # Define input vlen for the first layer, no matter what it is
                         self.cfg.define_knob('vlen_input', get_vlen(DATA.C, self.target.kind.name))
-                    if not FILTER.depthwise: # Only define vlen for conv, because dw-conv uses the vlen of the previous layer
-                        self.cfg.define_knob('vlen_layer_{}'.format(conv_count), get_vlen(OUTPUT.C, self.target.kind.name))
+                    if not FILTER.depthwise: # ONLY DEFINE vlen FOR CONV, because dw-conv uses the vlen of the previous layer
+                        self.cfg.define_knob('vlen_conv_{}'.format(conv_count), get_vlen(OUTPUT.C, self.target.kind.name))
                         conv_count += 1
 
                     # Assuming no two dw-convs come together
                     if idx == 0 or conv_count < 2: #
                         vlen_i = self.cfg['vlen_input'].val
                     else: #
-                        vlen_i = self.cfg['vlen_layer_{}'.format(conv_count-2)].val
+                        vlen_i = self.cfg['vlen_conv_{}'.format(conv_count-2)].val
                     if FILTER.depthwise: # dw-convs have same vlen_o and vlen_i
                         vlen_o = vlen_i
                     else: # Convs have their own vlen_o
-                        vlen_o = self.cfg['vlen_layer_{}'.format(conv_count-1)].val
+                        vlen_o = self.cfg['vlen_conv_{}'.format(conv_count-1)].val
 
                     DATA.update_shape(vlen_i)
                     FILTER.update_shape(vlen_i, vlen_o)
@@ -85,7 +85,7 @@ class FusionComposer:
                     c_filter = lambda x: x.size[-1] in get_vlen(OC, self.target.kind.name)
 
                     if FILTER.depthwise:
-                        self.cfg.define_split('split_layer_{}_c'.format(idx), self.cfg.axis(int(OC)), num_outputs=3, policy='factors', filter=c_filter)
+                        self.cfg.define_split('split_{}_c'.format(idx), self.cfg.axis(int(OC)), num_outputs=3, policy='factors', filter=c_filter)
                     else:
                         if is_final_stage:
                             H_num_outputs = 4
@@ -98,12 +98,12 @@ class FusionComposer:
                                                 num_outputs=W_num_outputs,
                                                 policy='factors')
 
-                        self.cfg.define_split('split_layer_{}_c'.format(idx), self.cfg.axis(int(OC)),
+                        self.cfg.define_split('split_{}_c'.format(idx), self.cfg.axis(int(OC)),
                                         num_outputs=3,
                                         policy='factors', filter=c_filter)
 
                         if is_first_stage:
-                            self.cfg.define_split('split_layer_0_rc', self.cfg.axis(int(OC)),
+                            self.cfg.define_split('split_0_rc', self.cfg.axis(int(OC)),
                                             num_outputs=3,
                                             policy='factors')
                 else:
@@ -111,7 +111,7 @@ class FusionComposer:
                     c_filter = lambda x: x.size[-1] >= -1 # dummy
 
                     if FILTER.depthwise:
-                        self.cfg.define_split('split_layer_{}_c'.format(idx), self.cfg.axis(int(OC_chunk)), num_outputs=2, policy='factors', filter=c_filter)
+                        self.cfg.define_split('split_{}_c'.format(idx), self.cfg.axis(int(OC_chunk)), num_outputs=2, policy='factors', filter=c_filter)
                     else:
                         if is_final_stage:
                             H_num_outputs = 3
@@ -124,12 +124,12 @@ class FusionComposer:
                                                 num_outputs=W_num_outputs,
                                                 policy='factors')
 
-                        self.cfg.define_split('split_layer_{}_c'.format(idx), self.cfg.axis(int(OC_chunk)),
+                        self.cfg.define_split('split_{}_c'.format(idx), self.cfg.axis(int(OC_chunk)),
                                         num_outputs=2,
                                         policy='factors', filter=c_filter)
 
                         if is_first_stage:
-                            self.cfg.define_split('split_layer_0_rc', self.cfg.axis(int(OC_chunk)),
+                            self.cfg.define_split('split_0_rc', self.cfg.axis(int(OC_chunk)),
                                             num_outputs=2,
                                             policy='factors')
 
@@ -148,9 +148,9 @@ class FusionComposer:
                 if not FILTER.depthwise:
                     conv_count += 1
                 cfg_key = 'vlen_input' if (idx == 0 or conv_count < 2) else\
-                            'vlen_layer_{}'.format(conv_count-2)
+                            'vlen_conv_{}'.format(conv_count-2)
                 vlen_i = get_CPU_vlen_from_config(best_config, cfg_key)
-                vlen_o = get_CPU_vlen_from_config(best_config, cfg_key if FILTER.depthwise else 'vlen_layer_{}'.format(conv_count-1))
+                vlen_o = get_CPU_vlen_from_config(best_config, cfg_key if FILTER.depthwise else 'vlen_conv_{}'.format(conv_count-1))
 
                 DATA.update_shape(vlen_i)
                 FILTER.update_shape(vlen_i, vlen_o)
@@ -803,7 +803,7 @@ def _alter_fused_conv2d_layout(attrs, inputs, tinfos, out_type):
             if cfg.is_fallback:
                 raise Exception("Don't accept FallBack config")
 
-            vlen_o = cfg['vlen_layer_{}'.format(l)].val
+            vlen_o = cfg['vlen_conv_{}'.format(l)].val
             if l == 0:
                 if depthwise:
                     vlen_i = vlen_o
@@ -864,7 +864,7 @@ def _fused_conv2d_infer_layout(workload, cfg):
     # Input
     first_feature, first_filter = layers[0]
     if first_filter.depthwise:
-        vlen_i = cfg['vlen_layer_0'].val
+        vlen_i = cfg['vlen_conv_0'].val
     else:
         vlen_i = cfg['vlen_input'].val
     first_feature.update_shape(vlen_i)
@@ -873,7 +873,7 @@ def _fused_conv2d_infer_layout(workload, cfg):
 
     # Output
     output, = layers[-1]
-    vlen_o = cfg['vlen_layer_{}'.format(num_layers-1)].val
+    vlen_o = cfg['vlen_conv_{}'.format(num_layers-1)].val
     output.update_shape(vlen_o)
     out_layout = "NCHW%dc" % vlen_o
     out_shape = output.shape

@@ -21,8 +21,10 @@ def verify_tuning(workload_name,
     use_auto_scheduler = tuning_opt.use_auto_scheduler
     skip_training = tuning_opt.skip_training
     use_autotvm_transfer_learning = tuning_opt.use_autotvm_transfer_learning
+    device_name = tuning_opt.device
     tuning_trials = tuning_opt.tuning_trials if workload_type == 'depth_conv' or workload_type == 'conv_depth' else 2 * tuning_opt.tuning_trials
     unfused = tuning_opt.unfused
+    assert (device_name in DEVICES.keys()) # 'TITAN_xp', '1050Ti', '1080', 'Xeon_GCP', 'i7_7700K', 'Xeon_E5', 'EPYC'
 
     def check_device(device_name):
         target_str = DEVICES[device_name]['target']
@@ -404,14 +406,13 @@ def verify_tuning(workload_name,
             FLOP = fc.get_FLOP()
             print('FLOP: {}, GFLOPS: {:.2f}.'.format(FLOP, FLOP / tcost_d / 1e9))
 
-    for device_name in ['TITAN_xp']: # 'TITAN_xp', '1050Ti', '1080', 'Xeon_GCP', 'i7_7700K', 'Xeon_E5'
-        check_device(device_name)
+    check_device(device_name)
     print("############################################")
 
 if __name__ == '__main__':
     # For AutoTVM:
     # terminal 1: python -m tvm.exec.rpc_tracker --host=0.0.0.0 --port=9190
-    # terminal 2: python -m tvm.exec.rpc_server --tracker=0.0.0.0:9190 --key=1050ti
+    # terminal 2: python -m tvm.exec.rpc_server --tracker=0.0.0.0:9190 --key=<device_name>
     # terminal 3: run this code
 
     def get_options():
@@ -425,6 +426,7 @@ if __name__ == '__main__':
         parser.add_argument("-r", "--use_auto_scheduler", action="store_true", help="Use Auto Scheduler.")
         parser.add_argument("-k", "--skip_training", action="store_true", help="Run AutoTVM tuned kernel.")
         parser.add_argument("-l", "--use_autotvm_transfer_learning", action="store_true", help="Load existing tuning log.")
+        parser.add_argument("-v", "--device", type=str, default="i7_7700K", help="Device name.")
         parser.add_argument("-t", "--tuning_trials", type=int, default=32, help="Number of AutoTVM/AutoScheduler trials.")
         parser.add_argument("-u", "--unfused", action="store_true", help="Tune separate tasks.")
         options = parser.parse_args()

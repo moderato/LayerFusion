@@ -70,7 +70,7 @@ def schedule_conv_conv_fused_nhwc_auto(cfg, outs):
     n, h, w, c = s[layer_output_dict['Layer_1']].op.axis
     ho, h, vthz, thz = cfg['split_h'].apply(s, layer_output_dict['Layer_1'], h)
     wo, w, vthy, thy = cfg['split_w'].apply(s, layer_output_dict['Layer_1'], w)
-    oc, ic, thx = cfg['split_layer_1_c'].apply(s, layer_output_dict['Layer_1'], c)
+    oc, ic, thx = cfg['split_1_c'].apply(s, layer_output_dict['Layer_1'], c)
     # reorder and bind
     s[layer_output_dict['Layer_1']].reorder(n, ho, wo, oc,   ic, h, w,   vthz, vthy, thz, thy, thx)
     if bn_relu[1]:
@@ -82,7 +82,7 @@ def schedule_conv_conv_fused_nhwc_auto(cfg, outs):
     s[layer_output_dict['Layer_1']].bind(thz, thread_z)
     s[layer_output_dict['Layer_1']].bind(thy, thread_y)
     s[layer_output_dict['Layer_1']].bind(thx, thread_x)
-    num_thread_x = cfg['split_layer_1_c'].size[-1]
+    num_thread_x = cfg['split_1_c'].size[-1]
     num_thread_y = cfg['split_w'].size[-1]
     num_thread_z = cfg['split_h'].size[-1]
 
@@ -90,7 +90,7 @@ def schedule_conv_conv_fused_nhwc_auto(cfg, outs):
     s[OL].compute_at(s[layer_output_dict['Layer_1']], thx) # thx <----- Must be so! Same below.
     rc, ry, rx = s[OL].op.reduce_axis
     n, h, w, c = s[OL].op.axis
-    orc, oirc, iirc = cfg['split_layer_0_c'].apply(s, OL, rc)
+    orc, oirc, iirc = cfg['split_0_c'].apply(s, OL, rc)
     s[OL].reorder(n, orc, oirc, h, w, iirc, ry, rx, c)
 
     ######## Filter 2
@@ -122,7 +122,7 @@ def schedule_conv_conv_fused_nhwc_auto(cfg, outs):
     ####### Intermediate output local accumulator
     s[stage_dict['Output_0']].compute_at(s[stage_dict['SharedInput_1']], thx)
     rc, ry, rx = s[stage_dict['Output_0']].op.reduce_axis
-    orc, oirc, iirc = cfg['split_layer_0_rc'].apply(s, stage_dict['Output_0'], rc)
+    orc, oirc, iirc = cfg['split_0_rc'].apply(s, stage_dict['Output_0'], rc)
     n, h, w, c = s[stage_dict['Output_0']].op.axis
     _, thx = s[stage_dict['Output_0']].split(c, factor=num_thread_x)
     s[stage_dict['Output_0']].reorder(n, orc, oirc, h, w, iirc, ry, rx, thx)

@@ -15,9 +15,9 @@ def schedule_depth_conv_fused_nchwc_auto_search(cfg, outs, *args, **kwargs):
     axis = ['oc', 'ic', 'h', 'w', 'root'][cfg['bind_axis'].val]
 
     n, oc_chunk, h, w, oc = s[layer_output_dict['Layer_1']].op.axis
-    oc_chunk_o, oc_chunk_i = cfg['split_layer_1_c'].apply(s, layer_output_dict['Layer_1'], oc_chunk)
+    oc_chunk_o, oc_chunk_i = cfg['split_1_c'].apply(s, layer_output_dict['Layer_1'], oc_chunk)
     ic_chunk, ry, rx, ic = s[layer_output_dict['Layer_1']].op.reduce_axis
-    ic_chunk_o, ic_chunk_i = cfg['split_layer_0_c'].apply(s, layer_output_dict['Layer_1'], ic_chunk)
+    ic_chunk_o, ic_chunk_i = cfg['split_0_c'].apply(s, layer_output_dict['Layer_1'], ic_chunk)
     ht, ho, h = cfg['split_h'].apply(s, layer_output_dict['Layer_1'], h)
     wt, wo, w = cfg['split_w'].apply(s, layer_output_dict['Layer_1'], w)
     s[layer_output_dict['Layer_1']].reorder(n, oc_chunk_o, ht, wt, oc_chunk_i, ic_chunk_o, ho, wo, h, ic_chunk_i, ry, rx, w, oc, ic)
@@ -49,7 +49,7 @@ def schedule_depth_conv_fused_nchwc_auto_search(cfg, outs, *args, **kwargs):
                                                 cfg['split_w'].size[-1],    # m of brgemm   -> wi
                                                 filters_cfg['Layer_1'].W,           #               -> rx
                                                 filters_cfg['Layer_1'].H,           #               -> ry
-                                                cfg['split_layer_0_c'].size[-1],    #               -> rco_i
+                                                cfg['split_0_c'].size[-1],    #               -> rco_i
 
                                                 block_output_height,                #               -> hi
 
@@ -97,11 +97,11 @@ def schedule_depth_conv_fused_nchwc_auto_inference(cfg, outs, *args, **kwargs):
     inputs_cfg = kwargs['inputs_cfg']
     filters_cfg = kwargs['filters_cfg']
     outputs_cfg = kwargs['outputs_cfg']
-    axis = ['oc', 'ic', 'h', 'w'][cfg['bind_axis'].val]
+    axis = ['oc', 'ic', 'h', 'w', 'root'][cfg['bind_axis'].val]
 
     ######## Final output
     n, oc_chunk, h, w, oc = s[layer_output_dict['Layer_1']].op.axis
-    oc_chunk_o, oc_chunk_i = cfg['split_layer_1_c'].apply(s, layer_output_dict['Layer_1'], oc_chunk)
+    oc_chunk_o, oc_chunk_i = cfg['split_1_c'].apply(s, layer_output_dict['Layer_1'], oc_chunk)
     ht, wt, h, w = s[layer_output_dict['Layer_1']].tile(h, w, x_factor=cfg['split_h'].size[-2] * cfg['split_h'].size[-1], y_factor=cfg['split_w'].size[-2] * cfg['split_w'].size[-1])
     s[layer_output_dict['Layer_1']].reorder(n, oc_chunk_o, ht, wt, oc_chunk_i, h, w, oc) # Temporary
     s[layer_output_dict['Layer_1']].vectorize(oc)
@@ -141,7 +141,7 @@ def schedule_depth_conv_fused_nchwc_auto_inference(cfg, outs, *args, **kwargs):
         if post_ops[1] != 'bias':
             s[stage_dict['Output_1_BiasAdd']].compute_inline()
     ic_chunk, ry, rx, ic = s[stage_dict['Output_1']].op.reduce_axis
-    ic_chunk_o, ic_chunk_i = cfg['split_layer_0_c'].apply(s, stage_dict['Output_1'], ic_chunk)
+    ic_chunk_o, ic_chunk_i = cfg['split_0_c'].apply(s, stage_dict['Output_1'], ic_chunk)
     
     # Split h and w if they're not yet split
     axes = []
@@ -181,7 +181,7 @@ def schedule_depth_conv_fused_nchwc_auto_inference(cfg, outs, *args, **kwargs):
                                                 cfg['split_w'].size[-1],    # m of brgemm   -> wi
                                                 filters_cfg['Layer_1'].W,           #               -> rx
                                                 filters_cfg['Layer_1'].H,           #               -> ry
-                                                cfg['split_layer_0_c'].size[-1],    #               -> rco_i
+                                                cfg['split_0_c'].size[-1],    #               -> rco_i
 
                                                 block_output_height,                #               -> hi
 

@@ -25,7 +25,7 @@ if __name__ == '__main__':
             fused_mem_bytes_th = fc.get_theoretical_mem_bytes()
             mem_bytes_1_th, mem_bytes_2_th = fc.get_theoretical_mem_bytes_per_layer()
             flop_1_th, flop_2_th = fc.get_FLOP_per_layer()
-            
+
             flop_file = 'logs/flop/cpu/{}/{}.csv'.format(args.iterations, w)
             with open(flop_file, 'r') as f:
                 lines = f.readlines()
@@ -168,7 +168,7 @@ if __name__ == '__main__':
     b = ax.bar(x_axis, [x / y for x, y in zip(tvm_flops, mkldnn_flops)], width=0.2)
     c = ax.bar([x+width for x in x_axis], [1 for x in mkldnn_flops], width=0.2)
     ax.set_ylim([0.15, 1.5])
-    ax.legend([a, b, c], ['TVM fused', 'TVM separate', 'MKLDNN'], fontsize=11, bbox_to_anchor=(0.84, 0.65))
+    ax.legend([a, b, c], ['TVM fused', 'TVM separate', 'MKLDNN'], fontsize=10.5, bbox_to_anchor=(0.855, 0.655))
     ax.set_xticks(x_axis)
     ax.set_xticklabels(keys, rotation=45, fontsize=12)
     yticks = ax.get_yticks()
@@ -187,5 +187,7 @@ if __name__ == '__main__':
     num_workloads = len([x / y for x, y in zip(fused_flops, mkldnn_flops)])
     print("Geo mean speedup over TVM: {:.3f}".format(speedup_tvm ** (1.0 / num_workloads)))
     print("Max over TVM: {:.3f}".format(max([x / y for x, y in zip(fused_flops, tvm_flops)])))
+    print("Min over TVM: {:.3f}".format(min([x / y for x, y in zip(fused_flops, tvm_flops)])))
     print("Geo mean speedup over MKLDNN: {:.3f}".format(speedup_mkldnn ** (1.0 / num_workloads)))
     print("Max over MKLDNN: {:.3f}".format(max([x / y for x, y in zip(fused_flops, mkldnn_flops)])))
+    print("Min over MKLDNN: {:.3f}".format(min([x / y for x, y in zip(fused_flops, mkldnn_flops)])))

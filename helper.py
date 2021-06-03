@@ -2,8 +2,7 @@ import tvm
 import tvm.relay as relay
 from tvm.topi.utils import simplify
 from tvm.topi.nn.utils import get_pad_tuple
-from tvm import autotvm, te
-from tvm.autotvm.task.space import FallbackConfigEntity, OtherOptionEntity
+from tvm.autotvm.task.space import FallbackConfigEntity
 from tvm.relay.dataflow_pattern import wildcard, is_op, is_var, rewrite, TupleGetItemPattern, DFPatternCallback
 from tvm.relay.build_module import bind_params_by_name
 from tvm.relay.testing import run_opt_pass
@@ -85,6 +84,20 @@ DEVICES = {
     },
     "Xeon_E5": {
         "target": "llvm -mcpu=corei7-avx",
+        "config_params": {
+            "number": 20,
+            "repeat": 3,
+            "min_repeat_ms": 0,
+            "timeout": {
+                "general": 3000,
+                "depth_conv": 5000,
+                "conv_conv": 10000,
+                'conv_depth': 5000
+            }
+        }
+    },
+    "EPYC": {
+        "target": "llvm -mcpu=core-avx2",
         "config_params": {
             "number": 20,
             "repeat": 3,
@@ -451,6 +464,7 @@ def get_workloads():
     ################################################################
 
     workloads['depth_conv'] = depth_conv_workloads
+    workloads['conv_depth'] = conv_depth_workloads
     workloads['conv_conv'] = conv_conv_workloads
     workloads['conv_depth'] = conv_depth_workloads
     workloads['block'] = block_workloads
@@ -510,17 +524,17 @@ def export_kernel_launch_config(workload_name, output_shape, best_config, target
 
         # print('n: {}, ho: {}, wo: {}, recompute: {}'.format(n, ho, wo, recompute))
         for e in config_dict['entity']:
-            if e[0] == 'split_layer_1_h': # TODO: Fix it layer with a layer num
+            if e[0] == 'split_1_h': # TODO: Fix it layer with a layer num
                 thz = e[2][1]
                 thy = e[2][2]
                 for ee in e[2][1:]:
                     ho = (ho + ee - 1) // ee
                     # print('ho: {}', ho)
-            elif e[0] == 'split_layer_1_w':
+            elif e[0] == 'split_1_w':
                 for ee in e[2][1:]:
                     wo = (wo + ee - 1) // ee
                     # print('wo: {}', wo)
-            elif e[0] == 'split_layer_1_c':
+            elif e[0] == 'split_1_c':
                 thx = e[2][2]
                 for ee in e[2][1:]:
                     recompute = (recompute + ee - 1) // ee
@@ -568,130 +582,14 @@ def get_CPU_vlen_from_config(best_config=None, cfg_key=''):
             vlens.append(vlens_dict[k])
         return vlens
 
-def duplicate_fusion_logs(logfile, post_ops=['relu', 'relu']):
-    if not os.path.isfile(logfile):
-        return
-    records = autotvm.record.load_from_file(logfile)
-    d1 = {}
-    d2 = {}
-    for k, v in records:
-        d1[k] = v
 
-    s = set([(k.task.args, k.config.index) for k in d1.keys()])
-    for k, v in d1.items():
-        tgt, tsk, config = k.target, k.task, k.config
-        name, args = tsk.name, tsk.args
-        if 'fused' not in name:
-            continue
-        new_args = list(args[0])
-        c = 0
-        while 8 + 5*c < len(new_args):
-            if args[0][8 + 5*c] is None:
-                new_args[8 + 5*c] = post_ops[c]
-            else:
-                new_args[8 + 5*c] = None
-            c += 1
-        if len(args) == 1:
-            new_args = (tuple(new_args),)
-        else:
-            new_args = (tuple(new_args), args[1])
-        new_tsk = autotvm.task.Task(name, new_args)
-        new_mi = autotvm.MeasureInput(tgt, new_tsk, config)
-
-        if (new_args, config.index) not in s:
-            d2[new_mi] = v
-
-    # print(len(d1.keys()))
-    # print(len(d2.keys()))
-
-    with open(logfile, "a") as f:
-        for k, v in d2.items():
-            f.write(autotvm.record.encode(k, v) + "\n")
-
-def update_fusion_logs_with_axis(log_dir, log_name, axis):
-    logfile = '{}/fused_{}/{}'.format(log_dir, axis, log_name)
-    if not os.path.isfile(logfile):
-        return
-    print(logfile)
-    new_logfile = '{}/fused/{}'.format(log_dir, log_name)
-
-    d1 = {}
-    records = autotvm.record.load_from_file(logfile)
-    for k, v in records:
-        d1[k] = v
-
-    d2 = {}
-    if os.path.isfile(new_logfile):
-        records = autotvm.record.load_from_file(new_logfile)
-        for k, v in records:
-            d2[k] = v
-
-    d3 = {}
-    for k, v in d1.items():
-        tgt, tsk, config = k.target, k.task, k.config
-        name, args = tsk.name, tsk.args
-        if 'fused' not in name:
-            continue
-        if len(args) != 1:
-            continue
-        new_args = tuple([args[0], axis])
-        new_tsk = autotvm.task.Task(name, new_args)
-        new_mi = autotvm.MeasureInput(tgt, new_tsk, config)
-
-        if new_mi not in d2.keys():
-            d3[new_mi] = v
-
-    print(len(d1.keys()))
-    print(len(d2.keys()))
-    print(len(d3.keys()))
-
-    with open(new_logfile, "a") as f:
-        for k, v in d3.items():
-            f.write(autotvm.record.encode(k, v) + "\n")
-
-def remove_axis_from_logs(log_dir, log_name, axis):
-    logfile = '{}/fused_{}/{}'.format(log_dir, axis, log_name)
-    if not os.path.isfile(logfile):
-        return
-    print(logfile)
-    new_logfile = '{}/fused/{}'.format(log_dir, log_name)
-
-    d1 = {}
-    records = autotvm.record.load_from_file(logfile)
-    for k, v in records:
-        d1[k] = v
-
-    d2 = {}
-    if os.path.isfile(new_logfile):
-        records = autotvm.record.load_from_file(new_logfile)
-        for k, v in records:
-            d2[k] = v
-
-    d3 = {}
-    for k, v in d1.items():
-        tgt, tsk, config = k.target, k.task, k.config
-        name, args = tsk.name, tsk.args
-        if 'fused' not in name:
-            continue
-        config._entity_map['bind_axis'] = OtherOptionEntity(['oc', 'ic', 'h', 'w'].index(axis))
-        new_args = tuple([args[0]])
-        new_tsk = autotvm.task.Task(name, new_args)
-        new_mi = autotvm.MeasureInput(tgt, new_tsk, config)
-        d3[new_mi] = v
-
-    print(len(d1.keys()))
-    print(len(d2.keys()))
-    print(len(d3.keys()))
-
-    with open(new_logfile, "a") as f:
-        for k, v in d3.items():
-            f.write(autotvm.record.encode(k, v) + "\n")
-
-# Print IR utility function. To be specified.
+# Print IR utility function. Dummy for now.
 def print_ir(mod, info, is_before=True):
     """Print the name of the pass, the IR, only before passes execute."""
     if is_before:
         pass
+
+
 class FusedConv2DCallback(DFPatternCallback):
     # A callback class to rewrite the matched pattern to a batch_norm op.
     def __init__(self):

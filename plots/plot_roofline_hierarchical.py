@@ -68,7 +68,7 @@ num_layers = 2
 colors = ['b','g','r','y','m','c']
 styles = ['o','s','v','^','D','>','<','*','h','H','+','1','2','3','4','8','p','d','|','_','.',',']
 devices = ['cpu']
-workload_types = ['depth_conv']
+workload_types = ['depth_conv', 'conv_conv']
 iterations = [20]
 device_empirical = {
     'cpu': '/home/zhongyilin/Documents/experimental/cs-roofline-toolkit/Empirical_Roofline_Tool-1.1.0/Results.i7-7700K/Run.001/roofline.json',
@@ -224,9 +224,9 @@ for device in devices:
                 print(ymin, ymax, xmin, xmax)
 
             label_count = len(labels)
-            cols = 6
+            cols = 5
             rows = (label_count + cols - 1) // cols
-            fig, axes = plt.subplots(nrows=rows, ncols=cols, figsize=(cols * 5, rows * 4))
+            fig, axes = plt.subplots(nrows=rows, ncols=cols, figsize=(cols * 5, rows * 3.5))
 
             for idx, label in enumerate(labels):
                 ax = axes.flat[idx]
@@ -383,8 +383,8 @@ for device in devices:
             # fig.text(0.5, 0.9, device_name[device], ha='center')
             
             # Common axis labels
-            fig.text(0.5, 0.01, 'Arithmetic Intensity [FLOPs/Byte]', ha='center', fontsize=24)
-            fig.text(0.001, 0.5, 'Performance [GFLOP/sec]', va='center', rotation='vertical', fontsize=24)
+            fig.text(0.5, -0.005, 'Arithmetic Intensity [FLOPs/Byte]', ha='center', fontsize=28)
+            fig.text(-0.005, 0.5, 'Performance [GFLOP/sec]', va='center', rotation='vertical', fontsize=28)
 
             handles = list()
             if merge:
@@ -399,6 +399,6 @@ for device in devices:
                 else:
                     if not ((i % 5 == 1) or (i % 5 == 3)):
                         j += 1
-            leg2 = fig.legend(handles, src_name, loc='lower right', bbox_to_anchor=(0.98, 0.01))
+            leg2 = fig.legend(handles, src_name, loc='lower right', fontsize=28, bbox_to_anchor=(0.995, -0.002))
             plt.tight_layout()
             plt.savefig('plots/{}.pdf'.format(filename), bbox_inches='tight')
