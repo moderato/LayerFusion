@@ -1,10 +1,24 @@
 import tvm, os, logging, sys, argparse
 from tvm.topi import testing
-from tvm import autotvm
-from tvm.topi.utils import get_const_tuple
-
+from tvm.topi.fusion_composer import FusionComposer
+from tvm import autotvm, te, auto_scheduler
+from tvm.topi.utils import get_const_tuple, export_kernel_launch_config
 from helper import *
-from fusion_composer import *
+
+@auto_scheduler.register_workload
+def get_auto_scheduler_task_x86(parameters):
+    target = tvm.target.Target('llvm')
+
+    fc = FusionComposer(parameters, use_autotvm=False, use_auto_scheduler=True, target=target)
+
+    # Get compute
+    compute = fc.get_compute(raw_compute=True)
+    input_tensors = fc.make_placeholders()
+    output_tensor = compute(input_tensors)
+    all_tensors = input_tensors + [output_tensor]
+
+    return all_tensors
+
 
 def verify_tuning(workload_name,
                     workload_type,
@@ -41,7 +55,7 @@ def verify_tuning(workload_name,
             target = tvm.target.Target(target_str)
             device = 'gpu'
 
-        fc = FusionComposer(parameters, use_autotvm=use_autotvm, use_auto_scheduler=use_auto_scheduler, target=target, workload_name=workload_name)
+        fc = FusionComposer(parameters, use_autotvm=use_autotvm, use_auto_scheduler=use_auto_scheduler, target=target, workload_name=workload_name, workspace='.')
         if unfused:
             log_names = []
             tasks = []
@@ -260,7 +274,7 @@ def verify_tuning(workload_name,
                     print(np.where(d))
                 # print("Error rate: {:.2f}%".format((len(d) / len(ref_data[0]) * 100)))
                 print('{} {}_{} ({}): average running time is {:.2f} us.'.format('Depthwise conv2d' if is_depthwise else 'Conv2d', workload_name, l+1, 'NCHW', tcost_d * 1e6))
-                FLOP = task.flop
+                FLOP = tasks[l].flop
                 print('FLOP: {}, GFLOPS: {:.2f}.'.format(FLOP, FLOP / tcost_d / 1e9))
         else: # Fused
             if use_autotvm:
@@ -360,7 +374,7 @@ def verify_tuning(workload_name,
                 return
 
             # Prepare data
-            ref_data = fc.get_ref_data(workload_name, best_config, save_data=save_data)
+            ref_data = testing.get_fused_conv2d_ref_data(fc, workload_name, best_config, save_data=save_data)
 
             if export_code:
                 # export kernel launch config, e.g. thxyz, blxy, vlen, etc

@@ -1,4 +1,3 @@
-from fusion_composer import *
 from helper import get_workloads
 import argparse, os
 from tvm import autotvm
