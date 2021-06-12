@@ -3,12 +3,11 @@ from tvm.topi import testing
 from tvm.topi.fusion_composer import FusionComposer
 from tvm import autotvm, te, auto_scheduler
 from tvm.topi.utils import get_const_tuple, export_kernel_launch_config
-from helper import *
+from utils import *
 
 @auto_scheduler.register_workload
 def get_auto_scheduler_task_x86(parameters):
     target = tvm.target.Target('llvm')
-
     fc = FusionComposer(parameters, use_autotvm=False, use_auto_scheduler=True, target=target)
 
     # Get compute

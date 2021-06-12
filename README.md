@@ -1,4 +1,9 @@
 # LayerFusion
+To initialize:
+```bash
+source ./init_vars.sh
+```
+
 To tune fused kernels:
 ```bash
 # Terminal 1:
@@ -23,6 +28,9 @@ To tune graph for CPU:
 # Currently supported CPU device_name: i7_7700K, Xeon_GCP, EPYC, Xeon_E5
 # Currently supported model_name: mobilenet_v1, mobilenet_v2, mnasnet_a1, resnet_18, resnet_50
 python model_test.py -n -v <device_name> -w <model_name> # Tune kernels and graphs for models with all ops unfused
+
+# Duplicate logs for both the cases of w/ and w/o post ops
+python duplicate_logs.py
 
 # Assuming fused kernels are tuned.
 python -m tvm.autotvm.record --mode pick_batch --batch_size 200 --append --i logs/autotvm/layer/cpu/fused/ --o logs/autotvm/model/cpu/<model_name>/nchwc_fused.log

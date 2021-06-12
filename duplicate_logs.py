@@ -1,11 +1,6 @@
-from helper import get_workloads
-import argparse, os
+from utils import get_workloads
+import os
 from tvm import autotvm
-
-def get_options():
-    parser = argparse.ArgumentParser(description="Parses command.")
-    options = parser.parse_args()
-    return options
 
 def duplicate_fusion_logs(logfile, post_ops=['relu', 'relu']):
     if not os.path.isfile(logfile):
@@ -48,7 +43,6 @@ def duplicate_fusion_logs(logfile, post_ops=['relu', 'relu']):
             f.write(autotvm.record.encode(k, v) + "\n")
 
 if __name__ == '__main__':
-    options = get_options()
     device = 'cpu'
     log_dir = 'logs/autotvm/layer/{}'.format(device)
     workloads = get_workloads()

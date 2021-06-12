@@ -1,5 +1,0 @@
-workload_name,batch,input_width,input_height,input_channel,f1_kernel,f1_multiplier_or_output_channel,f1_stride,is_f1_depthwise,f1_post_op,f2_kernel,f2_multiplier_or_output_channel,f2_stride,is_f2_depthwise,f2_post_op,is_block
-test_DRAM,1,112,112,64,3,1,1,1,,1,64,1,0,,0
-mv1_3,1,56,56,128,3,1,1,1,,1,128,1,0,,0
-mv2_4_1,1,28,28,192,3,1,2,1,,1,64,1,0,,0
-test_L1,1,14,14,16,3,1,1,1,,1,16,1,0,,0

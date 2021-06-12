@@ -58,7 +58,6 @@ export KMP_BLOCKTIME=1
 export KMP_AFFINITY=verbose,granularity=fine,compact,1,0 # "verbose" for printing
 export OMP_NUM_THREADS=4 # = number of cores
 export TVM_BIND_THREADS=4
-# export TVM_NUM_THREADS=4 # Actual thread num = max(OMP_NUM_THREADS, TVM_NUM_THREADS)
 
 # Disable turbo boost and set scaling_governor to "performance"
 echo 1 | sudo tee /sys/devices/system/cpu/intel_pstate/no_turbo &> /dev/null
@@ -74,5 +73,4 @@ if [ "$LIBXSMM_PRELOADED" != "1" ];
 then
   export LD_PRELOAD="${LD_PRELOAD}:${LF_HOME}/libxsmm_wrapper/libxsmm_wrapper.so"
 fi
-# export LIBXSMM_PRELOADED=1
 cd ..

@@ -6,9 +6,26 @@ from tvm import autotvm, relay, auto_scheduler
 from tvm.autotvm.graph_tuner import DPTuner, PBQPTuner
 from tvm.contrib.utils import tempdir
 from tvm.contrib.debugger import debug_runtime
+from tvm.relay.testing.mobilenet import conv_block, separable_conv_block, get_workload
 
-from helper import *
+from utils import get_fusion_parameters_from_tasks, DEVICES
+from relay_helper import print_ir, fuse_preprocess, graph_tuning_preprocess
 from pprint import pprint
+
+def test_network(image_shape, layout='NHWC'):
+    shape = (1, 224, 224, 3) if layout == 'NHWC' else (1, 3, 224, 224)
+    data = relay.var('data', shape=shape)
+    body = conv_block(data, "conv_block_1", 32, strides=(2, 2), layout=layout)
+    body = separable_conv_block(body, 'separable_conv_block_1', 32, 64, layout=layout)
+    body = separable_conv_block(body, 'separable_conv_block_2', 64, 128, downsample=True, layout=layout)
+
+    _, model_params = get_workload(batch_size=1, dtype='float32', image_shape=image_shape, layout=layout)
+    params = {}
+    for k, v in model_params.items():
+        if ("conv_block_1" in k) or ('separable_conv_block_1' in k) or ('separable_conv_block_2' in k):
+            params[k] = v
+
+    return relay.Function(relay.analysis.free_vars(body), body), params
 
 # image_shape and layout are made consistent outside the function.
 def get_network(name, batch_size, dtype="float32", image_shape=(3, 224, 224), layout="NCHW"):
@@ -36,6 +53,10 @@ def get_network(name, batch_size, dtype="float32", image_shape=(3, 224, 224), la
     elif name == 'inception_v3':
         input_shape = (1, 3, 299, 299)
         mod, params = relay.testing.inception_v3.get_workload(batch_size=batch_size, dtype=dtype)
+    elif name == 'test':
+        f, params = test_network(image_shape, layout=layout)
+        mod = tvm.IRModule.from_expr(f)
+        mod = relay.transform.InferType()(mod)
     else:
         raise ValueError("Unsupported network: " + name)
 
@@ -139,7 +160,7 @@ def tune_and_evaluate(tuning_opt, dtype='float32'):
     target_str = DEVICES[device_name]["target"]
     network = tuning_opt.network
     assert target_str in ['cuda', 'llvm -mcpu=core-avx2', 'llvm -mcpu=skylake-avx512']
-    assert network in ['mobilenet_v1', 'mobilenet_v2', 'mnasnet_a1', 'resnet_18', 'resnet_50', 'resnet_101']
+    assert network in ['mobilenet_v1', 'mobilenet_v2', 'mnasnet_a1', 'resnet_18', 'resnet_50', 'test']
 
     if tuning_opt.use_auto_scheduler:
         # Extract workloads from relay program

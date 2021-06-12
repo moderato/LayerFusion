@@ -1,5 +1,5 @@
 from tvm.topi.fusion_composer import *
-from helper import get_workloads
+from utils import get_workloads
 from matplotlib import pyplot as plt
 import argparse
 
