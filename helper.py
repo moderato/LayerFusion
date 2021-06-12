@@ -1,6 +1,6 @@
 import tvm
 import tvm.relay as relay
-from tvm.relay.dataflow_pattern import wildcard, is_op, is_var, rewrite, TupleGetItemPattern, DFPatternCallback
+from tvm.relay.dataflow_pattern import wildcard, is_op, is_var, rewrite, TupleGetItemPattern, DFPatternCallback, FunctionPattern
 from tvm.relay.build_module import bind_params_by_name
 from tvm.relay.testing import run_opt_pass
 import math
@@ -110,6 +110,35 @@ DEVICES = {
 }
 
 
+# Define model config manually. TODO: Automate it.
+MODEL_CONFIG = {
+    "default": {
+        "fusion_pattern": "all",
+        "channel_ranges": [[4, 1e9], None],
+    },
+    "mobilenet_v1": {
+        "fusion_pattern": "3x3+1x1",
+        "channel_ranges": [[4, 1e9], None],
+    },
+    "mobilenet_v2": {
+        "fusion_pattern": "3x3+1x1",
+        "channel_ranges": [[4, 1e9], None],
+    },
+    "mnasnet_a1": {
+        "fusion_pattern": "3x3+1x1",
+        "channel_ranges": [[4, 1e9], None],
+    },
+    "resnet_18": {
+        "fusion_pattern": "3x3+3x3",
+        "channel_ranges": [[4, 1e9], [1, 64]],
+    },
+    "resnet_50": {
+        "fusion_pattern": "3x3+1x1",
+        "channel_ranges": [[4, 1e9], [1, 512]],
+    },
+}
+
+
 def get_factors(x):
     r = []
     for i in range(1, int(math.sqrt(x)) + 1):
@@ -119,12 +148,15 @@ def get_factors(x):
     r.sort()
     return r
 
+
 def flatten_list(lst):
     return sum(([x] if not isinstance(x, list) else flatten_list(x) for x in lst), [])
+
 
 def write_code(code, fname):
     with open(fname, 'w') as f:
         f.write(code)
+
 
 def register_count(device=None):
     if device == 'llvm -mcpu=corei7-avx':
@@ -134,6 +166,7 @@ def register_count(device=None):
     if device == 'llvm -mcpu=skylake-avx512':
         return 32
     return 0
+
 
 def get_fusion_parameters_from_tasks(task1, task2, layout='NHWC'):
     workload1 = task1.workload
@@ -344,9 +377,78 @@ def print_ir(mod, info, is_before=True):
         pass
 
 
+def dwconv_conv3x3_conv1x1_pattern():
+    pattern = is_op('nn.conv2d')(wildcard(), wildcard()).has_attr({
+        "kernel_size": [3, 3],
+    }) # Can be either dw-conv or conv
+    pattern = is_op('nn.bias_add')(pattern, wildcard())
+    pattern = is_op('nn.relu')(pattern) | is_op('sigmoid')(pattern)
+    pattern = is_op('nn.conv2d')(pattern, wildcard()).has_attr({
+        "kernel_size": [1, 1],
+        "groups": 1,
+    }) # Should be conv
+    pattern = is_op('nn.bias_add')(pattern, wildcard())
+    pattern = pattern.optional(lambda x: is_op("nn.relu")(x))
+    return pattern
+
+
+def conv3x3_conv3x3_pattern():
+    pattern = is_op('nn.conv2d')(wildcard(), wildcard()).has_attr({
+        "kernel_size": [3, 3],
+        "groups": 1,
+    }) # Should be conv
+    pattern = is_op('nn.bias_add')(pattern, wildcard())
+    pattern = is_op('nn.relu')(pattern) | is_op('sigmoid')(pattern)
+    pattern = is_op('nn.conv2d')(pattern, wildcard()).has_attr({
+        "kernel_size": [3, 3],
+        "groups": 1,
+    }) # Should be conv
+    pattern = is_op('nn.bias_add')(pattern, wildcard())
+    pattern = pattern.optional(lambda x: is_op("nn.relu")(x))
+    return pattern
+
+
+def get_fusion_patterns(fusion_patterns="all"):
+    if fusion_patterns == "all":
+        return dwconv_conv3x3_conv1x1_pattern() | conv3x3_conv3x3_pattern()
+    if fusion_patterns == "3x3+1x1":
+        return dwconv_conv3x3_conv1x1_pattern()
+    if fusion_patterns == "3x3+3x3":
+        return conv3x3_conv3x3_pattern()
+    raise Exception("Invalid fusion pattern name!")
+
+
+# To exclude some attrs in subgraph partition
+def partition_check(num_layers=2, channel_ranges=[[4, 1e9], None]): # By default, skip the first layer for fusion
+    """
+    channel_ranges:
+        None or a list that contains allowed channel ranges for layers being fused
+    """
+    def f(pre):
+        assert channel_ranges is None or len(channel_ranges) == num_layers, "Invalid ranges!"
+        ret_val = True
+        tmp = pre
+        current_layer = num_layers - 1 # Traverse backward
+        while not isinstance(tmp, (relay.Var, relay.Constant)):
+            if current_layer < 0: # Safeguard
+                break
+            if tmp.op.name == 'nn.conv2d':
+                if channel_ranges is None: # No limits for all layers
+                    break
+                r = channel_ranges[current_layer]
+                if r is not None:
+                    assert len(r) == 2
+                    ret_val = ret_val and (tmp.attrs.channels >= r[0] and tmp.attrs.channels <= r[1]) # Channels number is limited by the range
+                current_layer -= 1
+            tmp = tmp.args[0]
+        return bool(ret_val)
+
+    return f
+
+
 class FusedConv2DCallback(DFPatternCallback):
     # A callback class to rewrite the matched pattern to a batch_norm op.
-    def __init__(self):
+    def __init__(self, model_name="default"):
         super(FusedConv2DCallback, self).__init__()
         self.data = wildcard()
         self.weight1 = wildcard()
@@ -354,12 +456,8 @@ class FusedConv2DCallback(DFPatternCallback):
         self.weight2 = wildcard()
         self.bias2 = wildcard()
 
-        pattern = is_op('nn.conv2d')(self.data, self.weight1)
-        pattern = is_op('nn.bias_add')(pattern, self.bias1) | is_op('add')(pattern, self.bias1)
-        pattern = is_op('nn.relu')(pattern) | is_op('sigmoid')(pattern)
-        pattern = is_op('nn.conv2d')(pattern, self.weight2)
-        pattern = is_op('nn.bias_add')(pattern, self.bias2) | is_op('add')(pattern, self.bias2)
-        pattern = pattern.optional(lambda x: is_op("nn.relu")(x))
+        pattern = get_fusion_patterns(MODEL_CONFIG[model_name]["fusion_pattern"])
+        pattern = FunctionPattern([wildcard(), wildcard(), wildcard(), wildcard(), wildcard()], pattern)(self.data, self.weight1, self.bias1, self.weight2, self.bias2)
         self.pattern = pattern
         self.num_layers = 2
 
@@ -389,16 +487,12 @@ class FusedConv2DCallback(DFPatternCallback):
         out_dtype = "float32" # Now only accept float32
 
         # Traverse upward
-        tmp = pre
+        tmp = pre.op.body
         count = 0
         while not isinstance(tmp, (relay.Var, relay.Constant)):
             if count >= self.num_layers:
                 break
             if tmp.op.name == 'nn.conv2d':
-                if count == 0 and (list(tmp.attrs['kernel_size']) != [1, 1] or tmp.attrs['channels'] > 2048): # Don't fuse with SECOND layer being not [1, 1]
-                    return post
-                if count > 0 and (list(tmp.attrs['kernel_size']) != [3, 3] or (isinstance(data, relay.Var))): # Don't fuse with FIRST layer being not [3, 3] or the first layer of the model
-                    return post
                 strides_array = [tmp.attrs['strides']] + strides_array
                 padding_array = [tmp.attrs['padding']] + padding_array
                 dilation_array = [tmp.attrs['dilation']] + dilation_array
@@ -426,37 +520,39 @@ class FusedConv2DCallback(DFPatternCallback):
                                         groups_array, channels_array, kernel_size_array, post_op_array,
                                         data_layout_array, kernel_layout_array, out_layout_array, out_dtype)
 
+
+# Replace add by bias_add for layout transformation
 @relay.transform.function_pass(opt_level=1)
-class CustomPipeline:
+class BiasAddReplacement:
     def __init__(self, layout="NHWC"):
         self.layout = layout
 
     # This function can define a pass.
     def transform_function(self, func, mod, ctx):
         obj = self
-        from tvm.relay.expr import Call, Constant
         class ReplaceAddByBiasAdd(tvm.relay.ExprMutator):
             def visit_call(self, call):
                 if call.op.name == 'add':
                     need_change = False
                     for arg in call.args:
-                        need_change = need_change or isinstance(arg, tvm.relay.Constant)
+                        need_change = need_change or isinstance(arg, tvm.relay.Constant) # Check if it's actually a bias-add following conv2d
                     if need_change:
                         axis = obj.layout.index('C')
-                        args = [self.visit(arg) for arg in call.args]
+                        args = [self.visit(arg) for arg in call.args] # -> visit_constant
                         return relay.nn.bias_add(*args, axis=axis)
                 return super().visit_call(call)
 
             def visit_constant(self, c):
                 if len(c.data.shape) == 3:
                     new_data = tvm.nd.array(c.data.asnumpy().flatten()) # [C, 1, 1] -> [C]
-                    c = Constant(new_data)
+                    c = tvm.relay.expr.Constant(new_data)
                 return c
 
         return ReplaceAddByBiasAdd().visit(func)
 
+
+# Replace BN by bias_add
 class ReplaceBatchNormCallback(DFPatternCallback):
-    # A callback class to rewrite the matched pattern to a batch_norm op.
     def __init__(self, layout="NHWC"):
         super(ReplaceBatchNormCallback, self).__init__()
         self.layout = layout
@@ -477,19 +573,28 @@ class ReplaceBatchNormCallback(DFPatternCallback):
         add = relay.nn.bias_add(x, beta, axis=axis)
         return add
 
-def graph_tuning_preprocess(tmp_f, layout="NHWC"):
+
+# Preprocessing for graph tuning
+def graph_tuning_preprocess(tmp_f, model_name="default", layout="NHWC"):
     # Replace BN with bias_add
     tmp_f = rewrite(ReplaceBatchNormCallback(layout=layout), tmp_f)
+    # Partition graph
+    pattern = get_fusion_patterns(MODEL_CONFIG[model_name]["fusion_pattern"])
+    tmp_f = pattern.partition(tmp_f, check=(partition_check(channel_ranges=MODEL_CONFIG[model_name]["channel_ranges"])))
     # Fuse two conv layers
-    tmp_f = rewrite(FusedConv2DCallback(), tmp_f)
+    tmp_f = rewrite(FusedConv2DCallback(model_name), tmp_f)
     # InferType
     tmp_f = run_opt_pass(tmp_f, relay.transform.InferType())
     return tmp_f
 
-def fuse_preprocess(f, params, target_str, layout="NHWC"):
+
+# Preprocessing for inference
+def fuse_preprocess(f, params, target_str, model_name="default", layout="NHWC"):
     with tvm.target.Target(target_str):
         mod = tvm.IRModule.from_expr(f)
         mod['main'] = bind_params_by_name(mod['main'], params)
+
+        # Run through transform passes up to FuseOps
         seq = tvm.transform.Sequential(
             [
                 relay.transform.RemoveUnusedFunctions(),
@@ -511,14 +616,18 @@ def fuse_preprocess(f, params, target_str, layout="NHWC"):
                 relay.transform.BackwardFoldScaleAxis(),
             ]
         )
+
+        # Replace add with bias_add
         with tvm.transform.PassContext(opt_level=3):
             mod = seq(mod)
             if 'llvm' in target_str:
-                new_pass = CustomPipeline(layout=layout)
-                mod = new_pass(mod)
-        mod['main'] = rewrite(FusedConv2DCallback(), mod['main'])
+                mod = BiasAddReplacement(layout=layout)(mod)
+        # Partition graph
+        pattern = get_fusion_patterns(MODEL_CONFIG[model_name]["fusion_pattern"])
+        mod['main'] = pattern.partition(mod['main'], check=(partition_check(channel_ranges=MODEL_CONFIG[model_name]["channel_ranges"])))
+        # Fuse two conv layers
+        mod['main'] = rewrite(FusedConv2DCallback(model_name), mod['main'])
+        # InferType
         mod = relay.transform.InferType()(mod)
-
-        print(mod['main'])
 
     return mod

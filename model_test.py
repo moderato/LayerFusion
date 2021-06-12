@@ -213,15 +213,14 @@ def tune_and_evaluate(tuning_opt, dtype='float32'):
         if not tuning_opt.autotvm_skip_graph_tuning and ('llvm' in target_str):
             tmp_f = mod['main']
             if not tuning_opt.no_fusion:
-                tmp_f = graph_tuning_preprocess(tmp_f, layout=layout)
-            # print(tmp_f)
+                tmp_f = graph_tuning_preprocess(tmp_f, model_name=network, layout=layout)
             tune_graph(tmp_f, input_shape, target_str, log_filename, graph_opt_sch_file)
 
         # Compile kernels with history best records
         print("############### Compile... ###############")
         with autotvm.apply_history_best(log_filename) if 'cuda' in target_str else autotvm.apply_graph_best(graph_opt_sch_file):
             if not tuning_opt.no_fusion:
-                mod = fuse_preprocess(mod['main'], params, target_str, layout)
+                mod = fuse_preprocess(mod['main'], params, target_str, model_name=network, layout=layout)
             with tvm.transform.PassContext(opt_level=3, trace=print_ir):
                 # """
                 # build = optimize + generate_code
@@ -258,11 +257,6 @@ def tune_and_evaluate(tuning_opt, dtype='float32'):
     print('Mean inference time (std dev): %.2f ms (%.2f ms)' % (np.mean(prof_res), np.std(prof_res)))
 
 if __name__ == '__main__':
-    # For AutoTVM:
-    # terminal 1: python -m tvm.exec.rpc_tracker --host=0.0.0.0 --port=9190
-    # terminal 2: python -m tvm.exec.rpc_server --tracker=0.0.0.0:9190 --key=<device_name>
-    # terminal 3: run this code
-
     def get_options():
         parser = argparse.ArgumentParser(description="Parses command.")
         parser.add_argument("-c", "--use_nchw", action="store_true", help="Use NCHW as the layout for baseline.")

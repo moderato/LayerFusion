@@ -1,21 +1,17 @@
 import tvm
 import tvm.relay as relay
-import tvm.relay.testing.layers as layers
-import tvm.contrib.graph_runtime as runtime
-from tvm import te, autotvm
+from tvm import autotvm
 from tvm.contrib.utils import tempdir
 from tvm.contrib.debugger import debug_runtime
 from tvm.autotvm.graph_tuner import DPTuner, PBQPTuner
-from tvm.relay.testing import run_opt_pass
 from tvm.relay.testing.mobilenet import conv_block, separable_conv_block, get_workload
-from tvm.relay.dataflow_pattern import rewrite
-from fusion_composer import FusionComposer
+from tvm.relay.dataflow_pattern import rewrite, wildcard
 from pprint import pprint
-from helper import print_ir, FusedConv2DCallback, ReplaceBatchNormCallback, fuse_preprocess
+from helper import partition_check, print_ir, FusedConv2DCallback, ReplaceBatchNormCallback, fuse_preprocess, graph_tuning_preprocess
 import numpy as np
 
-# target_str = 'llvm -mcpu=core-avx2'
-target_str = 'cuda'
+target_str = 'llvm -mcpu=core-avx2'
+# target_str = 'cuda'
 target = tvm.target.Target(target_str)
 
 def tune_graph(graph, dshape, target_str, records, opt_sch_file, use_DP=True):
@@ -58,10 +54,8 @@ def aggressive_fuse(fuse=False):
         tmp_f = mod['main']
 
         if fuse:
-            # Replace BN with multiply add
-            tmp_f = rewrite(ReplaceBatchNormCallback(layout=layout), tmp_f)
-            # Fuse two conv layers
-            tmp_f = rewrite(FusedConv2DCallback(), tmp_f)
+            tmp_f = graph_tuning_preprocess(tmp_f, layout=layout)
+            # print(tmp_f)
 
         tune_graph(tmp_f, (1,) + image_shape, target_str, log_filename, graph_opt_sch_file)
 
@@ -69,7 +63,7 @@ def aggressive_fuse(fuse=False):
     with (autotvm.apply_history_best(log_filename) if 'cuda' in target_str else autotvm.apply_graph_best(graph_opt_sch_file)):
         print("############### Compile... ###############")
         if fuse:
-            mod = fuse_preprocess(f, params, target_str, layout)
+            mod = fuse_preprocess(f, params, target_str, layout=layout)
         else:
             mod = tvm.IRModule.from_expr(f)
             mod = relay.transform.InferType()(mod)

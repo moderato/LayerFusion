@@ -1,4 +1,4 @@
-from fusion_composer import *
+from tvm.topi.fusion_composer import *
 from helper import get_workloads
 from matplotlib import pyplot as plt
 import argparse
@@ -167,14 +167,14 @@ if __name__ == '__main__':
     a = ax.bar([x-width for x in x_axis], [x / y for x, y in zip(fused_flops, mkldnn_flops)], width=0.2)
     b = ax.bar(x_axis, [x / y for x, y in zip(tvm_flops, mkldnn_flops)], width=0.2)
     c = ax.bar([x+width for x in x_axis], [1 for x in mkldnn_flops], width=0.2)
-    ax.set_ylim([0.15, 1.5])
+    ax.set_ylim([0.3, 1.5])
     ax.legend([a, b, c], ['TVM fused', 'TVM separate', 'MKLDNN'], fontsize=10.5, bbox_to_anchor=(0.855, 0.655))
     ax.set_xticks(x_axis)
     ax.set_xticklabels(keys, rotation=45, fontsize=12)
     yticks = ax.get_yticks()
     for y in yticks:
         ax.axhline(y, 0, 1, linestyle='--', linewidth=0.3, color='black')
-    fig.set_size_inches(12, 3.5)
+    fig.set_size_inches(12, 3.3)
     plt.tight_layout()
     plt.savefig('plots/flops_normalized.pdf', bbox_inches='tight')
 

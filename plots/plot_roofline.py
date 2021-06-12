@@ -1,8 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
-from itertools import chain
-import sys, os, json, math
+import os, json, math
 font = {'size': 20}
 plt.rc('font', **font)
 
@@ -235,6 +234,10 @@ for device in devices:
                 ax.set_xlim(10**xmin, 10**xmax)
                 ax.set_ylim(ymin, ymax)
                 ax.set_title(label, x=0.82, y=0.07)
+                if times[idx][0] < (times[idx][1] + times[idx][2]) and times[idx][0] < (times[idx][3] + times[idx][4]):
+                    ax.set_facecolor((0.99, 0.9, 0.9))
+                elif times[idx][0] < (times[idx][1] + times[idx][2]) or times[idx][0] < (times[idx][3] + times[idx][4]):
+                    ax.set_facecolor((0.95, 0.95, 0.95))
 
                 ixx = int(nx*0.02)
                 xlim = ax.get_xlim()

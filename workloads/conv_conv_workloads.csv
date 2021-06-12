@@ -1,13 +1,7 @@
 workload_name,batch,input_width,input_height,input_channel,f1_kernel,f1_multiplier_or_output_channel,f1_stride,is_f1_depthwise,f1_post_op,f2_kernel,f2_multiplier_or_output_channel,f2_stride,is_f2_depthwise,f2_post_op,is_block
 res_2x,1,56,56,64,3,64,1,0,,3,64,1,0,,0
 res_3x,1,28,28,128,3,128,1,0,,3,128,1,0,,0
-res_4x,1,14,14,256,3,256,1,0,,3,256,1,0,,0
-res_5x,1,7,7,512,3,512,1,0,,3,512,1,0,,0
 res_2x_s2,1,56,56,64,3,64,2,0,,3,64,1,0,,0
 res_3x_s2,1,28,28,128,3,128,2,0,,3,128,1,0,,0
-res_4x_s2,1,14,14,256,3,256,2,0,,3,256,1,0,,0
-res_5x_s2,1,7,7,512,3,512,2,0,,3,512,1,0,,0
 res_2x_b_2,1,56,56,64,3,64,1,0,,1,256,1,0,,0
 res_3x_b_2,1,28,28,128,3,128,1,0,,1,512,1,0,,0
-res_4x_b_2,1,14,14,256,3,256,1,0,,1,1024,1,0,,0
-res_5x_b_2,1,7,7,512,3,512,1,0,,1,2048,1,0,,0

@@ -424,11 +424,6 @@ def verify_tuning(workload_name,
     print("############################################")
 
 if __name__ == '__main__':
-    # For AutoTVM:
-    # terminal 1: python -m tvm.exec.rpc_tracker --host=0.0.0.0 --port=9190
-    # terminal 2: python -m tvm.exec.rpc_server --tracker=0.0.0.0:9190 --key=<device_name>
-    # terminal 3: run this code
-
     def get_options():
         parser = argparse.ArgumentParser(description="Parses command.")
         parser.add_argument("-n", "--no_print_ir", action="store_true", help="Don't print IR code.")
