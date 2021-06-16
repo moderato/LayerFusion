@@ -1,4 +1,7 @@
 # LayerFusion
+
+Code for the Euro-Par 2021 paper *Towards Flexible and Compiler-Friendly Layer Fusion for CNNs on Multicore CPUs. Zhongyi Lin, Evangelos Georganas, and John D. Owens*.
+
 To initialize:
 ```bash
 source ./init_vars.sh
@@ -14,12 +17,12 @@ python -m tvm.exec.rpc_server --tracker=0.0.0.0:9190 --key=<device_name>
 
 # Terminal 3:
 # Valid CPU device_name: i7_7700K, Xeon_GCP, EPYC, Xeon_E5
-python fused_schedule_test.py -at 4000 <device_name> # -u for unfused kernels
+python fused_schedule_test.py -at 4000 -v <device_name> # -u for unfused kernels
 ```
 
 To verify and generate code and ref data for fused kernels:
 ```bash
-python fused_schedule_test.py -akncd <device_name> # -u for unfused kernels
+python fused_schedule_test.py -akncd -v <device_name> # -u for unfused kernels
 ```
 
 To tune graph for CPU:
@@ -47,6 +50,7 @@ python model_test.py -kpnd -v <device_name> -w <model_name> # unfused
 To benchmark and plot rooflines:
 ```bash
 # See the Dockerfile for all dependencies needed to run the benchmark
+# Kernels and data should be generated before benchmarking!
 cd scripts
 ./cpu_benchmark.sh
 

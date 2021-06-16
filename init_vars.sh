@@ -38,6 +38,12 @@ mkdir -p generated_kernels/gpu/unfused/kernel_launch_config
 mkdir -p npy/fused
 mkdir -p npy/unfused
 
+# AVX512 or AVX-2/AVX
+if grep -q avx512 /proc/cpuinfo
+then
+  export USE_AVX512=1
+fi
+
 # # For VTune benchmark
 # sudo ln -sf ${VTUNE_HOME}/bin64/vtune /usr/bin/vtune 
 # sudo sh -c 'echo 0 >/proc/sys/kernel/perf_event_paranoid' 
