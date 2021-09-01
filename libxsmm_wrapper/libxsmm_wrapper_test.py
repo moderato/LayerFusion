@@ -16,9 +16,12 @@ parser.add_argument('-d', nargs=1, type=str, default=['resnet2', 'resnet3', 'res
     'resnet6', 'resnet7', 'resnet8', 'resnet9', 'resnet10', 'resnet11', 'resnet12', 'resnet13', \
     'resnet14', 'resnet15', 'resnet16', 'resnet17', 'resnet18', 'resnet19', 'resnet20'])
 parser.add_argument("-k", action="store_true")
+parser.add_argument("-t", type=int, default=1500, help="Number of autotuning trials.")
+
 args = parser.parse_args()
 layers = args.d
 skip_training = args.k
+n_trial = args.t
 
 # Resnet-50 layers (excluding first layer)
 _resnet_layers ={
@@ -64,7 +67,7 @@ _resnet_layers ={
 Convert input from NCHW format to NCHW16C format where the innermost data dimension is vectorized for AVX-512
 '''
 def convert_input(a_np, batch, in_channel, input_height, input_width, pad_height, pad_width, vlen, A):
-    to_return = np.zeros((batch, math.ceil(in_channel/vlen),input_height + 2*pad_height, input_width+ 2*pad_width,vlen),dtype = A.dtype)
+    to_return = np.zeros((batch, math.ceil(in_channel/vlen), input_height + 2*pad_height, input_width+ 2*pad_width, vlen),dtype = A.dtype)
     for i in range(batch):
         for j in range(math.ceil(in_channel/vlen)):
             for k in range(input_height + 2*pad_height):
@@ -81,7 +84,7 @@ def convert_input(a_np, batch, in_channel, input_height, input_width, pad_height
 Convert output from NCHW16C format to NCHW format where the innermost data dimension is vectorized for AVX-512
 '''
 def convert_output(a_np, batch, out_channel, output_height, output_width, vlen):
-    to_return = np.zeros((batch, out_channel,output_height, output_width), dtype=float)
+    to_return = np.zeros((batch, out_channel, output_height, output_width), dtype=float)
     for i in range(batch):
         for j in range(math.ceil(out_channel/vlen)):
             for k in range(output_height):
@@ -94,7 +97,7 @@ def convert_output(a_np, batch, out_channel, output_height, output_width, vlen):
 Convert weights from KCRS format to KCRS16C16K format where the innermost data dimension is vectorized for AVX-512
 '''
 def convert_weight(w_np, in_channel, out_channel, kernel_height, kernel_width, vlen, W):
-    to_return = np.zeros((math.ceil(out_channel/vlen), math.ceil(in_channel/vlen),kernel_height, kernel_width,vlen,vlen), dtype = W.dtype)
+    to_return = np.zeros((math.ceil(out_channel/vlen), math.ceil(in_channel/vlen), kernel_height, kernel_width, vlen, vlen), dtype = W.dtype)
     for i in range(math.ceil(out_channel/vlen)):
         for j in range(math.ceil(in_channel/vlen)):
             for k in range(kernel_height):
@@ -119,30 +122,32 @@ def get_ref_data(batch, out_channel, in_channel, input_height, input_width, kern
 def intrin_libxsmm_brgemm(
                             ifmblock,
                             ofmblock,
-                            ofw,
-                            s,
-                            r,
-                            rco,
 
                             ofh,            # Either 1 (small hxw) or cfg['tile_h'].size[2]
+                            ofw,
+
+                            rco,
+                            r,
+                            s,
 
                             stride_height,
                             stride_width,
 
                             in_channel):
 
-    # print('ifmblock: ', ifmblock,
-    #         'ofmblock: ',                 ofmblock,
-    #         'ofw: ',                 ofw,
-    #         's: ',                 s,
-    #         'r: ',                 r,
-    #         'rco: ',                 rco,
+    # print(  'ifmblock: ',              ifmblock,
+    #         'ofmblock: ',              ofmblock,
 
-    #         'ofh: ',                 ofh,            # Either 1 (small hxw) or cfg['tile_h'].size[2]
+    #         'ofh: ',                   ofh,            # Either 1 (small hxw) or cfg['tile_h'].size[2]
+    #         'ofw: ',                   ofw,
 
-    #         'stride_height: ',                 stride_height,
-    #         'stride_width: ',                 stride_width,
-    #         'in_channel: ',                 in_channel)
+    #         'rco: ',                   rco,
+    #         'r: ',                     r,
+    #         's: ',                     s,
+
+    #         'stride_height: ',         stride_height,
+    #         'stride_width: ',          stride_width,
+    #         'in_channel: ',            in_channel)
 
     alignment = 64
 
@@ -221,7 +226,7 @@ def intrin_libxsmm_brgemm(
 
     return te.decl_tensor_intrin(C.op,
                                     intrin_func,   
-                                    name='GEMM',
+                                    name='BRGEMM',
                                     binds={
                                             A: xx_ptr,
                                             B: yy_ptr,
@@ -230,19 +235,23 @@ def intrin_libxsmm_brgemm(
 
 #AutoTVM template for libxmm brgemm based tensorize implementation
 @autotvm.template('conv2d')
-def conv_auto_tuned(ofmblock,       # vec
+def conv_auto_tuned(
+                    batch,          # batch
+                    ofh,            # OH
                     ofw,            # OW
-                    ifmblock,       # vec
-                    stride_width,   # stride_width
+                    out_channel,    # out_channel
+                    ofmblock,       # vec
+
+                    input_height,   # padded_height
                     input_width,    # padded_width
                     in_channel,     # IC
-                    input_height,   # padded_height
+                    ifmblock,       # vec
+
                     filter_height,  # FH
-                    filter_width,   # HW
-                    ofh,            # OH
+                    filter_width,   # FW
+
                     stride_height,  # stride_height
-                    batch,          # batch
-                    out_channel):   # out_channel
+                    stride_width):  # stride_width
 
     # 5D: N(IC)HWc
     A1 = te.placeholder((batch, math.ceil(in_channel/ifmblock), input_height, input_width, ifmblock), name='input')
@@ -257,19 +266,19 @@ def conv_auto_tuned(ofmblock,       # vec
 
     cfg.define_knob('pack', [0, 1]) # define packing
     pack = False
-    w_tile = []
+    w_factor_inner_values = []
 
     factor_found = False
     for i in range(6, min(ofw+1, 29)):
         if ofw % i == 0:
-            w_tile.append((i, ofw // i) )
+            w_factor_inner_values.append(i)
             factor_found = True
 
     if factor_found == False:
-        w_tile.append((ofw, 1))
+        w_factor_inner_values.append(ofw)
 
     # tile factors for output width
-    cfg.define_knob('tile_w', w_tile) # define w, use verbose policy
+    cfg.define_knob('tile_w', w_factor_inner_values) # define w, use verbose policy
 
     # pack data when stride > 1 and pack flag set so that data for brgemm is continuous
     if filter_height == 1 and filter_width == 1 and stride_width > 1 and stride_height > 1 and cfg['pack'].val == 1:
@@ -300,7 +309,7 @@ def conv_auto_tuned(ofmblock,       # vec
     cfg.define_split('tile_h', h, num_outputs=3)    # output height
     cfg.define_split('tile_c', rco, num_outputs=2)  # input channel dimension
     cfg.define_split('tile_k', ko, num_outputs=2)   # output channel dimension
-    w_factor_inner, _ =  cfg['tile_w'].val
+    w_factor_inner = cfg['tile_w'].val
     wo, wi = s[B1].split(w, w_factor_inner)         # tiling
     rco_o, rco_i = cfg['tile_c'].apply(s, B1, rco)
     ko_o, ko_i = cfg['tile_k'].apply(s, B1, ko)
@@ -316,22 +325,24 @@ def conv_auto_tuned(ofmblock,       # vec
     # 1x1 (stride = 1 or (pack & stride > 1))
     if (((filter_height == 1 and filter_width == 1 and stride_width == 1 and stride_height == 1) or pack) and \
         (cfg['tile_h'].size[1] > 1 and w_factor_inner == ofw)): # HM > 1 & WI = OW (small W)
-        print('small: bind to h')
+        # print('small: bind to h')
         tensorize_axis = hi
         block_output_height = cfg['tile_h'].size[2]
     else:
-        print('big: bind to rco_i')
+        # print('big: bind to rco_i')
         tensorize_axis = rco_i
         block_output_height = 1
 
     libxsmm_tensorize = intrin_libxsmm_brgemm(
                                                 ifmblock,               # n of brgemm   -> rci
                                                 ofmblock,               # k of brgemm   -> ki
-                                                w_factor_inner,         # m of brgemm   -> wi
-                                                filter_width,           #               -> rx
-                                                filter_height,          #               -> ry
-                                                cfg['tile_c'].size[1],  #               -> rco_i
+
                                                 block_output_height,    #               -> hi
+                                                w_factor_inner,         # m of brgemm   -> wi
+
+                                                cfg['tile_c'].size[1],  #               -> rco_i
+                                                filter_height,          #               -> ry
+                                                filter_width,           #               -> rx
 
                                                 stride_height,
                                                 stride_width,
@@ -347,7 +358,7 @@ def conv_auto_tuned(ofmblock,       # vec
     if pack:
         n1, c1, h1, w1, v1 = s[A2].op.axis
         par2 = s[A2].fuse(n1, c1, h1)
-        s[A2].parallel(par)
+        s[A2].parallel(par2)
         s[A2].vectorize(v1)
     s = s.normalize()
 
@@ -394,28 +405,34 @@ def driver():
             return
 
         task = autotvm.task.create('conv2d',
-                                    args=(  vlen,
+                                    args=(  
+                                            batch,
+                                            output_height,
                                             output_width,
+                                            out_channel,
                                             vlen,
-                                            stride_width,
+
+                                            input_height + 2*pad_height,
                                             input_width + 2*pad_width,
                                             in_channel,
-                                            input_height + 2*pad_height,
+                                            vlen,
+
                                             kernel_height,
                                             kernel_width,
-                                            output_height,
+
                                             stride_height,
-                                            batch,
-                                            out_channel),
+                                            stride_width),
                                     target=target)
 
         logging.getLogger('autotvm').setLevel(logging.DEBUG)
         logging.getLogger('autotvm').addHandler(logging.StreamHandler(sys.stdout))
         measure_option = autotvm.measure_option(builder=autotvm.LocalBuilder(), runner=autotvm.LocalRunner(number=1000, repeat=1,min_repeat_ms=1000))
 
-        tuner = autotvm.tuner.RandomTuner(task)
+        # Random / XGBoost
+        # tuner = autotvm.tuner.RandomTuner(task)
+        tuner = autotvm.tuner.XGBTuner(task, feature_type='curve')
+
         # Please limit n_trial to reduce tuning time
-        n_trial= 1500
         log_file = 'logs/{}.log'.format(layer)
         print(len(task.config_space))
 
@@ -429,11 +446,26 @@ def driver():
             print(d.query(task.target, task.workload))
             with tvm.target.Target(target):
                 # all 4D
-                a_np, w_np, b_np  = get_ref_data(batch,out_channel,in_channel,input_height,input_width,kernel_height, kernel_width,stride_height,pad_height)
+                a_np, w_np, b_np  = get_ref_data(batch, out_channel, in_channel, input_height, input_width, kernel_height, kernel_width, stride_height, pad_height)
                 
                 # AutoTVM template: 5D conv 6D = 5D
-                s, arg_bufs = conv_auto_tuned(vlen, output_width, vlen, stride_width,input_width + 2*pad_width, in_channel,\
-                                    input_height + 2*pad_height, kernel_height, kernel_width,output_height, stride_height, batch, out_channel)
+                s, arg_bufs = conv_auto_tuned(
+                                                batch,
+                                                output_height,
+                                                output_width,
+                                                out_channel,
+                                                vlen,
+
+                                                input_height + 2*pad_height,
+                                                input_width + 2*pad_width,
+                                                in_channel,
+                                                vlen,
+
+                                                kernel_height,
+                                                kernel_width,
+
+                                                stride_height,
+                                                stride_width)
 
                 # input 4D -> 5D, weight 4D -> 6D
                 a_np2 = convert_input(a_np, batch, in_channel, input_height, input_width, pad_height, pad_width, vlen, arg_bufs[1])

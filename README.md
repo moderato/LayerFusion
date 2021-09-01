@@ -2,12 +2,16 @@
 
 Code for the Euro-Par 2021 paper *Towards Flexible and Compiler-Friendly Layer Fusion for CNNs on Multicore CPUs. Zhongyi Lin, Evangelos Georganas, and John D. Owens*.
 
-To initialize:
+
+### Prerequisite:
+This code requires a custom branch of [TVM](https://github.com/moderato/tvm) to be installed. We are working on migrating this code to there, and we hope to fix the later mentioned issues soon.
+
+### Initialization:
 ```bash
 source ./init_vars.sh
 ```
 
-To tune fused kernels:
+### Fused kernel tuning:
 ```bash
 # Terminal 1:
 python -m tvm.exec.rpc_tracker --host=0.0.0.0 --port=9190
@@ -25,7 +29,7 @@ To verify and generate code and ref data for fused kernels:
 python fused_schedule_test.py -akncd -v <device_name> # -u for unfused kernels
 ```
 
-To tune graph for CPU:
+### CPU graph tuning:
 ```bash
 # Currently NOT support extracting FUSED tasks from model graphs. Solution: tune the unfused graph and fused kernels, and merge the tuning logs.
 # Currently supported CPU device_name: i7_7700K, Xeon_GCP, EPYC, Xeon_E5
@@ -47,7 +51,7 @@ python model_test.py -kpd -v <device_name> -w <model_name> # fused
 python model_test.py -kpnd -v <device_name> -w <model_name> # unfused
 ```
 
-To benchmark and plot rooflines:
+### Kernel benchmark and roofline plotting:
 ```bash
 # See the Dockerfile for all dependencies needed to run the benchmark
 # Kernels and data should be generated before benchmarking!
