@@ -4,7 +4,7 @@ Code for the Euro-Par 2021 paper *Towards Flexible and Compiler-Friendly Layer F
 
 
 ### Prerequisite:
-This code requires a custom branch of [TVM](https://github.com/moderato/tvm) to be installed. We are working on migrating this code to there, and we hope to fix the later mentioned issues soon.
+This code requires a custom branch of [TVM](https://github.com/moderato/tvm/tree/2aebaf1b25137db148bf9434182328ebf02ea8a8) to be installed. We are working on migrating this code to there, and we hope to fix the later mentioned issues soon.
 
 ### Initialization:
 ```bash
