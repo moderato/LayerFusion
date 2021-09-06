@@ -34,13 +34,13 @@ python fused_schedule_test.py -akncd -v <device_name> # -u for unfused kernels
 # Supported CPU device_name: i7_7700K, Xeon_GCP, EPYC, Xeon_E5
 # Supported model_name: mobilenet_v1, mobilenet_v2, mnasnet_a1, resnet_18, resnet_50
 
-# Have kernel tuning logs ready and tune graph for models with fused ops
+# Tune kernel tasks extracted from a model as well as the compute graph (layout transformation)
 python model_test.py -k -v <device_name> -w <model_name> # fused
-python model_test.py -k -v <device_name> -w <model_name> # unfused
+python model_test.py -kn -v <device_name> -w <model_name> # unfused
 
-# Inference only
-python model_test.py -kpd -v <device_name> -w <model_name> # fused
-python model_test.py -kpnd -v <device_name> -w <model_name> # unfused
+# Inference only (-d for debug purpose)
+python model_test.py -kp -v <device_name> -w <model_name> # fused
+python model_test.py -kpn -v <device_name> -w <model_name> # unfused
 ```
 
 ### Kernel benchmark and roofline plotting:
@@ -56,7 +56,12 @@ python plots/plot_roofline.py
 ### Utils
 ```bash
 # Duplicate logs for both the cases of w/ and w/o post ops
-python duplicate_logs.py
+python py_utils/duplicate_logs.py
+```
+
+```bash
+# Update logs with workloads of a previous version
+python py_utils/update_logs.py -l NCHW -p <folder or log file path>
 ```
 
 ```bash
