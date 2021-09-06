@@ -213,13 +213,13 @@ def get_workloads():
     # conv_conv_workloads['vgg_8_9'] = (1, 28, 28, 512, 3, 512, 1, False, None, 3, 512, 1, False, None, False)
     # conv_conv_workloads['vgg_11_12'] = (1, 14, 14, 512, 3, 512, 1, False, None, 3, 512, 1, False, None, False)
 
-    # # # ResNet-18
-    conv_conv_workloads['res_2x'] = (1, 56, 56, 64, 3, 64, 1, False, None, 3, 64, 1, False, None, False)
-    conv_conv_workloads['res_3x'] = (1, 28, 28, 128, 3, 128, 1, False, None, 3, 128, 1, False, None, False)
+    # # ResNet-18
+    # conv_conv_workloads['res_2x'] = (1, 56, 56, 64, 3, 64, 1, False, None, 3, 64, 1, False, None, False)
+    # conv_conv_workloads['res_3x'] = (1, 28, 28, 128, 3, 128, 1, False, None, 3, 128, 1, False, None, False)
     # conv_conv_workloads['res_4x'] = (1, 14, 14, 256, 3, 256, 1, False, None, 3, 256, 1, False, None, False)
     # conv_conv_workloads['res_5x'] = (1, 7, 7, 512, 3, 512, 1, False, None, 3, 512, 1, False, None, False)
-    conv_conv_workloads['res_2x_s2'] = (1, 56, 56, 64, 3, 64, 2, False, None, 3, 64, 1, False, None, False)
-    conv_conv_workloads['res_3x_s2'] = (1, 28, 28, 128, 3, 128, 2, False, None, 3, 128, 1, False, None, False)
+    # conv_conv_workloads['res_2x_s2'] = (1, 56, 56, 64, 3, 64, 2, False, None, 3, 64, 1, False, None, False)
+    # conv_conv_workloads['res_3x_s2'] = (1, 28, 28, 128, 3, 128, 2, False, None, 3, 128, 1, False, None, False)
     # conv_conv_workloads['res_4x_s2'] = (1, 14, 14, 256, 3, 256, 2, False, None, 3, 256, 1, False, None, False)
     # conv_conv_workloads['res_5x_s2'] = (1, 7, 7, 512, 3, 512, 2, False, None, 3, 512, 1, False, None, False)
 
@@ -228,8 +228,8 @@ def get_workloads():
     # # conv_conv_workloads['res_3x_b_1'] = (1, 28, 28, 128, 1, 128, 1, False, None, 3, 128, 1, False, None, False)
     # # conv_conv_workloads['res_4x_b_1'] = (1, 14, 14, 256, 1, 256, 1, False, None, 3, 256, 1, False, None, False)
     # # conv_conv_workloads['res_5x_b_1'] = (1, 7, 7, 512, 1, 512, 1, False, None, 3, 512, 1, False, None, False)
-    conv_conv_workloads['res_2x_b_2'] = (1, 56, 56, 64, 3, 64, 1, False, None, 1, 256, 1, False, None, False)
-    conv_conv_workloads['res_3x_b_2'] = (1, 28, 28, 128, 3, 128, 1, False, None, 1, 512, 1, False, None, False)
+    # conv_conv_workloads['res_2x_b_2'] = (1, 56, 56, 64, 3, 64, 1, False, None, 1, 256, 1, False, None, False)
+    # conv_conv_workloads['res_3x_b_2'] = (1, 28, 28, 128, 3, 128, 1, False, None, 1, 512, 1, False, None, False)
     # conv_conv_workloads['res_4x_b_2'] = (1, 14, 14, 256, 3, 256, 1, False, None, 1, 1024, 1, False, None, False)
     # conv_conv_workloads['res_5x_b_2'] = (1, 7, 7, 512, 3, 512, 1, False, None, 1, 2048, 1, False, None, False)
     # conv_conv_workloads['res_2x_b_2.16'] = (16, 56, 56, 64, 3, 64, 1, False, None, 1, 256, 1, False, 'bias', False)
@@ -240,40 +240,40 @@ def get_workloads():
     ################################################################
 
     ##################### Depth conv workloads #####################
-    # MobileNet-v1
-    depth_conv_workloads['mv1_1'] = (1, 112, 112, 32, 3, 1, 1, True, None, 1, 64, 1, False, None, False)
-    depth_conv_workloads['mv1_2'] = (1, 112, 112, 64, 3, 1, 2, True, None, 1, 128, 1, False, None, False)
+    # # MobileNet-v1
+    # depth_conv_workloads['mv1_1'] = (1, 112, 112, 32, 3, 1, 1, True, None, 1, 64, 1, False, None, False)
+    # depth_conv_workloads['mv1_2'] = (1, 112, 112, 64, 3, 1, 2, True, None, 1, 128, 1, False, None, False)
     depth_conv_workloads['mv1_3'] = (1, 56, 56, 128, 3, 1, 1, True, None, 1, 128, 1, False, None, False)
-    depth_conv_workloads['mv1_4'] = (1, 56, 56, 128, 3, 1, 2, True, None, 1, 256, 1, False, None, False)
-    depth_conv_workloads['mv1_5'] = (1, 28, 28, 256, 3, 1, 1, True, None, 1, 256, 1, False, None, False)
-    depth_conv_workloads['mv1_6'] = (1, 28, 28, 256, 3, 1, 2, True, None, 1, 512, 1, False, None, False)
-    depth_conv_workloads['mv1_7-11'] = (1, 14, 14, 512, 3, 1, 1, True, None, 1, 512, 1, False, None, False)
-    depth_conv_workloads['mv1_12'] = (1, 14, 14, 512, 3, 1, 2, True, None, 1, 1024, 1, False, None, False)
-    depth_conv_workloads['mv1_13'] = (1, 7, 7, 1024, 3, 1, 1, True, None, 1, 1024, 1, False, None, False)
-    # depth_conv_workloads['test_L1'] = (1, 14, 14, 16, 3, 1, 1, True, None, 1, 16, 1, False, None, False)
-    # depth_conv_workloads['test_DRAM'] = (1, 112, 112, 64, 3, 1, 1, True, None, 1, 64, 1, False, None, False)
+    # depth_conv_workloads['mv1_4'] = (1, 56, 56, 128, 3, 1, 2, True, None, 1, 256, 1, False, None, False)
+    # depth_conv_workloads['mv1_5'] = (1, 28, 28, 256, 3, 1, 1, True, None, 1, 256, 1, False, None, False)
+    # depth_conv_workloads['mv1_6'] = (1, 28, 28, 256, 3, 1, 2, True, None, 1, 512, 1, False, None, False)
+    # depth_conv_workloads['mv1_7-11'] = (1, 14, 14, 512, 3, 1, 1, True, None, 1, 512, 1, False, None, False)
+    # depth_conv_workloads['mv1_12'] = (1, 14, 14, 512, 3, 1, 2, True, None, 1, 1024, 1, False, None, False)
+    # depth_conv_workloads['mv1_13'] = (1, 7, 7, 1024, 3, 1, 1, True, None, 1, 1024, 1, False, None, False)
+    # # depth_conv_workloads['test_L1'] = (1, 14, 14, 16, 3, 1, 1, True, None, 1, 16, 1, False, None, False)
+    # # depth_conv_workloads['test_DRAM'] = (1, 112, 112, 64, 3, 1, 1, True, None, 1, 64, 1, False, None, False)
 
-    # MobileNet-v2
-    depth_conv_workloads['mv2_1'] = (1, 112, 112, 32, 3, 1, 1, True, None, 1, 16, 1, False, None, False)
-    depth_conv_workloads['mv2_2_1'] = (1, 112, 112, 96, 3, 1, 2, True, None, 1, 24, 1, False, None, False)
-    depth_conv_workloads['mv2_2_2'] = (1, 56, 56, 144, 3, 1, 1, True, None, 1, 24, 1, False, None, False)
-    depth_conv_workloads['mv2_3_1'] = (1, 56, 56, 144, 3, 1, 2, True, None, 1, 32, 1, False, None, False)
-    depth_conv_workloads['mv2_3_2'] = (1, 28, 28, 192, 3, 1, 1, True, None, 1, 32, 1, False, None, False)
-    depth_conv_workloads['mv2_4_1'] = (1, 28, 28, 192, 3, 1, 2, True, None, 1, 64, 1, False, None, False)
-    depth_conv_workloads['mv2_4_2'] = (1, 14, 14, 384, 3, 1, 1, True, None, 1, 64, 1, False, None, False)
-    depth_conv_workloads['mv2_5_1'] = (1, 14, 14, 384, 3, 1, 1, True, None, 1, 96, 1, False, None, False)
-    depth_conv_workloads['mv2_5_2'] = (1, 14, 14, 576, 3, 1, 1, True, None, 1, 96, 1, False, None, False)
-    depth_conv_workloads['mv2_6_1'] = (1, 14, 14, 576, 3, 1, 2, True, None, 1, 160, 1, False, None, False)
-    depth_conv_workloads['mv2_6_2'] = (1, 7, 7, 960, 3, 1, 1, True, None, 1, 160, 1, False, None, False)
-    depth_conv_workloads['mv2_7'] = (1, 7, 7, 960, 3, 1, 1, True, None, 1, 320, 1, False, None, False)
+    # # MobileNet-v2
+    # depth_conv_workloads['mv2_1'] = (1, 112, 112, 32, 3, 1, 1, True, None, 1, 16, 1, False, None, False)
+    # depth_conv_workloads['mv2_2_1'] = (1, 112, 112, 96, 3, 1, 2, True, None, 1, 24, 1, False, None, False)
+    # depth_conv_workloads['mv2_2_2'] = (1, 56, 56, 144, 3, 1, 1, True, None, 1, 24, 1, False, None, False)
+    # depth_conv_workloads['mv2_3_1'] = (1, 56, 56, 144, 3, 1, 2, True, None, 1, 32, 1, False, None, False)
+    # depth_conv_workloads['mv2_3_2'] = (1, 28, 28, 192, 3, 1, 1, True, None, 1, 32, 1, False, None, False)
+    # depth_conv_workloads['mv2_4_1'] = (1, 28, 28, 192, 3, 1, 2, True, None, 1, 64, 1, False, None, False)
+    # depth_conv_workloads['mv2_4_2'] = (1, 14, 14, 384, 3, 1, 1, True, None, 1, 64, 1, False, None, False)
+    # depth_conv_workloads['mv2_5_1'] = (1, 14, 14, 384, 3, 1, 1, True, None, 1, 96, 1, False, None, False)
+    # depth_conv_workloads['mv2_5_2'] = (1, 14, 14, 576, 3, 1, 1, True, None, 1, 96, 1, False, None, False)
+    # depth_conv_workloads['mv2_6_1'] = (1, 14, 14, 576, 3, 1, 2, True, None, 1, 160, 1, False, None, False)
+    # depth_conv_workloads['mv2_6_2'] = (1, 7, 7, 960, 3, 1, 1, True, None, 1, 160, 1, False, None, False)
+    # depth_conv_workloads['mv2_7'] = (1, 7, 7, 960, 3, 1, 1, True, None, 1, 320, 1, False, None, False)
 
-    # MNasNet-A1
-    depth_conv_workloads['mna1_1'] = (1, 112, 112, 32, 3, 1, 1, True, None, 1, 16, 1, False, None, False)
-    depth_conv_workloads['mna1_2_1'] = (1, 112, 112, 96, 3, 1, 2, True, None, 1, 24, 1, False, None, False)
-    depth_conv_workloads['mna1_2_2'] = (1, 56, 56, 144, 3, 1, 1, True, None, 1, 24, 1, False, None, False)
-    depth_conv_workloads['mna1_4_1'] = (1, 28, 28, 240, 3, 1, 2, True, None, 1, 80, 1, False, None, False)
-    depth_conv_workloads['mna1_4_2'] = (1, 14, 14, 480, 3, 1, 1, True, None, 1, 80, 1, False, None, False)
-    depth_conv_workloads['mna1_7'] = (1, 7, 7, 960, 3, 1, 1, True, None, 1, 320, 1, False, None, False)
+    # # MNasNet-A1
+    # depth_conv_workloads['mna1_1'] = (1, 112, 112, 32, 3, 1, 1, True, None, 1, 16, 1, False, None, False)
+    # depth_conv_workloads['mna1_2_1'] = (1, 112, 112, 96, 3, 1, 2, True, None, 1, 24, 1, False, None, False)
+    # depth_conv_workloads['mna1_2_2'] = (1, 56, 56, 144, 3, 1, 1, True, None, 1, 24, 1, False, None, False)
+    # depth_conv_workloads['mna1_4_1'] = (1, 28, 28, 240, 3, 1, 2, True, None, 1, 80, 1, False, None, False)
+    # depth_conv_workloads['mna1_4_2'] = (1, 14, 14, 480, 3, 1, 1, True, None, 1, 80, 1, False, None, False)
+    # depth_conv_workloads['mna1_7'] = (1, 7, 7, 960, 3, 1, 1, True, None, 1, 320, 1, False, None, False)
 
     # # MNasNet-B1: Don't fuse no speed up
     # depth_conv_workloads['mnb1_3_1'] = (1, 56, 56, 72, 5, 1, 2, True, None, 1, 40, 1, False, None, False)

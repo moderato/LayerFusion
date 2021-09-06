@@ -8,7 +8,7 @@ from tvm.contrib.utils import tempdir
 from tvm.contrib.debugger import debug_runtime
 from tvm.relay.testing.mobilenet import conv_block, separable_conv_block, get_workload
 
-from utils import get_fusion_parameters_from_tasks, DEVICES
+from utils import DEVICES
 from relay_helper import print_ir, fuse_preprocess, graph_tuning_preprocess
 from pprint import pprint
 
@@ -26,6 +26,7 @@ def test_network(image_shape, layout='NHWC'):
             params[k] = v
 
     return relay.Function(relay.analysis.free_vars(body), body), params
+
 
 # image_shape and layout are made consistent outside the function.
 def get_network(name, batch_size, dtype="float32", image_shape=(3, 224, 224), layout="NCHW"):
@@ -62,30 +63,6 @@ def get_network(name, batch_size, dtype="float32", image_shape=(3, 224, 224), la
 
     return mod, params, input_shape, output_shape
 
-def fuse_tasks(tasks, tuning_opt, target_str="cuda"):
-    if tuning_opt.no_fusion:
-        return tasks
-    target = tvm.target.Target(target_str)
-
-    # Collect all fusable layers
-    tmp_tasks = []
-    previous_task = None
-    layout = "NHWC" if target_str == "cuda" else "NCHW"
-    for idx, task in enumerate(reversed(tasks)):
-        tmp_tasks.append(task)
-        if idx != 0: # Skip the first round
-            if 'depthwise' not in task.name and 'depthwise' in previous_task.name:
-                # Pop the previous two tasks
-                tmp_tasks.pop()
-                tmp_tasks.pop()
-
-                # Append the fused task
-                parameters = get_fusion_parameters_from_tasks(previous_task, task, layout)
-                sargs = autotvm.task.topi_integration.serialize_args([parameters])
-                t = autotvm.task.create('fused_conv2d.{}'.format('cuda' if target.kind.name == 'cuda' else 'x86'), args=sargs, target=target_str)
-                tmp_tasks.append(t)
-        previous_task = task
-    return tmp_tasks
 
 def tune_autotvm_tasks(tasks,
                tuning_opt,
@@ -127,6 +104,7 @@ def tune_autotvm_tasks(tasks,
     # Pick best records to a cache file
     autotvm.record.pick_best(log_filename, '{}_best.log'.format(log_filename.split('.')[0]))
 
+
 # Use graph tuner to achieve graph level optimal schedules
 # Set use_DP=False if it takes too long to finish.
 def tune_graph(graph, dshape, target_str, records, opt_sch_file, use_DP=True):
@@ -137,6 +115,7 @@ def tune_graph(graph, dshape, target_str, records, opt_sch_file, use_DP=True):
     executor.benchmark_layout_transform(min_exec_num=5000)
     executor.run()
     executor.write_opt_sch2record_file(opt_sch_file)
+
 
 def tune_auto_scheduler_tasks(tasks, task_weights, tuning_opt, device_name, log_filename):
     tuner = auto_scheduler.TaskScheduler(tasks, task_weights)
@@ -154,6 +133,7 @@ def tune_auto_scheduler_tasks(tasks, task_weights, tuning_opt, device_name, log_
         )
     )
     tuner.tune(tune_option)
+
 
 def tune_and_evaluate(tuning_opt, dtype='float32'):
     device_name = tuning_opt.device
@@ -195,8 +175,6 @@ def tune_and_evaluate(tuning_opt, dtype='float32'):
         graph, lib, params = graph_factory.graph_json, graph_factory.lib, graph_factory.params
 
     else:
-        # Extract workloads from relay program
-        print('Extract tasks...')
         if 'llvm' in target_str: # CPU & NCHWC, use NCHW to get the network though
             image_shape, layout = (3, 224, 224), 'NCHW'
             folder_name = 'logs/autotvm/model/cpu/{}'.format(network)
@@ -215,19 +193,16 @@ def tune_and_evaluate(tuning_opt, dtype='float32'):
                 image_shape, layout = (224, 224, 3), "NHWC"
                 log_filename = '{}/nhwc_{}.log'.format(folder_name, 'unfused' if tuning_opt.no_fusion else 'fused')
         mod, params, input_shape, _ = get_network(network, batch_size=1, dtype=dtype, image_shape=image_shape, layout=layout)
-        tasks = autotvm.task.extract_from_program(mod['main'], target=target_str, params=params, ops=(relay.op.get('nn.conv2d'), relay.op.get('nn.dense')))
 
-        print("\n### Before replacement")
-        pprint(tasks)
-
-        # Run tuning tasks
+        # Extract workloads from relay program
         if not tuning_opt.skip_tuning:
-            if not tuning_opt.no_fusion:
-                # Replace all fusable tasks to fused tasks
-                tasks = fuse_tasks(tasks, tuning_opt, target_str=target_str) # TODO: Extract fused tasks from preprocessed graph
-                print("\n### After replacement")
-                pprint(tasks)
-                print("\n")
+            print('Extract tasks...')
+            if tuning_opt.no_fusion:
+                tasks = autotvm.task.extract_from_program(mod['main'], target=target_str, params=params, ops=(relay.op.get('nn.conv2d'), relay.op.get('nn.dense')))
+            else:
+                tmp_f = graph_tuning_preprocess(mod["main"], model_name=network, layout=layout)
+                tasks = autotvm.task.extract_from_program(tmp_f, target=target_str, params=params, ops=(relay.op.get('nn.conv2d'), relay.op.get('nn.fused_conv2d'), relay.op.get('nn.dense')))
+            # pprint(tasks)
             tune_autotvm_tasks(tasks, tuning_opt, log_filename=log_filename)
 
         # Tune graph for CPU
@@ -242,7 +217,7 @@ def tune_and_evaluate(tuning_opt, dtype='float32'):
         with autotvm.apply_history_best(log_filename) if 'cuda' in target_str else autotvm.apply_graph_best(graph_opt_sch_file):
             if not tuning_opt.no_fusion:
                 mod = fuse_preprocess(mod['main'], params, target_str, model_name=network, layout=layout)
-            with tvm.transform.PassContext(opt_level=3, trace=print_ir):
+            with tvm.transform.PassContext(opt_level=3):
                 # """
                 # build = optimize + generate_code
                 # build / generate_code: return mod

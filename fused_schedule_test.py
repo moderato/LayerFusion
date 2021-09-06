@@ -285,7 +285,7 @@ def verify_tuning(workload_name,
                 # logging.getLogger('autotvm').addHandler(logging.StreamHandler(sys.stdout))
 
                 # fused schedule auto
-                sargs = autotvm.task.topi_integration.serialize_args([parameters])
+                sargs = autotvm.task.topi_integration.serialize_args(list(fc.make_params(layout=('NHWC' if target_str == 'cuda' else 'NCHW')).values()))
                 task = autotvm.task.create('fused_conv2d.{}'.format('cuda' if target_str == 'cuda' else 'x86'), args=sargs, target=target)
                 print(task.config_space)
                 print(task.target)
@@ -315,14 +315,17 @@ def verify_tuning(workload_name,
                                 callbacks=[autotvm.callback.progress_bar(min(tuning_trials, len(task.config_space))),
                                             autotvm.callback.log_to_file(log_name)])
 
-                s, flatten_params = fc.get_schedule_inference(target)
-
                 # inspect the best config
                 # autotvm.record.pick_best(log_name, "logs/autotvm/model/{}/test.log".format(device))
                 dispatch_context = autotvm.apply_history_best(log_name)
                 best_config = dispatch_context.query(task.target, task.workload)
                 print('\nBest config:')
                 print(best_config)
+                fc.update_all_shapes_from_best_cfg(best_config)
+                task.args = autotvm.task.topi_integration.serialize_args(list(fc.make_params(raw=False).values())) # Update task.args (workload) with new shapes
+                
+                with target:
+                    s, arg_bufs = task.instantiate(best_config)
             elif use_auto_scheduler:
                 log_name = 'logs/auto_scheduler/layer/{}/{}_fused_{}.json'.format(device, workload_type, workload_name)
                 print(log_name)
@@ -355,15 +358,13 @@ def verify_tuning(workload_name,
                     task.tune(tune_option)
 
                 best_config = None
-                s, flatten_params = task.apply_best(log_name)
+                s, arg_bufs = task.apply_best(log_name)
             else:
-                best_config = None
-                with target:
-                    s, flatten_params = fc.get_schedule_inference(target)
+                raise Exception("Unrecognized option!")
 
             if not no_print_ir:
-                print(tvm.lower(s, flatten_params, simple_mode=True))
-            func = tvm.build(s, flatten_params, target_str, name='fused_2')
+                print(tvm.lower(s, arg_bufs, simple_mode=True))
+            func = tvm.build(s, arg_bufs, target_str, name='fused_2')
             if print_src:
                 if target_str == 'cuda':
                     print(func.imported_modules[0].get_source())

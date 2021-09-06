@@ -1,6 +1,8 @@
 from utils import get_workloads
 import os
 from tvm import autotvm
+from tvm.topi.fusion_composer import FusionComposer
+from tvm.topi.x86.fused_conv2d import *
 
 def duplicate_fusion_logs(logfile, post_ops=['relu', 'relu']):
     if not os.path.isfile(logfile):
@@ -17,18 +19,17 @@ def duplicate_fusion_logs(logfile, post_ops=['relu', 'relu']):
         name, args = tsk.name, tsk.args
         if 'fused' not in name:
             continue
-        new_args = list(args[0])
-        c = 0
-        while 8 + 5*c < len(new_args):
-            if args[0][8 + 5*c] is None:
-                new_args[8 + 5*c] = post_ops[c]
-            else:
-                new_args[8 + 5*c] = None
-            c += 1
-        if len(args) == 1:
-            new_args = (tuple(new_args),)
+        fc = FusionComposer(args[0], target=tgt)
+        workload = list(fc.make_params().values())
+        if workload[8] is [None, None]:
+            workload[8] = post_ops
         else:
-            new_args = (tuple(new_args), args[1])
+            workload[8] = [None, None]
+
+        if len(args) == 1:
+            new_args = (tuple(workload),)
+        else:
+            new_args = (tuple(workload), args[1])
         new_tsk = autotvm.task.Task(name, new_args)
         new_mi = autotvm.MeasureInput(tgt, new_tsk, config)
 
@@ -46,7 +47,7 @@ if __name__ == '__main__':
     device = 'cpu'
     log_dir = 'logs/autotvm/layer/{}'.format(device)
     workloads = get_workloads()
-    relus = {
+    post_ops_dict = {
         'mv1': ['relu', 'relu'],
         'mv2': ['relu6', 'bias'],
         'mna1': ['relu', 'bias'],
@@ -57,10 +58,10 @@ if __name__ == '__main__':
         for w in workloads[workload_type].keys():
             log_name = '{}_fused_{}.log'.format(workload_type, w)
             logfile = '{}/fused/{}'.format(log_dir, log_name)
-            relu = None
-            for k in relus.keys():
+            post_ops = None
+            for k in post_ops_dict.keys():
                 if k in w:
-                    relu = relus[k]
-            assert relu is not None
+                    post_ops = post_ops_dict[k]
+            assert post_ops is not None
             print(logfile)
-            duplicate_fusion_logs(logfile, relu)
+            duplicate_fusion_logs(logfile, post_ops)

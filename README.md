@@ -4,7 +4,7 @@ Code for the Euro-Par 2021 paper *Towards Flexible and Compiler-Friendly Layer F
 
 
 ### Prerequisite:
-This code requires a custom branch of [TVM](https://github.com/moderato/tvm/tree/2aebaf1b25137db148bf9434182328ebf02ea8a8) to be installed. We are working on migrating this code to there, and we hope to fix the later mentioned issues soon.
+This code requires a custom branch of [TVM](https://github.com/moderato/tvm) to be installed. We are working on migrating this code to there, and we hope to fix the later mentioned issues soon.
 
 ### Initialization:
 ```bash
@@ -31,20 +31,12 @@ python fused_schedule_test.py -akncd -v <device_name> # -u for unfused kernels
 
 ### CPU graph tuning:
 ```bash
-# Currently NOT support extracting FUSED tasks from model graphs. Solution: tune the unfused graph and fused kernels, and merge the tuning logs.
-# Currently supported CPU device_name: i7_7700K, Xeon_GCP, EPYC, Xeon_E5
-# Currently supported model_name: mobilenet_v1, mobilenet_v2, mnasnet_a1, resnet_18, resnet_50
-python model_test.py -n -v <device_name> -w <model_name> # Tune kernels and graphs for models with all ops unfused
-
-# Duplicate logs for both the cases of w/ and w/o post ops
-python duplicate_logs.py
-
-# Assuming fused kernels are tuned.
-python -m tvm.autotvm.record --mode pick_batch --batch_size 200 --append --i logs/autotvm/layer/cpu/fused/ --o logs/autotvm/model/cpu/<model_name>/nchwc_fused.log
-cat logs/autotvm/model/cpu/<model_name>/nchwc_unfused.log >> logs/autotvm/model/cpu/<model_name>/nchwc_fused.log
+# Supported CPU device_name: i7_7700K, Xeon_GCP, EPYC, Xeon_E5
+# Supported model_name: mobilenet_v1, mobilenet_v2, mnasnet_a1, resnet_18, resnet_50
 
 # Have kernel tuning logs ready and tune graph for models with fused ops
-python model_test.py -k -v <device_name> -w <model_name>
+python model_test.py -k -v <device_name> -w <model_name> # fused
+python model_test.py -k -v <device_name> -w <model_name> # unfused
 
 # Inference only
 python model_test.py -kpd -v <device_name> -w <model_name> # fused
@@ -59,4 +51,16 @@ cd scripts
 ./cpu_benchmark.sh
 
 python plots/plot_roofline.py
+```
+
+### Utils
+```bash
+# Duplicate logs for both the cases of w/ and w/o post ops
+python duplicate_logs.py
+```
+
+```bash
+# Pick best batch from tuned kernel logs
+python -m tvm.autotvm.record --mode pick_batch --batch_size 200 --append --i logs/autotvm/layer/cpu/fused/ --o logs/autotvm/model/cpu/<model_name>/nchwc_fused.log
+cat logs/autotvm/model/cpu/<model_name>/nchwc_unfused.log >> logs/autotvm/model/cpu/<model_name>/nchwc_fused.log
 ```
