@@ -35,8 +35,8 @@ python fused_schedule_test.py -akncd -v <device_name> # -u for unfused kernels
 # Supported model_name: mobilenet_v1, mobilenet_v2, mnasnet_a1, resnet_18, resnet_50
 
 # Tune kernel tasks extracted from a model as well as the compute graph (layout transformation)
-python model_test.py -k -v <device_name> -w <model_name> # fused
-python model_test.py -kn -v <device_name> -w <model_name> # unfused
+python model_test.py -v <device_name> -w <model_name> # fused
+python model_test.py -n -v <device_name> -w <model_name> # unfused
 
 # Inference only (-d for debug purpose)
 python model_test.py -kp -v <device_name> -w <model_name> # fused
