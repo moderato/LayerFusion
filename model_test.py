@@ -9,7 +9,7 @@ from tvm.contrib.debugger import debug_runtime
 from tvm.relay.testing.mobilenet import conv_block, separable_conv_block, get_workload
 
 from utils import DEVICES
-from relay_helper import print_ir, fuse_preprocess, graph_tuning_preprocess
+from relay_helper import fuse_preprocess, graph_tuning_preprocess
 from pprint import pprint
 
 def test_network(image_shape, layout='NHWC'):

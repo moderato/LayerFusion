@@ -156,9 +156,7 @@ class FusedConv2DCallback(DFPatternCallback):
         # Traverse upward
         tmp = pre.op.body
         count = 0
-        while not isinstance(tmp, (relay.Var, relay.Constant)):
-            if count >= self.num_layers:
-                break
+        while not isinstance(tmp, (relay.Var, relay.Constant)) and count < self.num_layers:
             if tmp.op.name == 'nn.conv2d':
                 strides_array = [tmp.attrs['strides']] + strides_array
                 padding_array = [tmp.attrs['padding']] + padding_array
@@ -287,8 +285,7 @@ def fuse_preprocess(f, params, target_str, model_name="default", layout="NHWC"):
         # Replace add with bias_add
         with tvm.transform.PassContext(opt_level=3):
             mod = seq(mod)
-            if 'llvm' in target_str:
-                mod = BiasAddReplacement(layout=layout)(mod)
+        mod = BiasAddReplacement(layout=layout)(mod)
         # Partition graph
         pattern = get_fusion_patterns(MODEL_CONFIG[model_name]["fusion_pattern"])
         mod['main'] = pattern.partition(mod['main'], check=(partition_check(channel_ranges=MODEL_CONFIG[model_name]["channel_ranges"])))

@@ -2,9 +2,24 @@
 
 Code for the Euro-Par 2021 paper *Towards Flexible and Compiler-Friendly Layer Fusion for CNNs on Multicore CPUs. Zhongyi Lin, Evangelos Georganas, and John D. Owens*.
 
+Bib:
+```bibtex
+@InProceedings{10.1007/978-3-030-85665-6_15,
+    author="Lin, Zhongyi and Georganas, Evangelos and Owens, John D.",
+    editor="Sousa, Leonel and Roma, Nuno and Tom{\'a}s, Pedro",
+    title="Towards Flexible and Compiler-Friendly Layer Fusion for CNNs on Multicore CPUs",
+    booktitle="Euro-Par 2021: Parallel Processing",
+    year="2021",
+    publisher="Springer International Publishing",
+    address="Cham",
+    pages="232--248",
+    isbn="978-3-030-85665-6"
+}
+```
+
 
 ### Prerequisite:
-This code requires a custom branch of [TVM](https://github.com/moderato/tvm) to be installed. We are working on migrating this code to there, and we hope to fix the later mentioned issues soon.
+This code requires a custom branch of [TVM](https://github.com/moderato/tvm) to be installed. Please also checkout the [Dockerfile](https://github.com/moderato/LayerFusion/blob/master/Dockerfile) for other dependencies.
 
 ### Initialization:
 ```bash
