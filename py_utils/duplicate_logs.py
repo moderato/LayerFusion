@@ -2,7 +2,9 @@ from utils import get_workloads
 import os
 from tvm import autotvm
 from tvm.topi.fusion_composer import FusionComposer
+from tvm.topi.cuda.fused_conv2d import *
 from tvm.topi.x86.fused_conv2d import *
+from tvm.topi.utils import fused_conv2d_workload_to_fusion_param
 
 def duplicate_fusion_logs(logfile, post_ops=['relu', 'relu']):
     if not os.path.isfile(logfile):
@@ -19,17 +21,13 @@ def duplicate_fusion_logs(logfile, post_ops=['relu', 'relu']):
         name, args = tsk.name, tsk.args
         if 'fused' not in name:
             continue
-        fc = FusionComposer(args[0], target=tgt)
-        workload = list(fc.make_params().values())
-        if workload[8] is [None, None]:
-            workload[8] = post_ops
+        fc = FusionComposer(fused_conv2d_workload_to_fusion_param((name,) + args), target=tgt)
+        workload = list(fc.make_params(layout=args[-2][0]).values())
+        if workload[8] == (None, None):
+            workload[8] = tuple(post_ops)
         else:
-            workload[8] = [None, None]
-
-        if len(args) == 1:
-            new_args = (tuple(workload),)
-        else:
-            new_args = (tuple(workload), args[1])
+            workload[8] = (None, None)
+        new_args = autotvm.task.topi_integration.serialize_args(workload)
         new_tsk = autotvm.task.Task(name, new_args)
         new_mi = autotvm.MeasureInput(tgt, new_tsk, config)
 

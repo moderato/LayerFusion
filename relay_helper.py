@@ -8,31 +8,31 @@ from tvm.relay.testing import run_opt_pass
 MODEL_CONFIG = {
     "default": {
         "fusion_pattern": "all",
-        "channel_ranges": [[4, 1e9], None],
+        "channel_ranges": [None, None],
     },
     "test": {
         "fusion_pattern": "all",
-        "channel_ranges": [[4, 1e9], None],
+        "channel_ranges": [None, None],
     },
     "mobilenet_v1": {
         "fusion_pattern": "3x3+1x1",
-        "channel_ranges": [[4, 1e9], None],
+        "channel_ranges": [None, None],
     },
     "mobilenet_v2": {
         "fusion_pattern": "3x3+1x1",
-        "channel_ranges": [[4, 1e9], None],
+        "channel_ranges": [None, None],
     },
     "mnasnet_a1": {
         "fusion_pattern": "3x3+1x1",
-        "channel_ranges": [[4, 1e9], None],
+        "channel_ranges": [None, None],
     },
     "resnet_18": {
         "fusion_pattern": "3x3+3x3",
-        "channel_ranges": [[4, 1e9], [1, 64]],
+        "channel_ranges": [None, [1, 64]],
     },
     "resnet_50": {
         "fusion_pattern": "3x3+1x1",
-        "channel_ranges": [[4, 1e9], [1, 512]],
+        "channel_ranges": [None, [1, 512]],
     },
 }
 
@@ -49,13 +49,13 @@ def dwconv_conv3x3_conv1x1_pattern():
         "kernel_size": [3, 3],
     }) # Can be either dw-conv or conv
     pattern = is_op('nn.bias_add')(pattern, wildcard())
-    pattern = is_op('nn.relu')(pattern) | is_op('sigmoid')(pattern)
+    pattern = is_op('nn.relu')(pattern) | is_op('nn.relu6')(pattern) | is_op('sigmoid')(pattern)
     pattern = is_op('nn.conv2d')(pattern, wildcard()).has_attr({
         "kernel_size": [1, 1],
         "groups": 1,
     }) # Should be conv
     pattern = is_op('nn.bias_add')(pattern, wildcard())
-    pattern = pattern.optional(lambda x: is_op("nn.relu")(x))
+    pattern = pattern.optional(lambda x: is_op("nn.relu")(x) | is_op("nn.relu6")(x))
     return pattern
 
 
@@ -65,13 +65,13 @@ def conv3x3_conv3x3_pattern():
         "groups": 1,
     }) # Should be conv
     pattern = is_op('nn.bias_add')(pattern, wildcard())
-    pattern = is_op('nn.relu')(pattern) | is_op('sigmoid')(pattern)
+    pattern = is_op('nn.relu')(pattern) | is_op('nn.relu6')(pattern) | is_op('sigmoid')(pattern)
     pattern = is_op('nn.conv2d')(pattern, wildcard()).has_attr({
         "kernel_size": [3, 3],
         "groups": 1,
     }) # Should be conv
     pattern = is_op('nn.bias_add')(pattern, wildcard())
-    pattern = pattern.optional(lambda x: is_op("nn.relu")(x))
+    pattern = pattern.optional(lambda x: is_op("nn.relu")(x) | is_op("nn.relu6")(x))
     return pattern
 
 
@@ -86,7 +86,7 @@ def get_fusion_patterns(fusion_patterns="all"):
 
 
 # To exclude some attrs in subgraph partition
-def partition_check(num_layers=2, channel_ranges=[[4, 1e9], None]): # By default, skip the first layer for fusion
+def partition_check(num_layers=2, channel_ranges=None):
     """
     channel_ranges:
         None or a list that contains allowed channel ranges for layers being fused
@@ -108,6 +108,12 @@ def partition_check(num_layers=2, channel_ranges=[[4, 1e9], None]): # By default
                     ret_val = ret_val and (tmp.attrs.channels >= r[0] and tmp.attrs.channels <= r[1]) # Channels number is limited by the range
                 current_layer -= 1
             tmp = tmp.args[0]
+
+        # A hack to exclude the first layer of the model
+        if isinstance(tmp, relay.expr.Var):
+            if "(1, 3," in str(tmp.astext()) or ",3)" in str(tmp.astext()):
+                return False
+
         return bool(ret_val)
 
     return f
@@ -289,6 +295,7 @@ def fuse_preprocess(f, params, target_str, model_name="default", layout="NHWC"):
         # Partition graph
         pattern = get_fusion_patterns(MODEL_CONFIG[model_name]["fusion_pattern"])
         mod['main'] = pattern.partition(mod['main'], check=(partition_check(channel_ranges=MODEL_CONFIG[model_name]["channel_ranges"])))
+        # print(mod['main'])
         # Fuse two conv layers
         mod['main'] = rewrite(FusedConv2DCallback(model_name), mod['main'])
         # InferType

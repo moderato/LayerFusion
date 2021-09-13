@@ -80,7 +80,7 @@ python py_utils/update_logs.py -l NCHW -p <folder or log file path>
 ```
 
 ```bash
-# Pick best batch from tuned kernel logs
+# Pick best batch from tuned kernel logs (backup plan)
 python -m tvm.autotvm.record --mode pick_batch --batch_size 200 --append --i logs/autotvm/layer/cpu/fused/ --o logs/autotvm/model/cpu/<model_name>/nchwc_fused.log
 cat logs/autotvm/model/cpu/<model_name>/nchwc_unfused.log >> logs/autotvm/model/cpu/<model_name>/nchwc_fused.log
 ```

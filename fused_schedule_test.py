@@ -11,8 +11,8 @@ def get_auto_scheduler_task_x86(parameters):
     fc = FusionComposer(parameters, use_autotvm=False, use_auto_scheduler=True, target=target)
 
     # Get compute
-    compute = fc.get_compute(raw_compute=True)
-    input_tensors = fc.make_placeholders()
+    compute = tvm.topi.FUSION_COMPOSER.get_compute(raw_compute=True)
+    input_tensors = tvm.topi.FUSION_COMPOSER.make_placeholders()
     output_tensor = compute(input_tensors)
     all_tensors = input_tensors + [output_tensor]
 
@@ -53,8 +53,9 @@ def verify_tuning(workload_name,
             ctx = tvm.gpu()
             target = tvm.target.Target(target_str)
             device = 'gpu'
+        runner_args = get_runner_args(device_name, device, workload_type)
 
-        fc = FusionComposer(parameters, use_autotvm=use_autotvm, use_auto_scheduler=use_auto_scheduler, target=target, workload_name=workload_name, workspace='.')
+        tvm.topi.FUSION_COMPOSER = FusionComposer(parameters, use_autotvm=use_autotvm, use_auto_scheduler=use_auto_scheduler, target=target, workload_name=workload_name, workspace='.')
         if unfused:
             log_names = []
             tasks = []
@@ -62,8 +63,8 @@ def verify_tuning(workload_name,
             params = []
             for l in range(2):
                 # 
-                input_cfg = fc.get_input_cfg(l)
-                filter_cfg= fc.get_filter_cfg(l)
+                input_cfg = tvm.topi.FUSION_COMPOSER.get_input_cfg(l)
+                filter_cfg= tvm.topi.FUSION_COMPOSER.get_filter_cfg(l)
 
                 is_depthwise = filter_cfg.depthwise
                 task_name = '{}conv2d_{}'.format('depthwise_' if is_depthwise else '', 'NHWC.cuda' if target_str == 'cuda' else 'NCHWc.x86')
@@ -103,14 +104,7 @@ def verify_tuning(workload_name,
                         # autotvm setting
                         measure_option = autotvm.measure_option(
                             builder=autotvm.LocalBuilder(),
-                            runner=autotvm.RPCRunner(
-                                device_name, '0.0.0.0', 9190,
-                                number=DEVICES[device_name]["config_params"]["number"],
-                                repeat=DEVICES[device_name]["config_params"]["repeat"],
-                                timeout=DEVICES[device_name]["config_params"]["timeout"][workload_type],
-                                min_repeat_ms=DEVICES[device_name]["config_params"]["min_repeat_ms"],
-                                enable_cpu_cache_flush=(True if device == 'cpu' else False)
-                            )
+                            runner=autotvm.RPCRunner(runner_args)
                         )
                         tuner = autotvm.tuner.XGBTuner(task, feature_type="curve")
 
@@ -214,7 +208,6 @@ def verify_tuning(workload_name,
                 ref_data = []
                 nd_arrays = []
 
-                # Ridiculous return orders: h = 3 (2, 1, 0), h = 1 (2, 0, 1)
                 if prev_out is None:
                     data_np = np.random.uniform(0.0, 0.1, size=get_const_tuple(params[l][0].shape)).astype(dtype)
                 else:
@@ -226,12 +219,8 @@ def verify_tuning(workload_name,
                 kernel_np = np.random.uniform(0.0, 0.1, size=get_const_tuple(params[l][1].shape)).astype(dtype)
                 o, i, fh, fw = kernel_np.shape
                 kernel_np_6D = np.array(kernel_np.reshape((o//vlen_oc, vlen_oc, 1, 1, fh, fw) if depthwises[l] else (o//vlen_oc, vlen_oc, i//vlen_ic, vlen_ic, fh, fw)).transpose(0, 2, 4, 5, 3, 1), order='C')
-                if fh == 3:
-                    ref_data = [kernel_np_6D] + ref_data
-                    nd_arrays = [tvm.nd.array(kernel_np_6D, ctx)] + nd_arrays
-                else:
-                    ref_data.append(kernel_np_6D)
-                    nd_arrays.append(tvm.nd.array(kernel_np_6D, ctx))
+                ref_data.append(kernel_np_6D)
+                nd_arrays.append(tvm.nd.array(kernel_np_6D, ctx))
                 if depthwises[l]:
                     output_np = testing.depthwise_conv2d_python_nchw(data_np, kernel_np, stride=params[l][2], padding='SAME').astype(dtype)
                 else:
@@ -240,8 +229,8 @@ def verify_tuning(workload_name,
 
                 n, c, h, w = output_np.shape
                 output_np_5D = np.array(output_np.reshape((n, c//vlen_oc, vlen_oc, h, w)).transpose((0, 1, 3, 4, 2)), order='C')
-                ref_data = [output_np_5D] + ref_data
-                nd_arrays = [tvm.nd.array(np.zeros(get_const_tuple(output_np_5D.shape), dtype=dtype), ctx)] + nd_arrays
+                ref_data.append(output_np_5D)
+                nd_arrays.append(tvm.nd.array(np.zeros(get_const_tuple(output_np_5D.shape), dtype=dtype), ctx))
 
                 output_shape = output_np.shape
                 if use_autotvm:
@@ -285,7 +274,7 @@ def verify_tuning(workload_name,
                 # logging.getLogger('autotvm').addHandler(logging.StreamHandler(sys.stdout))
 
                 # fused schedule auto
-                sargs = autotvm.task.topi_integration.serialize_args(list(fc.make_params(layout=('NHWC' if target_str == 'cuda' else 'NCHW')).values()))
+                sargs = autotvm.task.topi_integration.serialize_args(list(tvm.topi.FUSION_COMPOSER.make_params(layout=('NHWC' if target_str == 'cuda' else 'NCHW')).values()))
                 task = autotvm.task.create('fused_conv2d.{}'.format('cuda' if target_str == 'cuda' else 'x86'), args=sargs, target=target)
                 print(task.config_space)
                 print(task.target)
@@ -295,14 +284,7 @@ def verify_tuning(workload_name,
                     # autotvm setting
                     measure_option = autotvm.measure_option(
                         builder=autotvm.LocalBuilder(),
-                        runner=autotvm.RPCRunner(
-                            device_name, '0.0.0.0', 9190,
-                            number=DEVICES[device_name]["config_params"]["number"],
-                            repeat=DEVICES[device_name]["config_params"]["repeat"],
-                            timeout=DEVICES[device_name]["config_params"]["timeout"][workload_type],
-                            min_repeat_ms=DEVICES[device_name]["config_params"]["min_repeat_ms"],
-                            enable_cpu_cache_flush=(True if device == 'cpu' else False)
-                        )
+                        runner=autotvm.RPCRunner(runner_args)
                     )
                     tuner = autotvm.tuner.XGBTuner(task, feature_type="curve")
 
@@ -321,8 +303,8 @@ def verify_tuning(workload_name,
                 best_config = dispatch_context.query(task.target, task.workload)
                 print('\nBest config:')
                 print(best_config)
-                fc.update_all_shapes_from_best_cfg(best_config)
-                task.args = autotvm.task.topi_integration.serialize_args(list(fc.make_params(raw=False).values())) # Update task.args (workload) with new shapes
+                tvm.topi.FUSION_COMPOSER.update_all_shapes_from_best_cfg(best_config)
+                task.args = autotvm.task.topi_integration.serialize_args(list(tvm.topi.FUSION_COMPOSER.make_params(raw=False).values())) # Update task.args (workload) with new shapes
                 
                 with target:
                     s, arg_bufs = task.instantiate(best_config)
@@ -346,14 +328,7 @@ def verify_tuning(workload_name,
                         measure_callbacks=[auto_scheduler.RecordToFile(log_name)],
                         verbose=2,
                         builder=auto_scheduler.LocalBuilder(),
-                        runner=auto_scheduler.RPCRunner(
-                            device_name, '0.0.0.0', 9190,
-                            number=DEVICES[device_name]["config_params"]["number"],
-                            repeat=DEVICES[device_name]["config_params"]["repeat"],
-                            timeout=DEVICES[device_name]["config_params"]["timeout"][workload_type],
-                            min_repeat_ms=DEVICES[device_name]["config_params"]["min_repeat_ms"],
-                            enable_cpu_cache_flush=(True if device == 'cpu' else False)
-                        )
+                        runner=auto_scheduler.RPCRunner(runner_args)
                     )
                     task.tune(tune_option)
 
@@ -374,7 +349,7 @@ def verify_tuning(workload_name,
                 return
 
             # Prepare data
-            ref_data = testing.get_fused_conv2d_ref_data(fc, workload_name, best_config, save_data=save_data)
+            ref_data = testing.get_fused_conv2d_ref_data(tvm.topi.FUSION_COMPOSER, workload_name, best_config, save_data=save_data)
 
             if export_code:
                 # export kernel launch config, e.g. thxyz, blxy, vlen, etc
@@ -417,7 +392,7 @@ def verify_tuning(workload_name,
                 print(np.where(d))
             # print("Error rate: {:.2f}%".format((len(d) / len(ref_data[-1]) * 100)))
             print('{}_fused of {} ({}): average running time is {:.2f} us.'.format(workload_type, workload_name, 'NHWC' if target_str == 'cuda' else 'NCHWc', tcost_d * 1e6))
-            FLOP = fc.get_FLOP()
+            FLOP = tvm.topi.FUSION_COMPOSER.get_FLOP()
             print('FLOP: {}, GFLOPS: {:.2f}.'.format(FLOP, FLOP / tcost_d / 1e9))
 
     check_device(device_name)
