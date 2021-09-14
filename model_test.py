@@ -78,7 +78,7 @@ def tune_autotvm_tasks(tasks,
         device_name = tuning_opt.device
         measure_option = autotvm.measure_option(
             builder=autotvm.LocalBuilder(),
-            runner=autotvm.RPCRunner(get_runner_args(device_name))
+            runner=autotvm.RPCRunner(**(get_runner_args(device_name)))
         )
         tuner = autotvm.tuner.XGBTuner(task, feature_type="curve")
 
@@ -118,7 +118,7 @@ def tune_auto_scheduler_tasks(tasks, task_weights, tuning_opt, device_name, log_
         measure_callbacks=[auto_scheduler.RecordToFile(log_filename)],
         verbose=2,
         builder=auto_scheduler.LocalBuilder(),
-        runner=auto_scheduler.RPCRunner(get_runner_args(device_name))
+        runner=auto_scheduler.RPCRunner(**(get_runner_args(device_name)))
     )
     tuner.tune(tune_option)
 

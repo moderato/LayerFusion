@@ -3,8 +3,6 @@ import tvm
 from tvm.topi.fusion_composer import FusionComposer
 from tvm.autotvm.record import load_from_file, encode
 
-target = tvm.target.Target("llvm -mcpu=core-avx2")
-
 def convert(in_file, layout='NHWC'):
     if os.path.isfile(in_file):
         in_file = [in_file]
@@ -25,7 +23,7 @@ def convert(in_file, layout='NHWC'):
             if 'fused_conv2d' in k.task.workload[0] and k.task.workload[1][0] != 'TENSOR': # Not updated
                 tgt, config = k.target, k.config
                 name, workload = k.task.workload
-                fc = FusionComposer(workload, use_autotvm=True, target=target, workload_name="xx", workspace='.')
+                fc = FusionComposer(workload, use_autotvm=True, target=tgt, workload_name="xx", workspace='.')
                 sargs = tvm.autotvm.task.topi_integration.serialize_args(list(fc.make_params(layout=layout).values()))
                 new_tsk = tvm.autotvm.task.Task(name, sargs)
                 new_mi = tvm.autotvm.MeasureInput(tgt, new_tsk, config)

@@ -7,16 +7,8 @@ from utils import *
 
 @auto_scheduler.register_workload
 def get_auto_scheduler_task_x86(parameters):
-    target = tvm.target.Target('llvm')
-    fc = FusionComposer(parameters, use_autotvm=False, use_auto_scheduler=True, target=target)
-
-    # Get compute
-    compute = tvm.topi.FUSION_COMPOSER.get_compute(raw_compute=True)
-    input_tensors = tvm.topi.FUSION_COMPOSER.make_placeholders()
-    output_tensor = compute(input_tensors)
-    all_tensors = input_tensors + [output_tensor]
-
-    return all_tensors
+    # TODO: Fix this
+    return None
 
 
 def verify_tuning(workload_name,
@@ -55,7 +47,7 @@ def verify_tuning(workload_name,
             device = 'gpu'
         runner_args = get_runner_args(device_name, device, workload_type)
 
-        tvm.topi.FUSION_COMPOSER = FusionComposer(parameters, use_autotvm=use_autotvm, use_auto_scheduler=use_auto_scheduler, target=target, workload_name=workload_name, workspace='.')
+        tvm.topi.FUSION_COMPOSER = FusionComposer(parameters, pack=(device == 'cpu'))
         if unfused:
             log_names = []
             tasks = []
@@ -104,7 +96,7 @@ def verify_tuning(workload_name,
                         # autotvm setting
                         measure_option = autotvm.measure_option(
                             builder=autotvm.LocalBuilder(),
-                            runner=autotvm.RPCRunner(runner_args)
+                            runner=autotvm.RPCRunner(**runner_args)
                         )
                         tuner = autotvm.tuner.XGBTuner(task, feature_type="curve")
 
@@ -284,7 +276,7 @@ def verify_tuning(workload_name,
                     # autotvm setting
                     measure_option = autotvm.measure_option(
                         builder=autotvm.LocalBuilder(),
-                        runner=autotvm.RPCRunner(runner_args)
+                        runner=autotvm.RPCRunner(**runner_args)
                     )
                     tuner = autotvm.tuner.XGBTuner(task, feature_type="curve")
 
@@ -328,14 +320,30 @@ def verify_tuning(workload_name,
                         measure_callbacks=[auto_scheduler.RecordToFile(log_name)],
                         verbose=2,
                         builder=auto_scheduler.LocalBuilder(),
-                        runner=auto_scheduler.RPCRunner(runner_args)
+                        runner=auto_scheduler.RPCRunner(**runner_args)
                     )
                     task.tune(tune_option)
 
                 best_config = None
                 s, arg_bufs = task.apply_best(log_name)
             else:
-                raise Exception("Unrecognized option!")
+                # Use default GPU and CPU schedules
+                best_config = None
+                if target_str == 'cuda':
+                    params = tvm.topi.FUSION_COMPOSER.make_params(layout='NHWC')
+                    out = tvm.topi.cuda.fused_conv2d(*list(params.values()))
+                    s = tvm.topi.cuda.schedule_fused_conv2d_raw(None, [out])
+                else:
+                    tvm.topi.FUSION_COMPOSER.update_all_shapes_from_best_cfg(best_config) # 4D -> 5D with default vec length 8
+                    params = tvm.topi.FUSION_COMPOSER.make_params(raw=False)
+                    out = tvm.topi.x86.fused_conv2d(*list(params.values()))
+                    s = tvm.topi.x86.schedule_fused_conv2d_raw(None, [out])
+                arg_bufs = [params['Input']]
+                for filter, bias in zip(params['Filters'], params['Biases']):
+                    arg_bufs.append(filter)
+                    if bias is not None:
+                        arg_bufs.append(bias)
+                arg_bufs.append(out)
 
             if not no_print_ir:
                 print(tvm.lower(s, arg_bufs, simple_mode=True))
@@ -349,7 +357,7 @@ def verify_tuning(workload_name,
                 return
 
             # Prepare data
-            ref_data = testing.get_fused_conv2d_ref_data(tvm.topi.FUSION_COMPOSER, workload_name, best_config, save_data=save_data)
+            ref_data = testing.get_fused_conv2d_ref_data(tvm.topi.FUSION_COMPOSER, workload_name, workspace='.', best_config=best_config, save_data=save_data)
 
             if export_code:
                 # export kernel launch config, e.g. thxyz, blxy, vlen, etc
