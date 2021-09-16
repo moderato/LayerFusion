@@ -207,6 +207,27 @@ def create_nchwc_config(inp, res):
     return new_pair, new_workload
 
 
+def measurement_and_stats(func, nd_arrays, ref_data, ctx, FLOP, workload_name):
+    # Measure a 'delta' time
+    run_number = 1000
+    timer_1 = func.time_evaluator(func.entry_name, ctx, number=run_number)
+    tcost_1 = timer_1(*nd_arrays).mean * run_number
+    timer_2 = func.time_evaluator(func.entry_name, ctx, number=run_number*2)
+    tcost_2 = timer_2(*nd_arrays).mean * run_number * 3
+    tcost_d = (tcost_2 - tcost_1) / (run_number * 2)
+
+    # np.testing.assert_allclose(nd_arrays[-1].asnumpy(), ref_data[0], rtol=1e-3) # Output at ref_data[0]
+    d = ~np.isclose(nd_arrays[0].asnumpy(), ref_data[0], rtol=1e-3)
+    if (np.sum(d) > 0):
+        print('# of incorrect numbers: {}'.format(len(ref_data[-1][d])))
+        print(nd_arrays[0].asnumpy()[d])
+        print(ref_data[0][d])
+        print(np.where(d))
+    # print("Error rate: {:.2f}%".format((len(d) / len(ref_data[0]) * 100)))
+    print('{}: average running time is {:.2f} us.'.format(workload_name, tcost_d * 1e6))
+    print('FLOP: {}, GFLOPS: {:.2f}.'.format(FLOP, FLOP / tcost_d / 1e9))
+
+
 def get_workloads():
     workloads = {}
     depth_conv_workloads = {}
@@ -250,9 +271,9 @@ def get_workloads():
     # # Test
     # conv_conv_workloads['conv3_conv1_test_tiny'] = (1, 8, 8, 8, 3, 8, 1, False, None, 1, 8, 1, False, None, False)
     # conv_conv_workloads['conv3_conv3_test_tiny'] = (1, 8, 8, 8, 3, 8, 1, False, None, 3, 8, 1, False, None, False)
-    ################################################################
+    ###############################################################
 
-    ##################### Depth conv workloads #####################
+    #################### Depth conv workloads #####################
     # MobileNet-v1
     depth_conv_workloads['mv1_1'] = (1, 112, 112, 32, 3, 1, 1, True, None, 1, 64, 1, False, None, False)
     depth_conv_workloads['mv1_2'] = (1, 112, 112, 64, 3, 1, 2, True, None, 1, 128, 1, False, None, False)
