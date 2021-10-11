@@ -35,8 +35,10 @@ mkdir -p generated_kernels/cpu/fused/kernel_launch_config
 mkdir -p generated_kernels/cpu/unfused/kernel_launch_config
 mkdir -p generated_kernels/gpu/fused/kernel_launch_config
 mkdir -p generated_kernels/gpu/unfused/kernel_launch_config
-mkdir -p npy/fused
-mkdir -p npy/unfused
+mkdir -p npy/cpu/fused
+mkdir -p npy/cpu/unfused
+mkdir -p npy/gpu/fused
+mkdir -p npy/gpu/unfused
 
 # AVX512 or AVX-2/AVX
 if grep -q avx512 /proc/cpuinfo

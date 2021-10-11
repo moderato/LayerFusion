@@ -161,18 +161,23 @@ void findBestAlgorithm(cudnnHandle_t cudnn_handle,
                         cudnnTensorDescriptor_t output_descriptor,
                         cudnnConvolutionFwdAlgo_t& convolution_algorithm,
                         bool find_best_algo, bool depthwise) {
+  int requestedAlgoCount = CUDNN_CONVOLUTION_FWD_ALGO_COUNT;
+  int returnedAlgoCount = -1;
+  cudnnConvolutionFwdAlgoPerf_t results[2 * CUDNN_CONVOLUTION_FWD_ALGO_COUNT];
+
   if (depthwise) { // No searching for depthwise convolution
     convolution_algorithm = (cudnnConvolutionFwdAlgo_t)0; // 0 by default for depthwise convolution
   } else if (find_best_algo) {
     // find algorithm
-    checkCUDNN(cudnnGetConvolutionForwardAlgorithm(cudnn_handle,
+    checkCUDNN(cudnnFindConvolutionForwardAlgorithm(cudnn_handle,
                                                   input_descriptor,
                                                   kernel_descriptor,
                                                   convolution_descriptor,
                                                   output_descriptor,
-                                                  CUDNN_CONVOLUTION_FWD_PREFER_FASTEST,
-                                                  /*memoryLimitInBytes=*/0,
-                                                  &convolution_algorithm));
+                                                  requestedAlgoCount,
+                                                  &returnedAlgoCount,
+                                                  results));
+    convolution_algorithm = results[0].algo;
   } else {
     convolution_algorithm = (cudnnConvolutionFwdAlgo_t)1; // 1 by default for normal convolution
   }
@@ -336,7 +341,7 @@ void benchmark_cudnn(std::string workload_name,
 #endif
 
   // filenames
-  std::string folder_name = "../../npy/" + workload_name + "/";
+  std::string folder_name = "../../npy/gpu/fused/" + workload_name + "/";
   std::string input_name = folder_name + (is_NCHW ? "input_NCHW.npy" : "input.npy");
   std::string kernel_1_name = folder_name + (is_f1_depthwise ? "filter_1_d_transposed.npy" : "filter_1_transposed.npy");
   std::string kernel_2_name = folder_name + "filter_2_transposed.npy";

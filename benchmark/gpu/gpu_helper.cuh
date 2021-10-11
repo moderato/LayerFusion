@@ -86,7 +86,7 @@ void benchmark_generated_gpu(std::string workload_name,
     int output_channel = kernel_2_out_channel;
 
     // filenames
-    std::string folder_name = "../../npy/" + workload_name + "/";
+    std::string folder_name = "../../npy/gpu/fused/" + workload_name + "/";
     std::string input_name = folder_name + "input.npy";
     std::string kernel_1_name = folder_name + (is_f1_depthwise ? "filter_1_d.npy" : "filter_1.npy");
     std::string kernel_2_name = folder_name + "filter_2.npy";
